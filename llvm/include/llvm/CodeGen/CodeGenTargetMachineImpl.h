@@ -66,6 +66,9 @@ public:
   bool addAsmPrinter(PassManagerBase &PM, raw_pwrite_stream &Out,
                      raw_pwrite_stream *DwoOut, CodeGenFileType FileType,
                      MCContext &Context) override;
+  bool addAsmPrinterLFI(PassManagerBase &PM, raw_pwrite_stream &Out,
+                        raw_pwrite_stream *DwoOut, CodeGenFileType FileType,
+                        MCContext &Context) override;
 
   Expected<std::unique_ptr<MCStreamer>>
   createMCStreamer(raw_pwrite_stream &Out, raw_pwrite_stream *DwoOut,

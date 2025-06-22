@@ -7159,9 +7159,9 @@ static SMLoc incrementLoc(SMLoc L, int Offset) {
 bool AArch64AsmParser::parseDirectiveArch(SMLoc L) {
   SMLoc CurLoc = getLoc();
 
+  StringRef Name = getParser().parseStringToEndOfStatement().trim();
   StringRef Arch, ExtensionString;
-  std::tie(Arch, ExtensionString) =
-      getParser().parseStringToEndOfStatement().trim().split('+');
+  std::tie(Arch, ExtensionString) = Name.split('+');
 
   const AArch64::ArchInfo *ArchInfo = AArch64::parseArch(Arch);
   if (!ArchInfo)
@@ -7208,6 +7208,8 @@ bool AArch64AsmParser::parseDirectiveArch(SMLoc L) {
   }
   FeatureBitset Features = ComputeAvailableFeatures(STI.getFeatureBits());
   setAvailableFeatures(Features);
+
+  getTargetStreamer().emitDirectiveArch(Name);
   return false;
 }
 
@@ -7216,12 +7218,13 @@ bool AArch64AsmParser::parseDirectiveArch(SMLoc L) {
 bool AArch64AsmParser::parseDirectiveArchExtension(SMLoc L) {
   SMLoc ExtLoc = getLoc();
 
-  StringRef Name = getParser().parseStringToEndOfStatement().trim();
+  StringRef FullName = getParser().parseStringToEndOfStatement().trim();
 
   if (parseEOL())
     return true;
 
   bool EnableFeature = true;
+  StringRef Name = FullName;
   if (Name.starts_with_insensitive("no")) {
     EnableFeature = false;
     Name = Name.substr(2);
@@ -7241,6 +7244,8 @@ bool AArch64AsmParser::parseDirectiveArchExtension(SMLoc L) {
     STI.ClearFeatureBitsTransitively(It->Features);
   FeatureBitset Features = ComputeAvailableFeatures(STI.getFeatureBits());
   setAvailableFeatures(Features);
+
+  getTargetStreamer().emitDirectiveArchExtension(FullName);
   return false;
 }
 

@@ -42,6 +42,7 @@ using namespace llvm;
 AArch64RegisterInfo::AArch64RegisterInfo(const Triple &TT, unsigned HwMode)
     : AArch64GenRegisterInfo(AArch64::LR, 0, 0, 0, HwMode), TT(TT) {
   AArch64_MC::initLLVMToCVRegMapping(this);
+  IsLFI = TT.isVendorLFI();
 }
 
 /// Return whether the register needs a CFI entry. Not all unwinders may know
@@ -432,6 +433,17 @@ AArch64RegisterInfo::getStrictlyReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   markSuperRegs(Reserved, AArch64::WSP);
   markSuperRegs(Reserved, AArch64::WZR);
+
+  if (IsLFI) {
+    markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(21)); // x21
+    markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(18)); // x18
+    markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(22)); // x22
+    if (!MF.getProperties().hasProperty(
+            MachineFunctionProperties::Property::NoVRegs)) {
+      markSuperRegs(Reserved, AArch64::LR);  // x30
+      markSuperRegs(Reserved, AArch64::W30); // w30
+    }
+  }
 
   if (TFI->hasFP(MF) || TT.isOSDarwin())
     markSuperRegs(Reserved, AArch64::W29);

@@ -360,6 +360,7 @@ struct Config {
   bool zInitfirst;
   bool zInterpose;
   bool zKeepTextSectionPrefix;
+  bool zLFI;
   bool zLrodataAfterBss;
   bool zNoBtCfi;
   bool zNodefaultlib;

@@ -64,6 +64,7 @@ add_clang_library(clangDriver
   ToolChains/Hexagon.cpp
   ToolChains/HLSL.cpp
   ToolChains/Hurd.cpp
+  ToolChains/LFILinux.cpp
   ToolChains/Linux.cpp
   ToolChains/MipsLinux.cpp
   ToolChains/MinGW.cpp
