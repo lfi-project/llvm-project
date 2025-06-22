@@ -89,7 +89,7 @@ private:
   void relaxTlsGdToIe(uint8_t *loc, const Relocation &rel, uint64_t val) const;
   void relaxTlsIeToLe(uint8_t *loc, const Relocation &rel, uint64_t val) const;
 
-  void writePltHeaderLfi(uint8_t *buf) const;Add commentMore actions
+  void writePltHeaderLfi(uint8_t *buf) const;
   void writePltLfi(uint8_t *buf, const Symbol &sym,
                 uint64_t pltEntryAddr) const;
 };
