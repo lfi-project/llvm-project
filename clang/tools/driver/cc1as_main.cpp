@@ -568,6 +568,10 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
            "Invalid file type!");
 
     if (llvm::Triple(Opts.Triple).isVendorLFI()) {
+      // When compiling .S files, LLVM generates debug info that cannot be
+      // assembled unless we turn this off here. Encountered when compiling
+      // sanitizers (asan_interceptors_vfork.S).
+      Ctx.setGenDwarfForAssembly(false);
       MCInstPrinter *IP = TheTarget->createMCInstPrinter(
           llvm::Triple(Opts.Triple), Opts.OutputAsmVariant, *MAI, *MCII, *MRI);
 
