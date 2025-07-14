@@ -2787,7 +2787,7 @@ bool AsmPrinter::doExtAsm() {
   raw_string_ostream Out(OutputString);
   auto FOut = std::make_unique<formatted_raw_ostream>(Out);
 
-  MCContext *Ctx = new MCContext(TM.getTargetTriple(), MAI, MRI.get(), TM.getMCSubtargetInfo(), &SrcMgr, OutContext.getTargetOptions());
+  MCContext *Ctx = new MCContext(TM.getTargetTriple(), MAI, MRI.get(), OutContext.getSubtargetInfo(), &SrcMgr, OutContext.getTargetOptions());
   TM.getTarget().createMCObjectFileInfo(*Ctx, OutContext.getObjectFileInfo()->isPositionIndependent());
   Ctx->setObjectFileInfo(OutContext.getObjectFileInfo());
 
@@ -2803,20 +2803,19 @@ bool AsmPrinter::doExtAsm() {
 
   Ctx->setUseNamesOnTempLabels(false);
 
-  MCCodeEmitter *CE = TM.getTarget().createMCCodeEmitter(*MCII, *Ctx);
-  MCAsmBackend *MAB = TM.getTarget().createMCAsmBackend(*TM.getMCSubtargetInfo(), *MRI, MCOptions);
+  MCCodeEmitter *CE = TM.getTarget().createMCCodeEmitter(*MCII, OutContext);
+  MCAsmBackend *MAB = TM.getTarget().createMCAsmBackend(*OutContext.getSubtargetInfo(), *MRI, MCOptions);
   MCStr.reset(TM.getTarget().createMCObjectStreamer(
-              TM.getTargetTriple(), *Ctx, std::unique_ptr<MCAsmBackend>(MAB),
+              TM.getTargetTriple(), OutContext, std::unique_ptr<MCAsmBackend>(MAB),
               MAB->createObjectWriter(*ExtAsm.Out), std::unique_ptr<MCCodeEmitter>(CE),
-              *TM.getMCSubtargetInfo()));
+              *OutContext.getSubtargetInfo()));
+  MCStr.get()->initSections(true, *TM.getMCSubtargetInfo());
 
   std::unique_ptr<MCAsmParser> Parser(
     createMCAsmParser(SrcMgr, *Ctx, *MCStr, *MAI));
 
-  std::unique_ptr<MCInstrInfo> MII(TM.getTarget().createMCInstrInfo());
-  assert(MII && "Failed to create instruction info");
   std::unique_ptr<MCTargetAsmParser> TAP(TM.getTarget().createMCAsmParser(
-              *TM.getMCSubtargetInfo(), *Parser, *MII, MCOptions));
+              *TM.getMCSubtargetInfo(), *Parser, *MCII, MCOptions));
   if (!TAP)
       report_fatal_error("External rewriting not supported by this streamer because"
               " we don't have an asm parser for this target\n");

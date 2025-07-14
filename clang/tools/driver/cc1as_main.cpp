@@ -707,7 +707,7 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
 
     std::unique_ptr<MemoryBuffer> MBuf;
     MBuf = MemoryBuffer::getMemBuffer(Str, RewriteTemp->TmpName);
-    SourceMgr SrcMgr;
+    // SourceMgr SrcMgr;
     SrcMgr.AddNewSourceBuffer(std::move(MBuf), SMLoc());
 
     std::unique_ptr<MCRegisterInfo> MRI(TheTarget->createMCRegInfo(triple.getTriple()));
@@ -716,15 +716,15 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
         abort();
     }
 
-    std::unique_ptr<MCInstrInfo> MCII(TheTarget->createMCInstrInfo());
+    // std::unique_ptr<MCInstrInfo> MCII(TheTarget->createMCInstrInfo());
 
     std::string OutputString;
     raw_string_ostream NewOut(OutputString);
     auto FOut = std::make_unique<formatted_raw_ostream>(NewOut);
 
-    MCContext *NewCtx = new MCContext(triple, MAI.get(), MRI.get(), STI.get(), &SrcMgr, Ctx.getTargetOptions());
-    TheTarget->createMCObjectFileInfo(*NewCtx, Ctx.getObjectFileInfo()->isPositionIndependent());
-    NewCtx->setObjectFileInfo(Ctx.getObjectFileInfo());
+    MCContext *NewCtx = new MCContext(triple, MAI.get(), MRI.get(), STI.get(), &SrcMgr, &MCOptions);
+    std::unique_ptr<MCObjectFileInfo> MOFI(TheTarget->createMCObjectFileInfo(*NewCtx, Ctx.getObjectFileInfo()->isPositionIndependent()));
+    NewCtx->setObjectFileInfo(MOFI.get());
 
     std::unique_ptr<MCStreamer> MCStr;
 
@@ -736,14 +736,14 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
                 triple, *NewCtx, std::unique_ptr<MCAsmBackend>(MAB),
                 MAB->createObjectWriter(*Out), std::unique_ptr<MCCodeEmitter>(CE),
                 *STI));
+    MCStr.get()->initSections(Opts.NoExecStack, *STI);
 
+    Ctx.reset();
     std::unique_ptr<MCAsmParser> Parser(
-      createMCAsmParser(SrcMgr, *NewCtx, *MCStr, *MAI));
+      createMCAsmParser(SrcMgr, Ctx, *MCStr, *MAI));
 
-    std::unique_ptr<MCInstrInfo> MII(TheTarget->createMCInstrInfo());
-    assert(MII && "Failed to create instruction info");
     std::unique_ptr<MCTargetAsmParser> NewTAP(TheTarget->createMCAsmParser(
-                TAP->getSTI(), *Parser, *MII, MCOptions));
+                *STI, *Parser, *MCII, MCOptions));
     if (!NewTAP)
         report_fatal_error("External rewriting not supported by this streamer because"
                 " we don't have an asm parser for this target\n");
@@ -759,8 +759,6 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
     consumeError(RewriteTemp->discard());
   }
   consumeError(AsmTemp->discard());
-
-  return Failed;
 
   return Failed;
 }
