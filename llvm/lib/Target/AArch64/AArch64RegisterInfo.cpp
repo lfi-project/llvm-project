@@ -435,9 +435,9 @@ AArch64RegisterInfo::getStrictlyReservedRegs(const MachineFunction &MF) const {
   markSuperRegs(Reserved, AArch64::WZR);
 
   if (IsLFI) {
-    markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(21)); // x21
-    markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(18)); // x18
-    markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(22)); // x22
+    markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(28)); // addr
+    markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(27)); // base
+    markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(26)); // temp
     if (!MF.getProperties().hasProperty(
             MachineFunctionProperties::Property::NoVRegs)) {
       markSuperRegs(Reserved, AArch64::LR);  // x30
