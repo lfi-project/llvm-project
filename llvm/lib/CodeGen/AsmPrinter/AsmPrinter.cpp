@@ -2188,7 +2188,7 @@ void AsmPrinter::emitFunctionBody() {
   // Emit section containing stack size metadata.
   emitStackSizeSection(*MF);
 
-  // Emit section containing stack size metadata.
+  // Emit section containing stack argument metadata.
   emitStackArgsSection(*MF);
 
   // Emit .su file containing function stack size information.
@@ -2939,7 +2939,8 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
       F.hasFnAttribute("xray-instruction-threshold") ||
       needFuncLabels(MF, *this) || NeedsLocalForSize ||
       MF.getTarget().Options.EmitStackSizeSection ||
-      MF.getTarget().Options.BBAddrMap) {
+      MF.getTarget().Options.BBAddrMap ||
+      TM.getTargetTriple().isVendorLFI()) {
     CurrentFnBegin = createTempSymbol("func_begin");
     if (NeedsLocalForSize)
       CurrentFnSymForSize = CurrentFnBegin;
