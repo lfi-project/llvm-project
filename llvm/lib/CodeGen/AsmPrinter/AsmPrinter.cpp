@@ -1593,6 +1593,57 @@ void AsmPrinter::emitPseudoProbe(const MachineInstr &MI) {
   }
 }
 
+void AsmPrinter::emitStackArgsSection(const MachineFunction &MF) {
+  if (!MF.getTarget().getTargetTriple().isVendorLFI())
+    return;
+
+  MCSection *StackArgsSection =
+      getObjFileLowering().getStackArgsSection(*getCurrentSection());
+  if (!StackArgsSection)
+    return;
+
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const TargetFrameLowering *FI = MF.getSubtarget().getFrameLowering();
+  const Function &F = MF.getFunction();
+
+  int ValOffset = (FI ? FI->getOffsetOfLocalArea() : 0);
+
+  OutStreamer->pushSection();
+  OutStreamer->switchSection(StackArgsSection);
+
+  const MCSymbol *FunctionSymbol = getFunctionBegin();
+  OutStreamer->emitSymbolValue(FunctionSymbol, TM.getProgramPointerSize());
+
+  uint64_t StructRetSize = 0;
+  for (const Argument &Arg : F.args()) {
+    if (Arg.hasStructRetAttr()) {
+      const DataLayout &DL = F.getParent()->getDataLayout();
+      Type *RetTy = F.getParamStructRetType(0);
+      StructRetSize = DL.getTypeAllocSize(RetTy);
+      break;
+    }
+  }
+  OutStreamer->emitInt32(StructRetSize);
+
+  uint32_t Count = 0;
+  for (unsigned i = MFI.getObjectIndexBegin(); i != 0; ++i) {
+    int64_t Offset = MFI.getObjectOffset(i) - ValOffset;
+    if (Offset >= 0)
+      Count++;
+  }
+  OutStreamer->emitInt32(Count);
+  for (unsigned i = MFI.getObjectIndexBegin(); i != 0; ++i) {
+    int64_t Offset = MFI.getObjectOffset(i) - ValOffset;
+    int64_t ObjSize = MFI.getObjectSize(i);
+    if (Offset >= 0) {
+      OutStreamer->emitInt32(Offset);
+      OutStreamer->emitInt32(ObjSize);
+    }
+  }
+
+  OutStreamer->popSection();
+}
+
 void AsmPrinter::emitStackSizeSection(const MachineFunction &MF) {
   if (!MF.getTarget().Options.EmitStackSizeSection)
     return;
@@ -2136,6 +2187,9 @@ void AsmPrinter::emitFunctionBody() {
 
   // Emit section containing stack size metadata.
   emitStackSizeSection(*MF);
+
+  // Emit section containing stack size metadata.
+  emitStackArgsSection(*MF);
 
   // Emit .su file containing function stack size information.
   emitStackUsage(*MF);

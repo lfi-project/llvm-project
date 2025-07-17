@@ -362,6 +362,8 @@ public:
 
   MCSection *getStackSizesSection(const MCSection &TextSec) const;
 
+  MCSection *getStackArgsSection(const MCSection &TextSec) const;
+
   MCSection *getBBAddrMapSection(const MCSection &TextSec) const;
 
   MCSection *getKCFITrapSection(const MCSection &TextSec) const;

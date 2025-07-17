@@ -418,6 +418,8 @@ public:
 
   void emitStackSizeSection(const MachineFunction &MF);
 
+  void emitStackArgsSection(const MachineFunction &MF);
+
   void emitStackUsage(const MachineFunction &MF);
 
   void emitBBAddrMapSection(const MachineFunction &MF);
