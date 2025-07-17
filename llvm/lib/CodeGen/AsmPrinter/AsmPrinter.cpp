@@ -2724,11 +2724,11 @@ bool AsmPrinter::doExtAsm() {
     return true;
   }
 
-  const char* LFIRewriter = std::getenv("LFIREWRITER");
+  const char* LFIRewriter = std::getenv("LFI_REWRITER");
   const char* LFIFlags = "";
   if (TM.getTargetTriple().isVendorLFIStores())
     LFIFlags = "--sandbox=stores";
-  const char* LFIDebug = std::getenv("LFIDEBUG");
+  const char* LFIDebug = std::getenv("LFI_DEBUG");
 
   if (!LFIRewriter)
       LFIRewriter = "lfi-rewrite";
