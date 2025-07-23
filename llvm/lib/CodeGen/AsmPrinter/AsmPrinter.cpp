@@ -2782,6 +2782,8 @@ bool AsmPrinter::doExtAsm() {
   const char* LFIFlags = "";
   if (TM.getTargetTriple().isVendorLFIStores())
     LFIFlags = "--sandbox=stores";
+  else if (TM.getTargetTriple().isVendorLFIJumps())
+    LFIFlags = "--sandbox=jumps";
   const char* LFIDebug = std::getenv("LFI_DEBUG");
 
   if (!LFIRewriter)

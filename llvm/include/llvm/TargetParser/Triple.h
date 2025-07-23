@@ -196,7 +196,8 @@ public:
     Intel,
     LFI,
     LFIStores,
-    LastVendorType = LFIStores
+    LFIJumps,
+    LastVendorType = LFIJumps
   };
   enum OSType {
     UnknownOS,
@@ -850,13 +851,16 @@ public:
 
   /// Tests whether the vendor is LFI
   bool isVendorLFI() const {
-    return getVendor() == Triple::LFI || getVendor() == Triple::LFIStores;
+    return getVendor() == Triple::LFI || getVendor() == Triple::LFIStores || getVendor() == Triple::LFIJumps;
   }
   bool isVendorLFIFull() const {
     return getVendor() == Triple::LFI;
   }
   bool isVendorLFIStores() const {
     return getVendor() == Triple::LFIStores;
+  }
+  bool isVendorLFIJumps() const {
+    return getVendor() == Triple::LFIJumps;
   }
 
   bool isShaderStageEnvironment() const {

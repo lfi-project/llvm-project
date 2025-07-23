@@ -664,6 +664,8 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
     const char* LFIFlags = "";
     if (triple.isVendorLFIStores())
       LFIFlags = "--sandbox=stores";
+    else if (triple.isVendorLFIJumps())
+      LFIFlags = "--sandbox=jumps";
     const char* LFIDebug = std::getenv("LFI_DEBUG");
 
     if (!LFIRewriter)
