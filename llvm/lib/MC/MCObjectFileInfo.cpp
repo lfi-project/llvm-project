@@ -1101,6 +1101,24 @@ MCObjectFileInfo::getStackSizesSection(const MCSection &TextSec) const {
 }
 
 MCSection *
+MCObjectFileInfo::getStackArgsSection(const MCSection &TextSec) const {
+  if ((Ctx->getObjectFileType() != MCContext::IsELF) || !Ctx->getTargetTriple().isVendorLFI())
+    return nullptr;
+
+  const MCSectionELF &ElfSec = static_cast<const MCSectionELF &>(TextSec);
+  unsigned Flags = ELF::SHF_LINK_ORDER;
+  StringRef GroupName;
+  if (const MCSymbol *Group = ElfSec.getGroup()) {
+    GroupName = Group->getName();
+    Flags |= ELF::SHF_GROUP;
+  }
+
+  return Ctx->getELFSection(".stack_args", ELF::SHT_PROGBITS, Flags, 0,
+                            GroupName, true, ElfSec.getUniqueID(),
+                            cast<MCSymbolELF>(TextSec.getBeginSymbol()));
+}
+
+MCSection *
 MCObjectFileInfo::getBBAddrMapSection(const MCSection &TextSec) const {
   if (Ctx->getObjectFileType() != MCContext::IsELF)
     return nullptr;

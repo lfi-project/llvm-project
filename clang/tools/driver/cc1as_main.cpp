@@ -57,6 +57,7 @@
 #include <memory>
 #include <optional>
 #include <system_error>
+#include <sstream>
 using namespace clang;
 using namespace clang::driver;
 using namespace clang::driver::options;
@@ -539,6 +540,13 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
   MCOptions.MCUseDwarfDirectory = MCTargetOptions::EnableDwarfDirectory;
   MCOptions.ABIName = Opts.TargetABI;
 
+  MAI->setPreserveAsmComments(false);
+
+  Expected<sys::fs::TempFile> AsmTemp =
+      sys::fs::TempFile::create("asm.temp-%%%%%%%.s");
+  if (!AsmTemp)
+      return false;
+
   // FIXME: There is a bit of code duplication with addPassesToEmitFile.
   if (Opts.OutputType == AssemblerInvocation::FT_Asm) {
     MCInstPrinter *IP = TheTarget->createMCInstPrinter(
@@ -558,31 +566,52 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
   } else {
     assert(Opts.OutputType == AssemblerInvocation::FT_Obj &&
            "Invalid file type!");
-    if (!FDOS->supportsSeeking()) {
-      BOS = std::make_unique<buffer_ostream>(*FDOS);
-      Out = BOS.get();
-    }
 
-    std::unique_ptr<MCCodeEmitter> CE(
-        TheTarget->createMCCodeEmitter(*MCII, Ctx));
-    std::unique_ptr<MCAsmBackend> MAB(
-        TheTarget->createMCAsmBackend(*STI, *MRI, MCOptions));
-    assert(MAB && "Unable to create asm backend!");
+    if (llvm::Triple(Opts.Triple).isVendorLFI()) {
+      // When compiling .S files, LLVM generates debug info that cannot be
+      // assembled unless we turn this off here. Encountered when compiling
+      // sanitizers (asan_interceptors_vfork.S).
+      Ctx.setGenDwarfForAssembly(false);
+      MCInstPrinter *IP = TheTarget->createMCInstPrinter(
+          llvm::Triple(Opts.Triple), Opts.OutputAsmVariant, *MAI, *MCII, *MRI);
 
-    std::unique_ptr<MCObjectWriter> OW =
-        DwoOS ? MAB->createDwoObjectWriter(*Out, *DwoOS)
-              : MAB->createObjectWriter(*Out);
+      std::unique_ptr<MCCodeEmitter> CE;
+      if (Opts.ShowEncoding)
+        CE.reset(TheTarget->createMCCodeEmitter(*MCII, Ctx));
+      std::unique_ptr<MCAsmBackend> MAB(
+          TheTarget->createMCAsmBackend(*STI, *MRI, MCOptions));
 
-    Triple T(Opts.Triple);
-    Str.reset(TheTarget->createMCObjectStreamer(
-        T, Ctx, std::move(MAB), std::move(OW), std::move(CE), *STI));
-    Str.get()->initSections(Opts.NoExecStack, *STI);
-    if (T.isOSBinFormatMachO() && T.isOSDarwin()) {
-      Triple *TVT = Opts.DarwinTargetVariantTriple
-                        ? &*Opts.DarwinTargetVariantTriple
-                        : nullptr;
-      Str->emitVersionForTarget(T, VersionTuple(), TVT,
-                                Opts.DarwinTargetVariantSDKVersion);
+      raw_fd_ostream* Tmp = new raw_fd_ostream(AsmTemp->FD, false);
+      auto TempOut = std::make_unique<formatted_raw_ostream>(*Tmp);
+      Str.reset(TheTarget->createAsmStreamer(Ctx, std::move(TempOut), IP,
+                                             std::move(CE), std::move(MAB)));
+    } else {
+      if (!FDOS->supportsSeeking()) {
+        BOS = std::make_unique<buffer_ostream>(*FDOS);
+        Out = BOS.get();
+      }
+
+      std::unique_ptr<MCCodeEmitter> CE(
+          TheTarget->createMCCodeEmitter(*MCII, Ctx));
+      std::unique_ptr<MCAsmBackend> MAB(
+          TheTarget->createMCAsmBackend(*STI, *MRI, MCOptions));
+      assert(MAB && "Unable to create asm backend!");
+
+      std::unique_ptr<MCObjectWriter> OW =
+          DwoOS ? MAB->createDwoObjectWriter(*Out, *DwoOS)
+                : MAB->createObjectWriter(*Out);
+
+      Triple T(Opts.Triple);
+      Str.reset(TheTarget->createMCObjectStreamer(
+          T, Ctx, std::move(MAB), std::move(OW), std::move(CE), *STI));
+      Str.get()->initSections(Opts.NoExecStack, *STI);
+      if (T.isOSBinFormatMachO() && T.isOSDarwin()) {
+        Triple *TVT = Opts.DarwinTargetVariantTriple
+                          ? &*Opts.DarwinTargetVariantTriple
+                          : nullptr;
+        Str->emitVersionForTarget(T, VersionTuple(), TVT,
+                                  Opts.DarwinTargetVariantSDKVersion);
+      }
     }
   }
 
@@ -621,6 +650,119 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
     Parser->setTargetParser(*TAP.get());
     Failed = Parser->Run(Opts.NoInitialTextSection);
   }
+
+  const auto& triple = llvm::Triple(Opts.Triple);
+  if (triple.isVendorLFI()) {
+    Expected<sys::fs::TempFile> RewriteTemp =
+        sys::fs::TempFile::create("rewrite.temp-%%%%%%%.s");
+    if (!RewriteTemp) {
+      consumeError(AsmTemp->discard());
+      return false;
+    }
+
+    const char* LFIRewriter = std::getenv("LFI_REWRITER");
+    const char* LFIFlags = "";
+    if (triple.isVendorLFIStores())
+      LFIFlags = "--sandbox=stores";
+    else if (triple.isVendorLFIJumps())
+      LFIFlags = "--sandbox=jumps";
+    const char* LFIDebug = std::getenv("LFI_DEBUG");
+
+    if (!LFIRewriter)
+        LFIRewriter = "lfi-rewrite";
+
+    auto Prog = sys::findProgramByName(std::string(LFIRewriter));
+    if (!Prog) {
+        errs() << "Could not find " << LFIRewriter;
+        consumeError(RewriteTemp->discard());
+        consumeError(AsmTemp->discard());
+        return Failed;
+    }
+
+    std::stringstream SS;
+    SS << Prog.get() << " " << LFIFlags << " " << "-a " << triple.getArchName().str() << " " << AsmTemp->TmpName << " -o " << RewriteTemp->TmpName << "\n";
+    if (LFIDebug)
+      errs() << SS.str();
+    std::string Cmd = SS.str();
+
+    SmallVector<StringRef, 3> Args = {
+        "/bin/sh", "-c",  Cmd,
+    };
+
+    int RC = sys::ExecuteAndWait(Args[0], Args);
+    if (RC < -1) {
+      printf("lfi: exited abnormally\n");
+    } else if (RC < 0) {
+      printf("lfi: unable to invoke\n");
+    } else if (RC > 0) {
+      printf("lfi: returned non-zero\n");
+    }
+
+    auto EBuf = MemoryBuffer::getFileAsStream(RewriteTemp->TmpName);
+    if (!EBuf) {
+      consumeError(RewriteTemp->discard());
+      consumeError(AsmTemp->discard());
+      return Failed;
+    }
+    auto *Buf = EBuf->get();
+    std::string Str(Buf->getBufferStart(), Buf->getBufferEnd());
+
+    std::unique_ptr<MemoryBuffer> MBuf;
+    MBuf = MemoryBuffer::getMemBuffer(Str, RewriteTemp->TmpName);
+    SourceMgr SrcMgr;
+    SrcMgr.AddNewSourceBuffer(std::move(MBuf), SMLoc());
+
+    std::unique_ptr<MCRegisterInfo> MRI(TheTarget->createMCRegInfo(triple.getTriple()));
+    if (!MRI) {
+        errs() << "Unable to create target register info!";
+        abort();
+    }
+
+    std::unique_ptr<MCInstrInfo> MCII(TheTarget->createMCInstrInfo());
+
+    std::string OutputString;
+    raw_string_ostream NewOut(OutputString);
+    auto FOut = std::make_unique<formatted_raw_ostream>(NewOut);
+
+    MCContext *NewCtx = new MCContext(triple, MAI.get(), MRI.get(), STI.get(), &SrcMgr, Ctx.getTargetOptions());
+    TheTarget->createMCObjectFileInfo(*NewCtx, Ctx.getObjectFileInfo()->isPositionIndependent());
+    NewCtx->setObjectFileInfo(Ctx.getObjectFileInfo());
+
+    std::unique_ptr<MCStreamer> MCStr;
+
+    NewCtx->setUseNamesOnTempLabels(false);
+
+    MCCodeEmitter *CE = TheTarget->createMCCodeEmitter(*MCII, *NewCtx);
+    MCAsmBackend *MAB = TheTarget->createMCAsmBackend(*STI, *MRI, MCOptions);
+    MCStr.reset(TheTarget->createMCObjectStreamer(
+                triple, *NewCtx, std::unique_ptr<MCAsmBackend>(MAB),
+                MAB->createObjectWriter(*Out), std::unique_ptr<MCCodeEmitter>(CE),
+                *STI));
+
+    std::unique_ptr<MCAsmParser> Parser(
+      createMCAsmParser(SrcMgr, *NewCtx, *MCStr, *MAI));
+
+    std::unique_ptr<MCInstrInfo> MII(TheTarget->createMCInstrInfo());
+    assert(MII && "Failed to create instruction info");
+    std::unique_ptr<MCTargetAsmParser> NewTAP(TheTarget->createMCAsmParser(
+                TAP->getSTI(), *Parser, *MII, MCOptions));
+    if (!NewTAP)
+        report_fatal_error("External rewriting not supported by this streamer because"
+                " we don't have an asm parser for this target\n");
+    if (!triple.isAArch64()) {
+      NewTAP->setAvailableFeatures(TAP->getAvailableFeatures());
+    }
+
+    Parser->setTargetParser(*NewTAP);
+
+    if (Parser->Run(/*NoInitialTextSection*/ false, /*NoFinalize*/ false))
+      Failed = true;
+
+    consumeError(RewriteTemp->discard());
+  }
+  consumeError(AsmTemp->discard());
+
+  return Failed;
 
   return Failed;
 }

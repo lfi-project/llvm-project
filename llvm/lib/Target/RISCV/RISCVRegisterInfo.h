@@ -55,7 +55,7 @@ static inline unsigned getNF(uint64_t TSFlags) {
 
 struct RISCVRegisterInfo : public RISCVGenRegisterInfo {
 
-  RISCVRegisterInfo(unsigned HwMode);
+  RISCVRegisterInfo(const Triple &TT, unsigned HwMode);
 
   const uint32_t *getCallPreservedMask(const MachineFunction &MF,
                                        CallingConv::ID) const override;
@@ -144,6 +144,8 @@ struct RISCVRegisterInfo : public RISCVGenRegisterInfo {
   static bool isRVVRegClass(const TargetRegisterClass *RC) {
     return RISCVRI::isVRegClass(RC->TSFlags);
   }
+
+  bool IsLFI;
 };
 } // namespace llvm
 

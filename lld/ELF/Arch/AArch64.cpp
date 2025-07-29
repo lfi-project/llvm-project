@@ -88,6 +88,10 @@ private:
   void relaxTlsGdToLe(uint8_t *loc, const Relocation &rel, uint64_t val) const;
   void relaxTlsGdToIe(uint8_t *loc, const Relocation &rel, uint64_t val) const;
   void relaxTlsIeToLe(uint8_t *loc, const Relocation &rel, uint64_t val) const;
+
+  void writePltHeaderLfi(uint8_t *buf) const;
+  void writePltLfi(uint8_t *buf, const Symbol &sym,
+                uint64_t pltEntryAddr) const;
 };
 
 struct AArch64Relaxer {
@@ -377,6 +381,11 @@ void AArch64::writeIgotPlt(uint8_t *buf, const Symbol &s) const {
 }
 
 void AArch64::writePltHeader(uint8_t *buf) const {
+  if (ctx.arg.zLFI) {
+    writePltHeaderLfi(buf);
+    return;
+  }
+
   const uint8_t pltData[] = {
       0xf0, 0x7b, 0xbf, 0xa9, // stp    x16, x30, [sp,#-16]!
       0x10, 0x00, 0x00, 0x90, // adrp   x16, Page(&(.got.plt[2]))
@@ -399,6 +408,11 @@ void AArch64::writePltHeader(uint8_t *buf) const {
 
 void AArch64::writePlt(uint8_t *buf, const Symbol &sym,
                        uint64_t pltEntryAddr) const {
+  if (ctx.arg.zLFI) {
+    writePltLfi(buf, sym, pltEntryAddr);
+    return;
+  }
+
   const uint8_t inst[] = {
       0x10, 0x00, 0x00, 0x90, // adrp x16, Page(&(.got.plt[n]))
       0x11, 0x02, 0x40, 0xf9, // ldr  x17, [x16, Offset(&(.got.plt[n]))]
@@ -412,6 +426,44 @@ void AArch64::writePlt(uint8_t *buf, const Symbol &sym,
                 getAArch64Page(gotPltEntryAddr) - getAArch64Page(pltEntryAddr));
   relocateNoSym(buf + 4, R_AARCH64_LDST64_ABS_LO12_NC, gotPltEntryAddr);
   relocateNoSym(buf + 8, R_AARCH64_ADD_ABS_LO12_NC, gotPltEntryAddr);
+}
+
+void AArch64::writePltHeaderLfi(uint8_t *buf) const {
+  const uint8_t pltData[] = {
+      0xf0, 0x7b, 0xbf, 0xa9, // stp    x16, x30, [sp,#-16]!
+      0x10, 0x00, 0x00, 0x90, // adrp   x16, Page(&(.got.plt[2]))
+      0x10, 0x02, 0x00, 0x91, // add    x16, x16, Offset(&(.got.plt[2]))
+      0x71, 0x4b, 0x70, 0xf8, // ldr    x17, [x27, w16, uxtw]
+      0x7c, 0x43, 0x31, 0x8b, // add    x28, x27, w17, uxtw
+      0x80, 0x03, 0x1f, 0xd6, // br     x28
+      0x1f, 0x20, 0x03, 0xd5, // nop
+      0x1f, 0x20, 0x03, 0xd5  // nop
+  };
+  memcpy(buf, pltData, sizeof(pltData));
+
+  uint64_t got = ctx.in.gotPlt->getVA();
+  uint64_t plt = ctx.in.plt->getVA();
+  relocateNoSym(buf + 4, R_AARCH64_ADR_PREL_PG_HI21,
+                getAArch64Page(got + 16) - getAArch64Page(plt + 4));
+  relocateNoSym(buf + 8, R_AARCH64_ADD_ABS_LO12_NC, got + 16);
+}
+
+void AArch64::writePltLfi(uint8_t *buf, const Symbol &sym,
+                       uint64_t pltEntryAddr) const {
+  const uint8_t inst[] = {
+      0x10, 0x00, 0x00, 0x90, // adrp x16, Page(&(.got.plt[n]))
+      0x10, 0x02, 0x00, 0x91, // add  x16, x16, Offset(&(.got.plt[n]))
+      0x71, 0x4b, 0x70, 0xf8, // ldr  x17, [x27, w16, uxtw]
+      0x00, 0x00, 0x00, 0x14  // b    Offset(&(.plt[0])+20)
+  };
+  memcpy(buf, inst, sizeof(inst));
+
+  uint64_t gotPltEntryAddr = sym.getGotPltVA(ctx);
+  uint64_t plt = ctx.in.plt->getVA();
+  relocateNoSym(buf, R_AARCH64_ADR_PREL_PG_HI21,
+                getAArch64Page(gotPltEntryAddr) - getAArch64Page(pltEntryAddr));
+  relocateNoSym(buf + 4, R_AARCH64_ADD_ABS_LO12_NC, gotPltEntryAddr);
+  relocateNoSym(buf + 12, R_AARCH64_JUMP26, (plt + 16) - (pltEntryAddr + 12));
 }
 
 bool AArch64::needsThunk(RelExpr expr, RelType type, const InputFile *file,

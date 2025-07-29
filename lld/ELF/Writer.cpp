@@ -2900,7 +2900,7 @@ template <class ELFT> void Writer<ELFT>::writeTrapInstr() {
       if (p->p_type == PT_LOAD && (p->p_flags & PF_X))
         fillTrap(
             ctx.target->trapInstr,
-            ctx.bufferStart + alignDown(p->firstSec->offset + p->p_filesz, 4),
+            ctx.bufferStart + p->firstSec->offset,
             ctx.bufferStart + alignToPowerOf2(p->firstSec->offset + p->p_filesz,
                                               ctx.arg.maxPageSize));
 

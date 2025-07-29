@@ -24,6 +24,7 @@
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/DebugInfo/CodeView/CodeView.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/MC/MCInstrInfo.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cstdint>
 #include <memory>
@@ -152,6 +153,11 @@ public:
     Debug = 2 ///< Emit .debug_frame
   };
 
+  struct {
+    std::string File;       // File containing dumped .s
+    raw_pwrite_stream *Out = nullptr; // Output stream to write object to
+  } ExtAsm;
+
 private:
   MCSymbol *CurrentFnEnd = nullptr;
 
@@ -272,6 +278,8 @@ public:
   // Return the exception symbol associated with the MBB section containing a
   // given basic block.
   MCSymbol *getMBBExceptionSym(const MachineBasicBlock &MBB);
+
+  bool doExtAsm();
 
   /// Return the symbol to be used for the specified basic block when its
   /// address is taken.  This cannot be its normal LBB label because the block
@@ -409,6 +417,8 @@ public:
   void emitFrameAlloc(const MachineInstr &MI);
 
   void emitStackSizeSection(const MachineFunction &MF);
+
+  void emitStackArgsSection(const MachineFunction &MF);
 
   void emitStackUsage(const MachineFunction &MF);
 

@@ -2724,7 +2724,12 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
   // but a conditional move could be stalled by an expensive earlier operation.
   PredictableSelectIsExpensive = Subtarget.getSchedModel().isOutOfOrder();
   EnableExtLdPromotion = true;
-  setPrefFunctionAlignment(Align(16));
+  if (Subtarget.getTargetTriple().isVendorLFI()) {
+    setMinFunctionAlignment(Align(32));
+    setPrefFunctionAlignment(Align(32));
+  } else {
+    setPrefFunctionAlignment(Align(16));
+  }
 
   verifyIntrinsicTables();
 

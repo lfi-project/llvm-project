@@ -29,6 +29,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 using namespace llvm;
@@ -125,6 +126,33 @@ addPassesToGenerateCode(CodeGenTargetMachineImpl &TM, PassManagerBase &PM,
   return PassConfig;
 }
 
+bool CodeGenTargetMachineImpl::addAsmPrinterLFI(PassManagerBase &PM,
+                                                raw_pwrite_stream &Out,
+                                                raw_pwrite_stream *DwoOut,
+                                                CodeGenFileType FileType,
+                                                MCContext &Context) {
+  int FD;
+  SmallVector<char, 200> Path;
+  sys::fs::createTemporaryFile("asm.temp", "s", FD, Path);
+  raw_fd_ostream* Tmp = new raw_fd_ostream(FD, false);
+
+  Expected<std::unique_ptr<MCStreamer>> MCStreamerOrErr =
+      createMCStreamer(*Tmp, nullptr, CodeGenFileType::AssemblyFile, Context);
+  if (auto Err = MCStreamerOrErr.takeError())
+    return true;
+
+  // Create the AsmPrinter, which takes ownership of AsmStreamer if successful.
+  AsmPrinter *Printer =
+      getTarget().createAsmPrinter(*this, std::move(*MCStreamerOrErr));
+  if (!Printer)
+    return true;
+  Printer->ExtAsm.File = Twine(Path).str();
+  Printer->ExtAsm.Out = &Out;
+
+  PM.add(Printer);
+  return false;
+}
+
 bool CodeGenTargetMachineImpl::addAsmPrinter(PassManagerBase &PM,
                                              raw_pwrite_stream &Out,
                                              raw_pwrite_stream *DwoOut,
@@ -136,10 +164,11 @@ bool CodeGenTargetMachineImpl::addAsmPrinter(PassManagerBase &PM,
     return true;
 
   // Create the AsmPrinter, which takes ownership of AsmStreamer if successful.
-  FunctionPass *Printer =
+  AsmPrinter *Printer =
       getTarget().createAsmPrinter(*this, std::move(*MCStreamerOrErr));
   if (!Printer)
     return true;
+  Printer->ExtAsm.Out = nullptr;
 
   PM.add(Printer);
   return false;
@@ -221,8 +250,14 @@ bool CodeGenTargetMachineImpl::addPassesToEmitFile(
     return true;
 
   if (TargetPassConfig::willCompleteCodeGenPipeline()) {
-    if (addAsmPrinter(PM, Out, DwoOut, FileType, MMIWP->getMMI().getContext()))
-      return true;
+    const Triple &T = getTargetTriple();
+    if (T.isVendorLFI() && FileType == CodeGenFileType::ObjectFile) {
+        if (addAsmPrinterLFI(PM, Out, DwoOut, FileType, MMIWP->getMMI().getContext()))
+          return true;
+    } else {
+        if (addAsmPrinter(PM, Out, DwoOut, FileType, MMIWP->getMMI().getContext()))
+          return true;
+    }
   } else {
     // MIR printing is redundant with -filetype=null.
     if (FileType != CodeGenFileType::Null)

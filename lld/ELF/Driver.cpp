@@ -1493,6 +1493,7 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
   ctx.arg.zInterpose = hasZOption(args, "interpose");
   ctx.arg.zKeepTextSectionPrefix = getZFlag(
       args, "keep-text-section-prefix", "nokeep-text-section-prefix", false);
+  ctx.arg.zLFI = hasZOption(args, "lfi");
   ctx.arg.zLrodataAfterBss =
       getZFlag(args, "lrodata-after-bss", "nolrodata-after-bss", false);
   ctx.arg.zNoBtCfi = hasZOption(args, "nobtcfi");
