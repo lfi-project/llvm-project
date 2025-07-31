@@ -2845,6 +2845,10 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
     for (auto &MBB : MF)
       if (shouldEmitLabelForBasicBlock(MBB))
         MBB.setAlignment(Align(32));
+  if (TM.getTargetTriple().isVendorLFI() && TM.getTargetTriple().isRISCV())
+    for (auto &MBB : MF)
+      if (shouldEmitLabelForBasicBlock(MBB))
+        MBB.setAlignment(Align(4));
 
   // Record that there are split-stack functions, so we will emit a special
   // section to tell the linker.

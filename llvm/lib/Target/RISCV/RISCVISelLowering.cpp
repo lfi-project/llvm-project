@@ -1500,6 +1500,9 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
   const Align FunctionAlignment(Subtarget.hasStdExtCOrZca() ? 2 : 4);
   setMinFunctionAlignment(FunctionAlignment);
   // Set preferred alignments.
+  if (Subtarget.getTargetTriple().isVendorLFI()) {
+    setMinFunctionAlignment(Align(4));
+  }
   setPrefFunctionAlignment(Subtarget.getPrefFunctionAlignment());
   setPrefLoopAlignment(Subtarget.getPrefLoopAlignment());
 
