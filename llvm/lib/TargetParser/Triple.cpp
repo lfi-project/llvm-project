@@ -112,6 +112,12 @@ StringRef Triple::getArchName(ArchType Kind, SubArchType SubArch) {
       return "arm64ec";
     if (SubArch == AArch64SubArch_arm64e)
       return "arm64e";
+    if (SubArch == AArch64SubArch_lfi)
+      return "aarch64_lfi";
+    if (SubArch == AArch64SubArch_lfi_stores)
+      return "aarch64_lfi_stores";
+    if (SubArch == AArch64SubArch_lfi_jumps)
+      return "aarch64_lfi_jumps";
     break;
   case Triple::spirv:
     switch (SubArch) {
@@ -575,6 +581,9 @@ static Triple::ArchType parseArch(StringRef ArchName) {
           .Case("arm64_32", Triple::aarch64_32)
           .Case("arm64e", Triple::aarch64)
           .Case("arm64ec", Triple::aarch64)
+          .Case("aarch64_lfi", Triple::aarch64)
+          .Case("aarch64_lfi_stores", Triple::aarch64)
+          .Case("aarch64_lfi_jumps", Triple::aarch64)
           .Case("arm", Triple::arm)
           .Case("armeb", Triple::armeb)
           .Case("thumb", Triple::thumb)
@@ -796,6 +805,15 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
 
   if (SubArchName == "arm64ec")
     return Triple::AArch64SubArch_arm64ec;
+
+  if (SubArchName == "aarch64_lfi")
+    return Triple::AArch64SubArch_lfi;
+
+  if (SubArchName == "aarch64_lfi_stores")
+    return Triple::AArch64SubArch_lfi_stores;
+
+  if (SubArchName == "aarch64_lfi_jumps")
+    return Triple::AArch64SubArch_lfi_jumps;
 
   if (SubArchName.starts_with("spirv"))
     return StringSwitch<Triple::SubArchType>(SubArchName)
