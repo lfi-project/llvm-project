@@ -46,6 +46,7 @@ class MCDisassembler;
 class MCInstPrinter;
 class MCInstrAnalysis;
 class MCInstrInfo;
+class MCLFIExpander;
 class MCObjectWriter;
 class MCRegisterInfo;
 class MCRelocationInfo;
@@ -237,6 +238,10 @@ public:
       mca::InstrumentManager *(*)(const MCSubtargetInfo &STI,
                                   const MCInstrInfo &MCII);
 
+  using MCLFIExpanderCtorTy = MCLFIExpander *(*)(
+      MCStreamer &S, std::unique_ptr<MCRegisterInfo> &&RegInfo,
+      std::unique_ptr<MCInstrInfo> &&InstInfo);
+
 private:
   /// Next - The next registered target in the linked list, maintained by the
   /// TargetRegistry.
@@ -350,6 +355,10 @@ private:
   /// InstrumentManagerCtorFn - Construction function for this target's
   /// InstrumentManager, if registered (default = nullptr).
   InstrumentManagerCtorTy InstrumentManagerCtorFn = nullptr;
+
+  // MCLFIExpanderCtorFn - Construction function for this target's
+  // MCLFIExpander, if registered.
+  MCLFIExpanderCtorTy MCLFIExpanderCtorFn;
 
 public:
   Target() = default;
@@ -550,6 +559,13 @@ public:
       const Triple &T, MCContext &Ctx, std::unique_ptr<MCAsmBackend> TAB,
       std::unique_ptr<MCObjectWriter> OW,
       std::unique_ptr<MCCodeEmitter> Emitter, const MCSubtargetInfo &STI) const;
+
+  void createMCLFIExpander(MCStreamer &S,
+                           std::unique_ptr<MCRegisterInfo> &&RegInfo,
+                           std::unique_ptr<MCInstrInfo> &&InstInfo) const {
+    if (MCLFIExpanderCtorFn)
+      MCLFIExpanderCtorFn(S, std::move(RegInfo), std::move(InstInfo));
+  }
 
   LLVM_ABI MCStreamer *
   createAsmStreamer(MCContext &Ctx, std::unique_ptr<formatted_raw_ostream> OS,
@@ -1029,6 +1045,11 @@ struct TargetRegistry {
   static void RegisterInstrumentManager(Target &T,
                                         Target::InstrumentManagerCtorTy Fn) {
     T.InstrumentManagerCtorFn = Fn;
+  }
+
+  static void RegisterMCLFIExpander(Target &T,
+                                    Target::MCLFIExpanderCtorTy Fn) {
+    T.MCLFIExpanderCtorFn = Fn;
   }
 
   /// @}

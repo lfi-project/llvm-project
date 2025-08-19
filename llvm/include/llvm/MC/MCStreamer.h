@@ -20,6 +20,7 @@
 #include "llvm/MC/MCDirectives.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCLinkerOptimizationHint.h"
+#include "llvm/MC/MCLFIExpander.h"
 #include "llvm/MC/MCPseudoProbe.h"
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCWinEH.h"
@@ -286,6 +287,8 @@ protected:
   /// Returns true if the .cv_loc directive is in the right section.
   bool checkCVLocSection(unsigned FuncId, unsigned FileNo, SMLoc Loc);
 
+  std::unique_ptr<MCLFIExpander> LFIExpander;
+
 public:
   MCStreamer(const MCStreamer &) = delete;
   MCStreamer &operator=(const MCStreamer &) = delete;
@@ -302,6 +305,10 @@ public:
   SMLoc getStartTokLoc() const {
     return StartTokLocPtr ? *StartTokLocPtr : SMLoc();
   }
+
+  void setLFIExpander(MCLFIExpander *Exp) { LFIExpander.reset(Exp); }
+
+  MCLFIExpander *getLFIExpander() { return LFIExpander.get(); }
 
   /// State management
   ///
