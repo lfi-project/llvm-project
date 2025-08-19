@@ -30,6 +30,7 @@ using namespace llvm;
 
 static MCRegister LFIAddrReg = AArch64::X28;
 static MCRegister LFIBaseReg = AArch64::X27;
+static MCRegister LFIScratchReg = AArch64::X26;
 
 bool AArch64::AArch64MCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
   return Reg != AArch64::SP;
@@ -55,9 +56,9 @@ static void emitBranch(unsigned int Opcode, MCRegister Target, MCStreamer &Out,
 }
 
 void AArch64::AArch64MCLFIExpander::expandIndirectBranch(const MCInst &Inst,
-                                                  MCStreamer &Out,
-                                                  const MCSubtargetInfo &STI,
-                                                  bool IsCall) {
+                                                         MCStreamer &Out,
+                                                         const MCSubtargetInfo &STI,
+                                                         bool IsCall) {
   (void) IsCall;
 
   assert(Inst.getOperand(0).isReg());
@@ -68,7 +69,7 @@ void AArch64::AArch64MCLFIExpander::expandIndirectBranch(const MCInst &Inst,
 }
 
 void AArch64::AArch64MCLFIExpander::expandCall(const MCInst &Inst, MCStreamer &Out,
-                                        const MCSubtargetInfo &STI) {
+                                               const MCSubtargetInfo &STI) {
   if (Inst.getOperand(0).isReg())
     expandIndirectBranch(Inst, Out, STI, true);
   else
@@ -76,34 +77,47 @@ void AArch64::AArch64MCLFIExpander::expandCall(const MCInst &Inst, MCStreamer &O
 }
 
 void AArch64::AArch64MCLFIExpander::expandReturn(const MCInst &Inst, MCStreamer &Out,
-                                          const MCSubtargetInfo &STI) {
-}
-
-void AArch64::AArch64MCLFIExpander::expandControlFlow(const MCInst &Inst,
-                                               MCStreamer &Out,
-                                               const MCSubtargetInfo &STI) {
-
+                                                 const MCSubtargetInfo &STI) {
+  assert(Inst.getOperand(0).isReg());
+  if (Inst.getOperand(0).getReg() != AArch64::LR)
+    expandIndirectBranch(Inst, Out, STI, false);
+  else
+    Out.emitInstruction(Inst, STI);
 }
 
 bool AArch64::AArch64MCLFIExpander::mayModifyStack(const MCInst &Inst) {
-  return false;
+  return mayModifyRegister(Inst, AArch64::SP);
+}
+
+bool AArch64::AArch64MCLFIExpander::mayModifyReserved(const MCInst &Inst) {
+  return mayModifyRegister(Inst, LFIAddrReg) || mayModifyRegister(Inst, LFIBaseReg);
 }
 
 void AArch64::AArch64MCLFIExpander::expandStackManipulation(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-}
+  if (mayLoad(Inst) || mayStore(Inst)) {
+    return Out.emitInstruction(Inst, STI);
+  }
 
-void AArch64::AArch64MCLFIExpander::expandPrefetch(const MCInst &Inst, MCStreamer &Out,
-                                            const MCSubtargetInfo &STI) {
+  MCInst ModInst;
+  MCRegister Scratch = LFIScratchReg;
+  assert(Inst.getOperand(0).isReg() && Inst.getOperand(0).getReg() == AArch64::SP);
+  ModInst.setOpcode(Inst.getOpcode());
+  ModInst.addOperand(MCOperand::createReg(Scratch));
+  for (unsigned I = 1, E = Inst.getNumOperands(); I != E; ++I) {
+    ModInst.addOperand(Inst.getOperand(I));
+  }
+  Out.emitInstruction(ModInst, STI);
+  emitAddMask(AArch64::SP, Scratch, Out, STI);
 }
 
 void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
-                                             MCStreamer &Out,
-                                             const MCSubtargetInfo &STI) {
+                                                    MCStreamer &Out,
+                                                    const MCSubtargetInfo &STI) {
 }
 
 void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
-                                          const MCSubtargetInfo &STI) {
+                                                 const MCSubtargetInfo &STI) {
   if (isReturn(Inst))
     return expandReturn(Inst, Out, STI);
 
@@ -116,9 +130,6 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer 
   if (isBranch(Inst))
     return Out.emitInstruction(Inst, STI);
 
-  if (mayAffectControlFlow(Inst))
-    return expandControlFlow(Inst, Out, STI);
-
   if (mayModifyStack(Inst))
     return expandStackManipulation(Inst, Out, STI);
 
@@ -129,7 +140,7 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer 
 }
 
 bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst, MCStreamer &Out,
-                                        const MCSubtargetInfo &STI) {
+                                               const MCSubtargetInfo &STI) {
   if (Guard)
     return false;
   Guard = true;
