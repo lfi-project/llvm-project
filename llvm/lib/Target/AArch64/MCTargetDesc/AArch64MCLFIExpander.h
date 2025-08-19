@@ -52,6 +52,8 @@ private:
 
   bool mayModifyStack(const MCInst &Inst);
 
+  bool mayModifyReserved(const MCInst &Inst);
+
   void expandControlFlow(const MCInst &Inst, MCStreamer &Out,
                          const MCSubtargetInfo &STI);
 
