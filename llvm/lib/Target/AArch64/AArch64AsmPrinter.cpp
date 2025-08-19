@@ -50,6 +50,7 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
+#include "llvm/MC/MCLFI.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
@@ -394,6 +395,10 @@ void AArch64AsmPrinter::emitStartOfAsmFile(Module &M) {
 
   // Emit AArch64 Build Attributes
   emitAttributes(BAFlags, PAuthABIPlatform, PAuthABIVersion, TS);
+
+  if (TT.isLFI())
+    initializeLFIMCStreamer(*OutStreamer.get(), OutContext, TT);
+
   // Emit a .note.gnu.property section with the flags.
   TS->emitNoteSection(GNUFlags, PAuthABIPlatform, PAuthABIVersion);
 }
