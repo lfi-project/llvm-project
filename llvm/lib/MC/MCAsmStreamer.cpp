@@ -19,6 +19,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
+#include "llvm/MC/MCLFIExpander.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCPseudoProbe.h"
@@ -2441,6 +2442,9 @@ void MCAsmStreamer::emitInstruction(const MCInst &Inst,
     MCSection *Sec = getCurrentSectionOnly();
     Sec->setHasInstructions(true);
   }
+
+  if (LFIExpander && LFIExpander->expandInst(Inst, *this, STI))
+    return;
 
   if (MAI->isAIX() && CurFrag)
     // Now that a machine instruction has been assembled into this section, make
