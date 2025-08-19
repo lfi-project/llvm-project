@@ -680,6 +680,10 @@ public:
            getSubArch() == Triple::AArch64SubArch_arm64ec;
   }
 
+  bool isLFI() const {
+    return isAArch64LFI();
+  }
+
   /// Checks if we're targeting any subarch of AArch64 LFI.
   bool isAArch64LFI() const {
     return getArch() == Triple::aarch64 &&
