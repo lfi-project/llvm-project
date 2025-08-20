@@ -15,6 +15,7 @@
 #ifndef LLVM_MC_AARCH64MCLFIEXPANDER_H
 #define LLVM_MC_AARCH64MCLFIEXPANDER_H
 
+#include "Utils/AArch64BaseInfo.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCLFIExpander.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -72,6 +73,12 @@ private:
 
   void expandLoadStore(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI);
+
+  void expandLoadStoreBasic(const MCInst &Inst, MemInstInfo &InstInfo,
+      MCStreamer &Out, const MCSubtargetInfo &STI);
+
+  void expandLoadStoreRoW(const MCInst &Inst, MemInstInfo &InstInfo,
+      MCStreamer &Out, const MCSubtargetInfo &STI);
 
   void expandSyscall(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
