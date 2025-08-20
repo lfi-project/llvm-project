@@ -35,3 +35,9 @@ sub sp, sp, x0
 sub sp, sp, #1, lsl #12
 // CHECK:      sub x26, sp, #1, lsl #12
 // CHECK-NEXT: add sp, x27, w26, uxtw
+
+.scratch x10
+add sp, sp, x0
+// CHECK:      add x10, sp, x0
+// CHECK-NEXT: add sp, x27, w10, uxtw
+.scratch_clear
