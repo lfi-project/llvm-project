@@ -104,3 +104,31 @@ ldr x0, [x1, w2, sxtw]
 ldr x0, [x1, w2, sxtw #3]
 // CHECK:      add x26, x1, w2, sxtw #3
 // CHECK-NEXT: ldr x0, [x27, w26, uxtw]
+
+ldp x0, x1, [sp], #8
+// CHECK: ldp x0, x1, [sp], #8
+
+ldp x0, x1, [x2], #8
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: ldp x0, x1, [x28]
+// CHECK-NEXT: add x2, x2, #8
+
+ldp x0, x1, [x2, #8]!
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: ldp x0, x1, [x28, #8]
+// CHECK-NEXT: add x2, x2, #8
+
+ldp x0, x1, [x2], #-8
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: ldp x0, x1, [x28]
+// CHECK-NEXT: sub x2, x2, #8
+
+ldp x0, x1, [x2, #-8]!
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: ldp x0, x1, [x28, #-8]
+// CHECK-NEXT: sub x2, x2, #8
+
+stp x0, x1, [x2, #-8]!
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: stp x0, x1, [x28, #-8]
+// CHECK-NEXT: sub x2, x2, #8

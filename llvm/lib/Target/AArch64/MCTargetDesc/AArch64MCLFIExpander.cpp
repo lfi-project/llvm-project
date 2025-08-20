@@ -216,6 +216,24 @@ static unsigned convertUiToRoW(unsigned Op);
 static unsigned convertPreToRoW(unsigned Op);
 static unsigned convertPostToRoW(unsigned Op);
 
+static unsigned convertPrePostToBase(unsigned Op, bool &IsPre, bool &IsBaseNoOffset);
+static unsigned getPrePostScale(unsigned Op);
+
+static void emitSafeLoadStoreDemoted(const MCInst &Inst, unsigned N, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCInst LoadStore;
+  bool IsPre, IsBaseNoOffset;
+  auto NewOpCode = convertPrePostToBase(Inst.getOpcode(), IsPre, IsBaseNoOffset);
+  LoadStore.setOpcode(NewOpCode);
+  for (unsigned I = 1; I < N; I++)
+    LoadStore.addOperand(Inst.getOperand(I));
+  LoadStore.addOperand(MCOperand::createReg(LFIAddrReg));
+  if (IsPre)
+    LoadStore.addOperand(Inst.getOperand(N + 1));
+  else if (!IsBaseNoOffset)
+    LoadStore.addOperand(MCOperand::createImm(0));
+  Out.emitInstruction(LoadStore, STI);
+}
+
 static void emitSafeLoadStore(const MCInst &Inst, unsigned N, MCStreamer &Out, const MCSubtargetInfo &STI) {
   MCInst LoadStore;
   LoadStore.setOpcode(Inst.getOpcode());
@@ -233,8 +251,33 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(const MCInst &Inst, Mem
 
   if (MII.IsPrePost) {
     assert(OffsetIdx != -1 && "Pre/Post must have valid OffsetIdx");
-    return Out.getContext().reportWarning(
-        Inst.getLoc(), "TODO: pre/post index");
+
+    emitSafeLoadStoreDemoted(Inst, MII.BaseRegIdx, Out, STI);
+    MCRegister Base = Inst.getOperand(MII.BaseRegIdx).getReg();
+    MCOperand OffsetMO = Inst.getOperand(MII.OffsetIdx);
+    if (OffsetMO.isReg()) {
+      // The immediate offset of post-indexed addressing NEON Instrs has a fixed value, and
+      // it is encoded as a post-index addressing with XZR register operand.
+      // e.g., LD3Threev3d_POST can only have #48 as its operand and its offset
+      // MachineOperand holds XZR, which is a *Register* kind, not Imm.
+
+      // TODO: handle this case: ld3 { v0.4s, v1.4s, v2.4s }, [x0], #48
+      // MCRegister OffReg = OffsetMO.getReg();
+      // if (OffReg == AArch64::XZR) {
+      //   const LdStNInstrDesc *Info = getLdStNInstrDesc(Inst.getOpcode());
+      //   assert(Info && Info->NaturalOffset >= 0);
+      //   return emit(AArch64::ADDXri, Base, Base, Info->NaturalOffset, 0, Out, STI);
+      // } else {
+      //   assert(OffReg != AArch64::WZR);
+      //   return emit(AArch64::ADDXrs, Base, Base, OffsetMO.getReg(), 0, Out, STI);
+      // }
+      return;
+    } else {
+      auto Offset = Inst.getOperand(MII.OffsetIdx).getImm() * getPrePostScale(Inst.getOpcode());
+      if (Offset >= 0)
+        return emit(AArch64::ADDXri, Base, Base, Offset, 0, Out, STI);
+      return emit(AArch64::SUBXri, Base, Base, -Offset, 0, Out, STI);
+    }
   }
 
   return emitSafeLoadStore(Inst, MII.BaseRegIdx, Out, STI);
@@ -752,4 +795,624 @@ static bool canConvertToRoW(unsigned Op) {
     convertPostToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
     convertRoXToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END ||
     convertRoWToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END;
+}
+
+static unsigned convertPrePostToBase(unsigned Op, bool &IsPre, bool &IsBaseNoOffset) {
+  IsPre = false;
+  IsBaseNoOffset = false;
+  switch (Op) {
+  case AArch64::LDPDpost:
+    return AArch64::LDPDi;
+  case AArch64::LDPDpre:
+    IsPre = true;
+    return AArch64::LDPDi;
+  case AArch64::LDPQpost:
+    return AArch64::LDPQi;
+  case AArch64::LDPQpre:
+    IsPre = true;
+    return AArch64::LDPQi;
+  case AArch64::LDPSWpost:
+    return AArch64::LDPSWi;
+  case AArch64::LDPSWpre:
+    IsPre = true;
+    return AArch64::LDPSWi;
+  case AArch64::LDPSpost:
+    return AArch64::LDPSi;
+  case AArch64::LDPSpre:
+    IsPre = true;
+    return AArch64::LDPSi;
+  case AArch64::LDPWpost:
+    return AArch64::LDPWi;
+  case AArch64::LDPWpre:
+    IsPre = true;
+    return AArch64::LDPWi;
+  case AArch64::LDPXpost:
+    return AArch64::LDPXi;
+  case AArch64::LDPXpre:
+    IsPre = true;
+    return AArch64::LDPXi;
+  case AArch64::STPDpost:
+    return AArch64::STPDi;
+  case AArch64::STPDpre:
+    IsPre = true;
+    return AArch64::STPDi;
+  case AArch64::STPQpost:
+    return AArch64::STPQi;
+  case AArch64::STPQpre:
+    IsPre = true;
+    return AArch64::STPQi;
+  case AArch64::STPSpost:
+    return AArch64::STPSi;
+  case AArch64::STPSpre:
+    IsPre = true;
+    return AArch64::STPSi;
+  case AArch64::STPWpost:
+    return AArch64::STPWi;
+  case AArch64::STPWpre:
+    IsPre = true;
+    return AArch64::STPWi;
+  case AArch64::STPXpost:
+    return AArch64::STPXi;
+  case AArch64::STPXpre:
+    IsPre = true;
+    return AArch64::STPXi;
+  // case AArch64::STLRWpre:
+  //   IsPre = true;
+  //   IsBaseNoOffset = true;
+  //   return AArch64::STPWi;
+  // case AArch64::STLRXpre:
+  //   IsPre = true;
+  //   IsBaseNoOffset = true;
+    // return AArch64::STLRX;
+  case AArch64::LD1i64_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1i64;
+  case AArch64::LD2i64_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2i64;
+  case AArch64::LD1i8_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1i8;
+  case AArch64::LD1i16_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1i16;
+  case AArch64::LD1i32_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1i32;
+  case AArch64::LD2i8_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2i8;
+  case AArch64::LD2i16_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2i16;
+  case AArch64::LD2i32_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2i32;
+  case AArch64::LD3i8_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3i8;
+  case AArch64::LD3i16_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3i16;
+  case AArch64::LD3i32_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3i32;
+  case AArch64::LD3i64_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3i64;
+  case AArch64::LD4i8_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4i8;
+  case AArch64::LD4i16_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4i16;
+  case AArch64::LD4i32_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4i32;
+  case AArch64::LD4i64_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4i64;
+  case AArch64::LD1Onev1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Onev1d;
+  case AArch64::LD1Onev2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Onev2s;
+  case AArch64::LD1Onev4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Onev4h;
+  case AArch64::LD1Onev8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Onev8b;
+  case AArch64::LD1Onev2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Onev2d;
+  case AArch64::LD1Onev4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Onev4s;
+  case AArch64::LD1Onev8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Onev8h;
+  case AArch64::LD1Onev16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Onev16b;
+  case AArch64::LD1Rv1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Rv1d;
+  case AArch64::LD1Rv2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Rv2s;
+  case AArch64::LD1Rv4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Rv4h;
+  case AArch64::LD1Rv8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Rv8b;
+  case AArch64::LD1Rv2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Rv2d;
+  case AArch64::LD1Rv4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Rv4s;
+  case AArch64::LD1Rv8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Rv8h;
+  case AArch64::LD1Rv16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Rv16b;
+  case AArch64::LD1Twov1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Twov1d;
+  case AArch64::LD1Twov2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Twov2s;
+  case AArch64::LD1Twov4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Twov4h;
+  case AArch64::LD1Twov8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Twov8b;
+  case AArch64::LD1Twov2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Twov2d;
+  case AArch64::LD1Twov4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Twov4s;
+  case AArch64::LD1Twov8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Twov8h;
+  case AArch64::LD1Twov16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Twov16b;
+  case AArch64::LD1Threev1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Threev1d;
+  case AArch64::LD1Threev2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Threev2s;
+  case AArch64::LD1Threev4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Threev4h;
+  case AArch64::LD1Threev8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Threev8b;
+  case AArch64::LD1Threev2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Threev2d;
+  case AArch64::LD1Threev4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Threev4s;
+  case AArch64::LD1Threev8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Threev8h;
+  case AArch64::LD1Threev16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Threev16b;
+  case AArch64::LD1Fourv1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Fourv1d;
+  case AArch64::LD1Fourv2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Fourv2s;
+  case AArch64::LD1Fourv4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Fourv4h;
+  case AArch64::LD1Fourv8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Fourv8b;
+  case AArch64::LD1Fourv2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Fourv2d;
+  case AArch64::LD1Fourv4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Fourv4s;
+  case AArch64::LD1Fourv8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Fourv8h;
+  case AArch64::LD1Fourv16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD1Fourv16b;
+  case AArch64::LD2Twov2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Twov2s;
+  case AArch64::LD2Twov4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Twov4s;
+  case AArch64::LD2Twov8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Twov8b;
+  case AArch64::LD2Twov2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Twov2d;
+  case AArch64::LD2Twov4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Twov4h;
+  case AArch64::LD2Twov8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Twov8h;
+  case AArch64::LD2Twov16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Twov16b;
+  case AArch64::LD2Rv1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Rv1d;
+  case AArch64::LD2Rv2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Rv2s;
+  case AArch64::LD2Rv4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Rv4s;
+  case AArch64::LD2Rv8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Rv8b;
+  case AArch64::LD2Rv2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Rv2d;
+  case AArch64::LD2Rv4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Rv4h;
+  case AArch64::LD2Rv8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Rv8h;
+  case AArch64::LD2Rv16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD2Rv16b;
+  case AArch64::LD3Threev2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Threev2s;
+  case AArch64::LD3Threev4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Threev4h;
+  case AArch64::LD3Threev8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Threev8b;
+  case AArch64::LD3Threev2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Threev2d;
+  case AArch64::LD3Threev4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Threev4s;
+  case AArch64::LD3Threev8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Threev8h;
+  case AArch64::LD3Threev16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Threev16b;
+  case AArch64::LD3Rv1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Rv1d;
+  case AArch64::LD3Rv2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Rv2s;
+  case AArch64::LD3Rv4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Rv4h;
+  case AArch64::LD3Rv8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Rv8b;
+  case AArch64::LD3Rv2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Rv2d;
+  case AArch64::LD3Rv4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Rv4s;
+  case AArch64::LD3Rv8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Rv8h;
+  case AArch64::LD3Rv16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD3Rv16b;
+  case AArch64::LD4Fourv2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Fourv2s;
+  case AArch64::LD4Fourv4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Fourv4h;
+  case AArch64::LD4Fourv8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Fourv8b;
+  case AArch64::LD4Fourv2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Fourv2d;
+  case AArch64::LD4Fourv4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Fourv4s;
+  case AArch64::LD4Fourv8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Fourv8h;
+  case AArch64::LD4Fourv16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Fourv16b;
+  case AArch64::LD4Rv1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Rv1d;
+  case AArch64::LD4Rv2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Rv2s;
+  case AArch64::LD4Rv4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Rv4h;
+  case AArch64::LD4Rv8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Rv8b;
+  case AArch64::LD4Rv2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Rv2d;
+  case AArch64::LD4Rv4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Rv4s;
+  case AArch64::LD4Rv8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Rv8h;
+  case AArch64::LD4Rv16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::LD4Rv16b;
+  case AArch64::ST1i64_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1i64;
+  case AArch64::ST2i64_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2i64;
+  case AArch64::ST1i8_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1i8;
+  case AArch64::ST1i16_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1i16;
+  case AArch64::ST1i32_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1i32;
+  case AArch64::ST2i8_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2i8;
+  case AArch64::ST2i16_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2i16;
+  case AArch64::ST2i32_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2i32;
+  case AArch64::ST3i8_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3i8;
+  case AArch64::ST3i16_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3i16;
+  case AArch64::ST3i32_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3i32;
+  case AArch64::ST3i64_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3i64;
+  case AArch64::ST4i8_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4i8;
+  case AArch64::ST4i16_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4i16;
+  case AArch64::ST4i32_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4i32;
+  case AArch64::ST4i64_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4i64;
+  case AArch64::ST1Onev1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Onev1d;
+  case AArch64::ST1Onev2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Onev2s;
+  case AArch64::ST1Onev4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Onev4h;
+  case AArch64::ST1Onev8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Onev8b;
+  case AArch64::ST1Onev2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Onev2d;
+  case AArch64::ST1Onev4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Onev4s;
+  case AArch64::ST1Onev8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Onev8h;
+  case AArch64::ST1Onev16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Onev16b;
+  case AArch64::ST1Twov1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Twov1d;
+  case AArch64::ST1Twov2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Twov2s;
+  case AArch64::ST1Twov4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Twov4h;
+  case AArch64::ST1Twov8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Twov8b;
+  case AArch64::ST1Twov2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Twov2d;
+  case AArch64::ST1Twov4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Twov4s;
+  case AArch64::ST1Twov8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Twov8h;
+  case AArch64::ST1Twov16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Twov16b;
+  case AArch64::ST1Threev1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Threev1d;
+  case AArch64::ST1Threev2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Threev2s;
+  case AArch64::ST1Threev4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Threev4h;
+  case AArch64::ST1Threev8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Threev8b;
+  case AArch64::ST1Threev2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Threev2d;
+  case AArch64::ST1Threev4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Threev4s;
+  case AArch64::ST1Threev8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Threev8h;
+  case AArch64::ST1Threev16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Threev16b;
+  case AArch64::ST1Fourv1d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Fourv1d;
+  case AArch64::ST1Fourv2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Fourv2s;
+  case AArch64::ST1Fourv4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Fourv4h;
+  case AArch64::ST1Fourv8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Fourv8b;
+  case AArch64::ST1Fourv2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Fourv2d;
+  case AArch64::ST1Fourv4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Fourv4s;
+  case AArch64::ST1Fourv8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Fourv8h;
+  case AArch64::ST1Fourv16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST1Fourv16b;
+  case AArch64::ST2Twov2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2Twov2s;
+  case AArch64::ST2Twov4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2Twov4s;
+  case AArch64::ST2Twov8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2Twov8b;
+  case AArch64::ST2Twov2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2Twov2d;
+  case AArch64::ST2Twov4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2Twov4h;
+  case AArch64::ST2Twov8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2Twov8h;
+  case AArch64::ST2Twov16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST2Twov16b;
+  case AArch64::ST3Threev2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3Threev2s;
+  case AArch64::ST3Threev4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3Threev4h;
+  case AArch64::ST3Threev8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3Threev8b;
+  case AArch64::ST3Threev2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3Threev2d;
+  case AArch64::ST3Threev4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3Threev4s;
+  case AArch64::ST3Threev8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3Threev8h;
+  case AArch64::ST3Threev16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST3Threev16b;
+  case AArch64::ST4Fourv2s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4Fourv2s;
+  case AArch64::ST4Fourv4h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4Fourv4h;
+  case AArch64::ST4Fourv8b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4Fourv8b;
+  case AArch64::ST4Fourv2d_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4Fourv2d;
+  case AArch64::ST4Fourv4s_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4Fourv4s;
+  case AArch64::ST4Fourv8h_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4Fourv8h;
+  case AArch64::ST4Fourv16b_POST:
+    IsBaseNoOffset = true;
+    return AArch64::ST4Fourv16b;
+  }
+  return AArch64::INSTRUCTION_LIST_END;
+}
+
+static unsigned getPrePostScale(unsigned Op) {
+  switch (Op) {
+  case AArch64::LDPDpost:
+  case AArch64::LDPDpre:
+    return 8;
+  case AArch64::LDPQpost:
+  case AArch64::LDPQpre:
+    return 16;
+  case AArch64::LDPSWpost:
+  case AArch64::LDPSWpre:
+    return 4;
+  case AArch64::LDPSpost:
+  case AArch64::LDPSpre:
+    return 4;
+  case AArch64::LDPWpost:
+  case AArch64::LDPWpre:
+    return 4;
+  case AArch64::LDPXpost:
+  case AArch64::LDPXpre:
+    return 8;
+  case AArch64::STPDpost:
+  case AArch64::STPDpre:
+    return 8;
+  case AArch64::STPQpost:
+  case AArch64::STPQpre:
+    return 16;
+  case AArch64::STPSpost:
+  case AArch64::STPSpre:
+    return 4;
+  case AArch64::STPWpost:
+  case AArch64::STPWpre:
+    return 4;
+  case AArch64::STPXpost:
+  case AArch64::STPXpre:
+    return 8;
+  }
+  return 0;
 }
