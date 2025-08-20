@@ -93,9 +93,20 @@ bool AArch64::AArch64MCLFIExpander::mayModifyReserved(const MCInst &Inst) {
   return mayModifyRegister(Inst, LFIAddrReg) || mayModifyRegister(Inst, LFIBaseReg);
 }
 
-void AArch64::AArch64MCLFIExpander::expandStackManipulation(
+bool AArch64::AArch64MCLFIExpander::mayModifyLR(const MCInst &Inst) {
+  return mayModifyRegister(Inst, AArch64::LR);
+}
+
+// Rewrites for modifications of "special" registers: x28, x27, lr.
+void AArch64::AArch64MCLFIExpander::expandSpecialModification(
+    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+}
+
+void AArch64::AArch64MCLFIExpander::expandStackModification(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
   if (mayLoad(Inst) || mayStore(Inst)) {
+    if (mayModifyReserved(Inst) || mayModifyLR(Inst))
+      return expandSpecialModification(Inst, Out, STI);
     return Out.emitInstruction(Inst, STI);
   }
 
@@ -116,8 +127,118 @@ void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
                                                     const MCSubtargetInfo &STI) {
 }
 
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rs,
+    int64_t Imm, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCInst Inst;
+  Inst.setOpcode(Op);
+  Inst.addOperand(MCOperand::createReg(Rd));
+  Inst.addOperand(MCOperand::createReg(Rs));
+  Inst.addOperand(MCOperand::createImm(Imm));
+  Out.emitInstruction(Inst, STI);
+}
+
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1,
+    MCRegister Rt2, int64_t Imm, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCInst Inst;
+  Inst.setOpcode(Op);
+  Inst.addOperand(MCOperand::createReg(Rd));
+  Inst.addOperand(MCOperand::createReg(Rt1));
+  Inst.addOperand(MCOperand::createReg(Rt2));
+  Inst.addOperand(MCOperand::createImm(Imm));
+  Out.emitInstruction(Inst, STI);
+}
+
+static void emit(unsigned int Op, MCRegister Reg, MCStreamer &Out,
+    const MCSubtargetInfo &STI) {
+  MCInst Inst;
+  Inst.setOpcode(Op);
+  Inst.addOperand(MCOperand::createReg(Reg));
+  Out.emitInstruction(Inst, STI);
+}
+
+static void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  emit(AArch64::ORRXrs, Dest, AArch64::XZR, Src, 0, Out, STI);
+}
+
+enum LFICallType {
+  LFISyscall,
+  LFITLSRead,
+  LFITLSWrite,
+};
+
+static void emitLFICall(LFICallType CallType, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  emitMov(LFIScratchReg, AArch64::LR, Out, STI);
+  unsigned Offset;
+  switch (CallType) {
+    case LFISyscall: Offset = 0; break;
+    case LFITLSRead: Offset = 1; break;
+    case LFITLSWrite: Offset = 2; break;
+  }
+  emit(AArch64::LDRXui, AArch64::LR, LFIBaseReg, Offset, Out, STI);
+  emit(AArch64::BLR, AArch64::LR, Out, STI);
+  emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
+}
+
+void AArch64::AArch64MCLFIExpander::expandSyscall(const MCInst &Inst, MCStreamer &Out,
+                   const MCSubtargetInfo &STI) {
+  emitLFICall(LFISyscall, Out, STI);
+}
+
+static void emitSwap(MCRegister Reg1, MCRegister Reg2, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  emit(AArch64::EORXrs, Reg1, Reg1, Reg2, 0, Out, STI);
+  emit(AArch64::EORXrs, Reg2, Reg1, Reg2, 0, Out, STI);
+  emit(AArch64::EORXrs, Reg1, Reg1, Reg2, 0, Out, STI);
+}
+
+void AArch64::AArch64MCLFIExpander::expandTLSRead(const MCInst &Inst, MCStreamer &Out,
+                   const MCSubtargetInfo &STI) {
+  MCRegister Reg = Inst.getOperand(0).getReg();
+  if (Reg == AArch64::X0) {
+    emitLFICall(LFITLSRead, Out, STI);
+  } else {
+    emitMov(Reg, AArch64::X0, Out, STI);
+    emitLFICall(LFITLSRead, Out, STI);
+    emitSwap(AArch64::X0, Reg, Out, STI);
+  }
+}
+
+void AArch64::AArch64MCLFIExpander::expandTLSWrite(const MCInst &Inst, MCStreamer &Out,
+                    const MCSubtargetInfo &STI) {
+  MCRegister Reg = Inst.getOperand(1).getReg();
+  if (Reg == AArch64::X0) {
+    emitLFICall(LFITLSWrite, Out, STI);
+  } else {
+    emitSwap(Reg, AArch64::X0, Out, STI);
+    emitLFICall(LFITLSWrite, Out, STI);
+    emitSwap(AArch64::X0, Reg, Out, STI);
+  }
+}
+
+static bool isSyscall(const MCInst &Inst) {
+  return Inst.getOpcode() == AArch64::SVC;
+}
+
+static bool isTLSRead(const MCInst &Inst) {
+  return Inst.getOpcode() == AArch64::MRS &&
+    Inst.getOperand(1).getReg() == AArch64SysReg::TPIDR_EL0;
+}
+
+static bool isTLSWrite(const MCInst &Inst) {
+  return Inst.getOpcode() == AArch64::MSR &&
+    Inst.getOperand(0).getReg() == AArch64SysReg::TPIDR_EL0;
+}
+
 void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
+  if (isSyscall(Inst))
+    return expandSyscall(Inst, Out, STI);
+
+  if (isTLSRead(Inst))
+    return expandTLSRead(Inst, Out, STI);
+
+  if (isTLSWrite(Inst))
+    return expandTLSWrite(Inst, Out, STI);
+
   if (isReturn(Inst))
     return expandReturn(Inst, Out, STI);
 
@@ -131,7 +252,10 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer 
     return Out.emitInstruction(Inst, STI);
 
   if (mayModifyStack(Inst))
-    return expandStackManipulation(Inst, Out, STI);
+    return expandStackModification(Inst, Out, STI);
+
+  if (mayModifyReserved(Inst) || mayModifyLR(Inst))
+    return expandSpecialModification(Inst, Out, STI);
 
   if (mayLoad(Inst) || mayStore(Inst))
     return expandLoadStore(Inst, Out, STI);
