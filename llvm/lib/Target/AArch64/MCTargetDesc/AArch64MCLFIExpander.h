@@ -41,6 +41,8 @@ protected:
 private:
   bool Guard = false; // recursion guard
 
+  MCRegister getScratch();
+
   void expandIndirectBranch(const MCInst &Inst, MCStreamer &Out,
                             const MCSubtargetInfo &STI, bool isCall);
 
@@ -82,6 +84,15 @@ private:
 
   void doExpandInst(const MCInst &Inst, MCStreamer &Out,
                     const MCSubtargetInfo &STI);
+
+  enum LFICallType {
+    LFISyscall,
+    LFITLSRead,
+    LFITLSWrite,
+  };
+
+  void emitLFICall(LFICallType CallType, MCStreamer &Out,
+                   const MCSubtargetInfo &STI);
 };
 } // namespace AArch64
 } // namespace llvm
