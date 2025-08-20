@@ -54,17 +54,31 @@ private:
 
   bool mayModifyReserved(const MCInst &Inst);
 
+  bool mayModifyLR(const MCInst &Inst);
+
   void expandControlFlow(const MCInst &Inst, MCStreamer &Out,
                          const MCSubtargetInfo &STI);
 
-  void expandStackManipulation(const MCInst &Inst, MCStreamer &Out,
+  void expandStackModification(const MCInst &Inst, MCStreamer &Out,
                                const MCSubtargetInfo &STI);
+
+  void expandSpecialModification(const MCInst &Inst, MCStreamer &Out,
+                                 const MCSubtargetInfo &STI);
 
   void expandPrefetch(const MCInst &Inst, MCStreamer &Out,
                       const MCSubtargetInfo &STI);
 
   void expandLoadStore(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI);
+
+  void expandSyscall(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI);
+
+  void expandTLSRead(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI);
+
+  void expandTLSWrite(const MCInst &Inst, MCStreamer &Out,
+                      const MCSubtargetInfo &STI);
 
   void doExpandInst(const MCInst &Inst, MCStreamer &Out,
                     const MCSubtargetInfo &STI);
