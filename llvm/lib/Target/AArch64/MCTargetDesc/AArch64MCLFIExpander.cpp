@@ -64,6 +64,31 @@ static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1,
   Out.emitInstruction(Inst, STI);
 }
 
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1,
+    MCRegister Rt2, int64_t Imm1, int64_t Imm2,
+    MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCInst Inst;
+  Inst.setOpcode(Op);
+  Inst.addOperand(MCOperand::createReg(Rd));
+  Inst.addOperand(MCOperand::createReg(Rt1));
+  Inst.addOperand(MCOperand::createReg(Rt2));
+  Inst.addOperand(MCOperand::createImm(Imm1));
+  Inst.addOperand(MCOperand::createImm(Imm2));
+  Out.emitInstruction(Inst, STI);
+}
+
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt,
+    int64_t Imm1, int64_t Imm2,
+    MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCInst Inst;
+  Inst.setOpcode(Op);
+  Inst.addOperand(MCOperand::createReg(Rd));
+  Inst.addOperand(MCOperand::createReg(Rt));
+  Inst.addOperand(MCOperand::createImm(Imm1));
+  Inst.addOperand(MCOperand::createImm(Imm2));
+  Out.emitInstruction(Inst, STI);
+}
+
 static void emit(unsigned int Op, MCRegister Reg, MCStreamer &Out,
     const MCSubtargetInfo &STI) {
   MCInst Inst;
@@ -76,6 +101,7 @@ static void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out, const MCSu
   emit(AArch64::ORRXrs, Dest, AArch64::XZR, Src, 0, Out, STI);
 }
 
+// Emit 'add Dest, LFIBaseReg, W(Src), uxtw'
 static void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,
                         const MCSubtargetInfo &STI) {
   emit(AArch64::ADDXrx,
@@ -84,6 +110,11 @@ static void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,
       getWRegFromXReg(Src),
       AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0),
       Out, STI);
+}
+
+// Emit 'Op(ld/st) Dest, [LFIBaseReg, W(Target), uxtw]'
+static void emitMemMask(unsigned Op, MCRegister Dest, MCRegister Target, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  emit(Op, Dest, LFIBaseReg, getWRegFromXReg(Target), 0, 0, Out, STI);
 }
 
 static void emitBranch(unsigned int Opcode, MCRegister Target, MCStreamer &Out,
@@ -178,12 +209,124 @@ void AArch64::AArch64MCLFIExpander::expandStackModification(
   emitAddMask(AArch64::SP, Scratch, Out, STI);
 }
 
+static bool canConvertToRoW(unsigned Op);
+static unsigned convertRoXToRoW(unsigned Op, unsigned &Shift);
+static unsigned convertRoWToRoW(unsigned Op, unsigned &Shift);
+static unsigned convertUiToRoW(unsigned Op);
+static unsigned convertPreToRoW(unsigned Op);
+static unsigned convertPostToRoW(unsigned Op);
+
+static void emitSafeLoadStore(const MCInst &Inst, unsigned N, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCInst LoadStore;
+  LoadStore.setOpcode(Inst.getOpcode());
+  for (unsigned I = 0; I < N; ++I)
+    LoadStore.addOperand(Inst.getOperand(I));
+  LoadStore.addOperand(MCOperand::createReg(LFIAddrReg));
+  for (unsigned I = N + 1; I < Inst.getNumOperands(); ++I)
+    LoadStore.addOperand(Inst.getOperand(I));
+  Out.emitInstruction(LoadStore, STI);
+}
+
+void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(const MCInst &Inst, MemInstInfo &MII,
+    MCStreamer &Out, const MCSubtargetInfo &STI) {
+  emitAddMask(LFIAddrReg, Inst.getOperand(MII.BaseRegIdx).getReg(), Out, STI);
+
+  if (MII.IsPrePost) {
+    assert(OffsetIdx != -1 && "Pre/Post must have valid OffsetIdx");
+    return Out.getContext().reportWarning(
+        Inst.getLoc(), "TODO: pre/post index");
+  }
+
+  return emitSafeLoadStore(Inst, MII.BaseRegIdx, Out, STI);
+}
+
+void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(const MCInst &Inst, MemInstInfo &MII,
+    MCStreamer &Out, const MCSubtargetInfo &STI) {
+  unsigned MemOp;
+  unsigned Op = Inst.getOpcode();
+  if ((MemOp = convertUiToRoW(Op)) != AArch64::INSTRUCTION_LIST_END) {
+    auto OffsetMCO = Inst.getOperand(2);
+    if (OffsetMCO.isImm() && OffsetMCO.getImm() == 0)
+      return emitMemMask(MemOp, Inst.getOperand(0).getReg(), Inst.getOperand(1).getReg(), Out, STI);
+    return expandLoadStoreBasic(Inst, MII, Out, STI);
+  }
+
+  if ((MemOp = convertPreToRoW(Op)) != AArch64::INSTRUCTION_LIST_END) {
+    MCRegister Reg = Inst.getOperand(2).getReg();
+    int64_t Imm = Inst.getOperand(3).getImm();
+    if (Imm >= 0)
+      emit(AArch64::ADDXri, Reg, Reg, Imm, 0, Out, STI);
+    else
+      emit(AArch64::SUBXri, Reg, Reg, -Imm, 0, Out, STI);
+    return emitMemMask(MemOp, Inst.getOperand(1).getReg(), Reg, Out, STI);
+  }
+
+  if ((MemOp = convertPostToRoW(Op)) != AArch64::INSTRUCTION_LIST_END) {
+    MCRegister Reg = Inst.getOperand(2).getReg();
+    emitMemMask(MemOp, Inst.getOperand(1).getReg(), Reg, Out, STI);
+    int64_t Imm = Inst.getOperand(3).getImm();
+    if (Imm >= 0)
+      emit(AArch64::ADDXri, Reg, Reg, Imm, 0, Out, STI);
+    else
+      emit(AArch64::SUBXri, Reg, Reg, -Imm, 0, Out, STI);
+    return;
+  }
+
+  unsigned Shift;
+  if ((MemOp = convertRoXToRoW(Op, Shift)) != AArch64::INSTRUCTION_LIST_END) {
+    MCRegister Reg1 = Inst.getOperand(1).getReg();
+    MCRegister Reg2 = Inst.getOperand(2).getReg();
+    int64_t Extend = Inst.getOperand(3).getImm();
+    int64_t IsShift = Inst.getOperand(4).getImm();
+    MCRegister Scratch = getScratch();
+    if (!IsShift)
+      Shift = 0;
+    if (Extend)
+      emit(AArch64::ADDXrx, Scratch, Reg1, Reg2, AArch64_AM::getArithExtendImm(AArch64_AM::SXTX, Shift), Out, STI);
+    else
+      emit(AArch64::ADDXrs, Scratch, Reg1, Reg2, AArch64_AM::getShifterImm(AArch64_AM::LSL, Shift), Out, STI);
+    return emitMemMask(MemOp, Inst.getOperand(0).getReg(), Scratch, Out, STI);
+  }
+
+  if ((MemOp = convertRoWToRoW(Op, Shift)) != AArch64::INSTRUCTION_LIST_END) {
+    MCRegister Reg1 = Inst.getOperand(1).getReg();
+    MCRegister Reg2 = Inst.getOperand(2).getReg();
+    int64_t S = Inst.getOperand(3).getImm();
+    int64_t IsShift = Inst.getOperand(4).getImm();
+    MCRegister Scratch = getScratch();
+    if (!IsShift)
+      Shift = 0;
+    if (S)
+      emit(AArch64::ADDXrx, Scratch, Reg1, Reg2, AArch64_AM::getArithExtendImm(AArch64_AM::SXTW, Shift), Out, STI);
+    else
+      emit(AArch64::ADDXrx, Scratch, Reg1, Reg2, AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, Shift), Out, STI);
+    return emitMemMask(MemOp, Inst.getOperand(0).getReg(), Scratch, Out, STI);
+  }
+}
+
 void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
                                                     MCStreamer &Out,
                                                     const MCSubtargetInfo &STI) {
-  Out.getContext().reportWarning(
-      Inst.getLoc(), "TODO: expandLoadStore");
-  Out.emitInstruction(Inst, STI);
+  auto MII = getLoadInfo(Inst);
+  if (!MII.has_value()) {
+    MII = getStoreInfo(Inst);
+    if (!MII.has_value())
+      return Out.getContext().reportError(
+          Inst.getLoc(), "this load/store is not supported by LFI");
+  }
+
+  // Stack accesses without a register offset don't need rewriting.
+  if (Inst.getOperand(MII->BaseRegIdx).getReg() == AArch64::SP) {
+    if (MII->BaseRegIdx == (int) Inst.getNumOperands() - 1 ||
+        !Inst.getOperand(MII->BaseRegIdx + 1).isReg())
+      return Out.emitInstruction(Inst, STI);
+  }
+
+  // Try to convert to RoW if we can, otherwise use fallback.
+  if (canConvertToRoW(Inst.getOpcode()))
+    expandLoadStoreRoW(Inst, MII.value(), Out, STI);
+  else
+    expandLoadStoreBasic(Inst, MII.value(), Out, STI);
 }
 
 void AArch64::AArch64MCLFIExpander::emitLFICall(LFICallType CallType, MCStreamer &Out, const MCSubtargetInfo &STI) {
@@ -300,4 +443,313 @@ bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst, MCStreamer &O
 
   Guard = false;
   return true;
+}
+
+static unsigned convertRoXToRoW(unsigned Op, unsigned &Shift) {
+  Shift = 0;
+  switch (Op) {
+  case AArch64::LDRBBroX:
+    return AArch64::LDRBBroW;
+  case AArch64::LDRBroX:
+    return AArch64::LDRBroW;
+  case AArch64::LDRDroX:
+    Shift = 3;
+    return AArch64::LDRDroW;
+  case AArch64::LDRHHroX:
+    Shift = 1;
+    return AArch64::LDRHHroW;
+  case AArch64::LDRHroX:
+    Shift = 1;
+    return AArch64::LDRHroW;
+  case AArch64::LDRQroX:
+    Shift = 4;
+    return AArch64::LDRQroW;
+  case AArch64::LDRSBWroX:
+    Shift = 1;
+    return AArch64::LDRSBWroW;
+  case AArch64::LDRSBXroX:
+    Shift = 1;
+    return AArch64::LDRSBXroW;
+  case AArch64::LDRSHWroX:
+    Shift = 1;
+    return AArch64::LDRSHWroW;
+  case AArch64::LDRSHXroX:
+    Shift = 1;
+    return AArch64::LDRSHXroW;
+  case AArch64::LDRSWroX:
+    Shift = 2;
+    return AArch64::LDRSWroW;
+  case AArch64::LDRSroX:
+    Shift = 2;
+    return AArch64::LDRSroW;
+  case AArch64::LDRWroX:
+    Shift = 2;
+    return AArch64::LDRWroW;
+  case AArch64::LDRXroX:
+    Shift = 3;
+    return AArch64::LDRXroW;
+  case AArch64::STRBBroX:
+    return AArch64::STRBBroW;
+  case AArch64::STRBroX:
+    return AArch64::STRBroW;
+  case AArch64::STRDroX:
+    Shift = 3;
+    return AArch64::STRDroW;
+  case AArch64::STRHHroX:
+    Shift = 1;
+    return AArch64::STRHHroW;
+  case AArch64::STRHroX:
+    Shift = 1;
+    return AArch64::STRHroW;
+  case AArch64::STRQroX:
+    Shift = 4;
+    return AArch64::STRQroW;
+  case AArch64::STRSroX:
+    Shift = 2;
+    return AArch64::STRSroW;
+  case AArch64::STRWroX:
+    Shift = 2;
+    return AArch64::STRWroW;
+  case AArch64::STRXroX:
+    Shift = 3;
+    return AArch64::STRXroW;
+  }
+  return AArch64::INSTRUCTION_LIST_END;
+}
+
+static unsigned convertRoWToRoW(unsigned Op, unsigned &Shift) {
+  Shift = 0;
+  switch (Op) {
+  case AArch64::LDRBBroW:
+    return AArch64::LDRBBroW;
+  case AArch64::LDRBroW:
+    return AArch64::LDRBroW;
+  case AArch64::LDRDroW:
+    Shift = 3;
+    return AArch64::LDRDroW;
+  case AArch64::LDRHHroW:
+    Shift = 1;
+    return AArch64::LDRHHroW;
+  case AArch64::LDRHroW:
+    Shift = 1;
+    return AArch64::LDRHroW;
+  case AArch64::LDRQroW:
+    Shift = 4;
+    return AArch64::LDRQroW;
+  case AArch64::LDRSBWroW:
+    Shift = 1;
+    return AArch64::LDRSBWroW;
+  case AArch64::LDRSBXroW:
+    Shift = 1;
+    return AArch64::LDRSBXroW;
+  case AArch64::LDRSHWroW:
+    Shift = 1;
+    return AArch64::LDRSHWroW;
+  case AArch64::LDRSHXroW:
+    Shift = 1;
+    return AArch64::LDRSHXroW;
+  case AArch64::LDRSWroW:
+    Shift = 2;
+    return AArch64::LDRSWroW;
+  case AArch64::LDRSroW:
+    Shift = 2;
+    return AArch64::LDRSroW;
+  case AArch64::LDRWroW:
+    Shift = 2;
+    return AArch64::LDRWroW;
+  case AArch64::LDRXroW:
+    Shift = 3;
+    return AArch64::LDRXroW;
+  case AArch64::STRBBroW:
+    return AArch64::STRBBroW;
+  case AArch64::STRBroW:
+    return AArch64::STRBroW;
+  case AArch64::STRDroW:
+    Shift = 3;
+    return AArch64::STRDroW;
+  case AArch64::STRHHroW:
+    Shift = 1;
+    return AArch64::STRHHroW;
+  case AArch64::STRHroW:
+    Shift = 1;
+    return AArch64::STRHroW;
+  case AArch64::STRQroW:
+    Shift = 4;
+    return AArch64::STRQroW;
+  case AArch64::STRSroW:
+    Shift = 2;
+    return AArch64::STRSroW;
+  case AArch64::STRWroW:
+    Shift = 2;
+    return AArch64::STRWroW;
+  case AArch64::STRXroW:
+    Shift = 3;
+    return AArch64::STRXroW;
+  }
+  return AArch64::INSTRUCTION_LIST_END;
+}
+
+static unsigned convertUiToRoW(unsigned Op) {
+  switch (Op) {
+  case AArch64::LDRBBui:
+    return AArch64::LDRBBroW;
+  case AArch64::LDRBui:
+    return AArch64::LDRBroW;
+  case AArch64::LDRDui:
+    return AArch64::LDRDroW;
+  case AArch64::LDRHHui:
+    return AArch64::LDRHHroW;
+  case AArch64::LDRHui:
+    return AArch64::LDRHroW;
+  case AArch64::LDRQui:
+    return AArch64::LDRQroW;
+  case AArch64::LDRSBWui:
+    return AArch64::LDRSBWroW;
+  case AArch64::LDRSBXui:
+    return AArch64::LDRSBXroW;
+  case AArch64::LDRSHWui:
+    return AArch64::LDRSHWroW;
+  case AArch64::LDRSHXui:
+    return AArch64::LDRSHXroW;
+  case AArch64::LDRSWui:
+    return AArch64::LDRSWroW;
+  case AArch64::LDRSui:
+    return AArch64::LDRSroW;
+  case AArch64::LDRWui:
+    return AArch64::LDRWroW;
+  case AArch64::LDRXui:
+    return AArch64::LDRXroW;
+  case AArch64::STRBBui:
+    return AArch64::STRBBroW;
+  case AArch64::STRBui:
+    return AArch64::STRBroW;
+  case AArch64::STRDui:
+    return AArch64::STRDroW;
+  case AArch64::STRHHui:
+    return AArch64::STRHHroW;
+  case AArch64::STRHui:
+    return AArch64::STRHroW;
+  case AArch64::STRQui:
+    return AArch64::STRQroW;
+  case AArch64::STRSui:
+    return AArch64::STRSroW;
+  case AArch64::STRWui:
+    return AArch64::STRWroW;
+  case AArch64::STRXui:
+    return AArch64::STRXroW;
+  }
+  return AArch64::INSTRUCTION_LIST_END;
+}
+
+static unsigned convertPreToRoW(unsigned Op) {
+  switch (Op) {
+  case AArch64::LDRBBpre:
+    return AArch64::LDRBBroW;
+  case AArch64::LDRBpre:
+    return AArch64::LDRBroW;
+  case AArch64::LDRDpre:
+    return AArch64::LDRDroW;
+  case AArch64::LDRHHpre:
+    return AArch64::LDRHHroW;
+  case AArch64::LDRHpre:
+    return AArch64::LDRHroW;
+  case AArch64::LDRQpre:
+    return AArch64::LDRQroW;
+  case AArch64::LDRSBWpre:
+    return AArch64::LDRSBWroW;
+  case AArch64::LDRSBXpre:
+    return AArch64::LDRSBXroW;
+  case AArch64::LDRSHWpre:
+    return AArch64::LDRSHWroW;
+  case AArch64::LDRSHXpre:
+    return AArch64::LDRSHXroW;
+  case AArch64::LDRSWpre:
+    return AArch64::LDRSWroW;
+  case AArch64::LDRSpre:
+    return AArch64::LDRSroW;
+  case AArch64::LDRWpre:
+    return AArch64::LDRWroW;
+  case AArch64::LDRXpre:
+    return AArch64::LDRXroW;
+  case AArch64::STRBBpre:
+    return AArch64::STRBBroW;
+  case AArch64::STRBpre:
+    return AArch64::STRBroW;
+  case AArch64::STRDpre:
+    return AArch64::STRDroW;
+  case AArch64::STRHHpre:
+    return AArch64::STRHHroW;
+  case AArch64::STRHpre:
+    return AArch64::STRHroW;
+  case AArch64::STRQpre:
+    return AArch64::STRQroW;
+  case AArch64::STRSpre:
+    return AArch64::STRSroW;
+  case AArch64::STRWpre:
+    return AArch64::STRWroW;
+  case AArch64::STRXpre:
+    return AArch64::STRXroW;
+  }
+  return AArch64::INSTRUCTION_LIST_END;
+}
+
+static unsigned convertPostToRoW(unsigned Op) {
+  switch (Op) {
+  case AArch64::LDRBBpost:
+    return AArch64::LDRBBroW;
+  case AArch64::LDRBpost:
+    return AArch64::LDRBroW;
+  case AArch64::LDRDpost:
+    return AArch64::LDRDroW;
+  case AArch64::LDRHHpost:
+    return AArch64::LDRHHroW;
+  case AArch64::LDRHpost:
+    return AArch64::LDRHroW;
+  case AArch64::LDRQpost:
+    return AArch64::LDRQroW;
+  case AArch64::LDRSBWpost:
+    return AArch64::LDRSBWroW;
+  case AArch64::LDRSBXpost:
+    return AArch64::LDRSBXroW;
+  case AArch64::LDRSHWpost:
+    return AArch64::LDRSHWroW;
+  case AArch64::LDRSHXpost:
+    return AArch64::LDRSHXroW;
+  case AArch64::LDRSWpost:
+    return AArch64::LDRSWroW;
+  case AArch64::LDRSpost:
+    return AArch64::LDRSroW;
+  case AArch64::LDRWpost:
+    return AArch64::LDRWroW;
+  case AArch64::LDRXpost:
+    return AArch64::LDRXroW;
+  case AArch64::STRBBpost:
+    return AArch64::STRBBroW;
+  case AArch64::STRBpost:
+    return AArch64::STRBroW;
+  case AArch64::STRDpost:
+    return AArch64::STRDroW;
+  case AArch64::STRHHpost:
+    return AArch64::STRHHroW;
+  case AArch64::STRHpost:
+    return AArch64::STRHroW;
+  case AArch64::STRQpost:
+    return AArch64::STRQroW;
+  case AArch64::STRSpost:
+    return AArch64::STRSroW;
+  case AArch64::STRWpost:
+    return AArch64::STRWroW;
+  case AArch64::STRXpost:
+    return AArch64::STRXroW;
+  }
+  return AArch64::INSTRUCTION_LIST_END;
+}
+
+static bool canConvertToRoW(unsigned Op) {
+  unsigned Shift;
+  return convertUiToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
+    convertPreToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
+    convertPostToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
+    convertRoXToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END ||
+    convertRoWToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END;
 }
