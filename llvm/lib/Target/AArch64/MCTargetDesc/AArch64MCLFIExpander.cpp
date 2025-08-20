@@ -36,15 +36,54 @@ bool AArch64::AArch64MCLFIExpander::isValidScratchRegister(MCRegister Reg) const
   return Reg != AArch64::SP;
 }
 
+MCRegister AArch64::AArch64MCLFIExpander::getScratch() {
+  if (numScratchRegs() == 0) {
+    return LFIScratchReg;
+  }
+  return getScratchReg(0);
+}
+
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rs,
+    int64_t Imm, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCInst Inst;
+  Inst.setOpcode(Op);
+  Inst.addOperand(MCOperand::createReg(Rd));
+  Inst.addOperand(MCOperand::createReg(Rs));
+  Inst.addOperand(MCOperand::createImm(Imm));
+  Out.emitInstruction(Inst, STI);
+}
+
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1,
+    MCRegister Rt2, int64_t Imm, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCInst Inst;
+  Inst.setOpcode(Op);
+  Inst.addOperand(MCOperand::createReg(Rd));
+  Inst.addOperand(MCOperand::createReg(Rt1));
+  Inst.addOperand(MCOperand::createReg(Rt2));
+  Inst.addOperand(MCOperand::createImm(Imm));
+  Out.emitInstruction(Inst, STI);
+}
+
+static void emit(unsigned int Op, MCRegister Reg, MCStreamer &Out,
+    const MCSubtargetInfo &STI) {
+  MCInst Inst;
+  Inst.setOpcode(Op);
+  Inst.addOperand(MCOperand::createReg(Reg));
+  Out.emitInstruction(Inst, STI);
+}
+
+static void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  emit(AArch64::ORRXrs, Dest, AArch64::XZR, Src, 0, Out, STI);
+}
+
 static void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,
                         const MCSubtargetInfo &STI) {
-  MCInst Add;
-  Add.setOpcode(AArch64::ADDXrx);
-  Add.addOperand(MCOperand::createReg(Dest));
-  Add.addOperand(MCOperand::createReg(LFIBaseReg));
-  Add.addOperand(MCOperand::createReg(getWRegFromXReg(Src)));
-  Add.addOperand(MCOperand::createImm(AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)));
-  Out.emitInstruction(Add, STI);;
+  emit(AArch64::ADDXrx,
+      Dest,
+      LFIBaseReg,
+      getWRegFromXReg(Src),
+      AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0),
+      Out, STI);
 }
 
 static void emitBranch(unsigned int Opcode, MCRegister Target, MCStreamer &Out,
@@ -111,7 +150,7 @@ void AArch64::AArch64MCLFIExpander::expandStackModification(
   }
 
   MCInst ModInst;
-  MCRegister Scratch = LFIScratchReg;
+  MCRegister Scratch = getScratch();
   assert(Inst.getOperand(0).isReg() && Inst.getOperand(0).getReg() == AArch64::SP);
   ModInst.setOpcode(Inst.getOpcode());
   ModInst.addOperand(MCOperand::createReg(Scratch));
@@ -127,47 +166,9 @@ void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
                                                     const MCSubtargetInfo &STI) {
 }
 
-static void emit(unsigned int Op, MCRegister Rd, MCRegister Rs,
-    int64_t Imm, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  MCInst Inst;
-  Inst.setOpcode(Op);
-  Inst.addOperand(MCOperand::createReg(Rd));
-  Inst.addOperand(MCOperand::createReg(Rs));
-  Inst.addOperand(MCOperand::createImm(Imm));
-  Out.emitInstruction(Inst, STI);
-}
-
-static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1,
-    MCRegister Rt2, int64_t Imm, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  MCInst Inst;
-  Inst.setOpcode(Op);
-  Inst.addOperand(MCOperand::createReg(Rd));
-  Inst.addOperand(MCOperand::createReg(Rt1));
-  Inst.addOperand(MCOperand::createReg(Rt2));
-  Inst.addOperand(MCOperand::createImm(Imm));
-  Out.emitInstruction(Inst, STI);
-}
-
-static void emit(unsigned int Op, MCRegister Reg, MCStreamer &Out,
-    const MCSubtargetInfo &STI) {
-  MCInst Inst;
-  Inst.setOpcode(Op);
-  Inst.addOperand(MCOperand::createReg(Reg));
-  Out.emitInstruction(Inst, STI);
-}
-
-static void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  emit(AArch64::ORRXrs, Dest, AArch64::XZR, Src, 0, Out, STI);
-}
-
-enum LFICallType {
-  LFISyscall,
-  LFITLSRead,
-  LFITLSWrite,
-};
-
-static void emitLFICall(LFICallType CallType, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  emitMov(LFIScratchReg, AArch64::LR, Out, STI);
+void AArch64::AArch64MCLFIExpander::emitLFICall(LFICallType CallType, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCRegister Scratch = getScratch();
+  emitMov(Scratch, AArch64::LR, Out, STI);
   unsigned Offset;
   switch (CallType) {
     case LFISyscall: Offset = 0; break;
@@ -176,7 +177,7 @@ static void emitLFICall(LFICallType CallType, MCStreamer &Out, const MCSubtarget
   }
   emit(AArch64::LDRXui, AArch64::LR, LFIBaseReg, Offset, Out, STI);
   emit(AArch64::BLR, AArch64::LR, Out, STI);
-  emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
+  emitAddMask(AArch64::LR, Scratch, Out, STI);
 }
 
 void AArch64::AArch64MCLFIExpander::expandSyscall(const MCInst &Inst, MCStreamer &Out,
