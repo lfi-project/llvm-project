@@ -64,7 +64,7 @@ private:
   void expandStackModification(const MCInst &Inst, MCStreamer &Out,
                                const MCSubtargetInfo &STI);
 
-  void expandSpecialModification(const MCInst &Inst, MCStreamer &Out,
+  void expandLRModification(const MCInst &Inst, MCStreamer &Out,
                                  const MCSubtargetInfo &STI);
 
   void expandPrefetch(const MCInst &Inst, MCStreamer &Out,

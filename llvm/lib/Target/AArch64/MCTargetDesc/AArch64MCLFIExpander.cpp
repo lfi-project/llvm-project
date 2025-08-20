@@ -136,16 +136,32 @@ bool AArch64::AArch64MCLFIExpander::mayModifyLR(const MCInst &Inst) {
   return mayModifyRegister(Inst, AArch64::LR);
 }
 
-// Rewrites for modifications of "special" registers: x28, x27, lr.
-void AArch64::AArch64MCLFIExpander::expandSpecialModification(
+void AArch64::AArch64MCLFIExpander::expandLRModification(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCRegister Scratch = getScratch();
+  MCInst New;
+  New.setLoc(Inst.getLoc());
+  New.setOpcode(Inst.getOpcode());
+  for (unsigned I = 0; I < Inst.getNumOperands(); ++I) {
+    const MCOperand &Op = Inst.getOperand(I);
+    if (Op.isReg() && Op.getReg() == AArch64::LR) {
+      New.addOperand(MCOperand::createReg(Scratch));
+    } else {
+      New.addOperand(Op);
+    }
+  }
+  if (mayLoad(New) || mayStore(New))
+    expandLoadStore(New, Out, STI);
+  else
+    Out.emitInstruction(New, STI);
+  emitAddMask(AArch64::LR, Scratch, Out, STI);
 }
 
 void AArch64::AArch64MCLFIExpander::expandStackModification(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
   if (mayLoad(Inst) || mayStore(Inst)) {
-    if (mayModifyReserved(Inst) || mayModifyLR(Inst))
-      return expandSpecialModification(Inst, Out, STI);
+    if (mayModifyLR(Inst))
+      return expandLRModification(Inst, Out, STI);
     return Out.emitInstruction(Inst, STI);
   }
 
@@ -153,6 +169,7 @@ void AArch64::AArch64MCLFIExpander::expandStackModification(
   MCRegister Scratch = getScratch();
   assert(Inst.getOperand(0).isReg() && Inst.getOperand(0).getReg() == AArch64::SP);
   ModInst.setOpcode(Inst.getOpcode());
+  ModInst.setLoc(Inst.getLoc());
   ModInst.addOperand(MCOperand::createReg(Scratch));
   for (unsigned I = 1, E = Inst.getNumOperands(); I != E; ++I) {
     ModInst.addOperand(Inst.getOperand(I));
@@ -164,6 +181,9 @@ void AArch64::AArch64MCLFIExpander::expandStackModification(
 void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
                                                     MCStreamer &Out,
                                                     const MCSubtargetInfo &STI) {
+  Out.getContext().reportWarning(
+      Inst.getLoc(), "TODO: expandLoadStore");
+  Out.emitInstruction(Inst, STI);
 }
 
 void AArch64::AArch64MCLFIExpander::emitLFICall(LFICallType CallType, MCStreamer &Out, const MCSubtargetInfo &STI) {
@@ -252,11 +272,17 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer 
   if (isBranch(Inst))
     return Out.emitInstruction(Inst, STI);
 
+  // Bail out with an error. In the future, we could consider automatically
+  // rewriting uses of reserved LFI registers.
+  if (mayModifyReserved(Inst))
+    return Out.getContext().reportError(
+        Inst.getLoc(), "illegal modification of reserved LFI register");
+
   if (mayModifyStack(Inst))
     return expandStackModification(Inst, Out, STI);
 
-  if (mayModifyReserved(Inst) || mayModifyLR(Inst))
-    return expandSpecialModification(Inst, Out, STI);
+  if (mayModifyLR(Inst))
+    return expandLRModification(Inst, Out, STI);
 
   if (mayLoad(Inst) || mayStore(Inst))
     return expandLoadStore(Inst, Out, STI);
