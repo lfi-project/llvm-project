@@ -22,6 +22,7 @@
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
@@ -36,6 +37,17 @@ static cl::opt<bool> AArch64LFIErrorReserved("aarch64-lfi-error-reserved",
 static MCRegister LFIAddrReg = AArch64::X28;
 static MCRegister LFIBaseReg = AArch64::X27;
 static MCRegister LFIScratchReg = AArch64::X26;
+
+static bool featureStores(const MCSubtargetInfo &STI) {
+  const auto Stores = FeatureBitset({AArch64::FeatureLFIStores});
+  return (STI.getFeatureBits() & Stores) == Stores;
+}
+
+static bool featureJumps(const MCSubtargetInfo &STI) {
+  const auto Jumps = FeatureBitset({AArch64::FeatureLFIJumps});
+  return (STI.getFeatureBits() & Jumps) == Jumps;
+}
+
 
 bool AArch64::AArch64MCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
   return Reg != AArch64::SP;
@@ -361,6 +373,11 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(const MCInst &Inst, MemIn
 void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
                                                     MCStreamer &Out,
                                                     const MCSubtargetInfo &STI) {
+  if (featureJumps(STI))
+    return Out.emitInstruction(Inst, STI);
+  if (featureStores(STI) && !mayStore(Inst))
+    return Out.emitInstruction(Inst, STI);
+
   auto MII = getLoadInfo(Inst);
   if (!MII.has_value()) {
     MII = getStoreInfo(Inst);
