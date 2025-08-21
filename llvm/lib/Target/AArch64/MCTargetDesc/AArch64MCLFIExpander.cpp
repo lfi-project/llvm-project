@@ -22,11 +22,16 @@
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "lfi"
+
+static cl::opt<bool> AArch64LFIErrorReserved("aarch64-lfi-error-reserved",
+    cl::Hidden, cl::init(false),
+    cl::desc("Produce errors for uses of LFI reserved registers"));
 
 static MCRegister LFIAddrReg = AArch64::X28;
 static MCRegister LFIBaseReg = AArch64::X27;
@@ -167,20 +172,26 @@ bool AArch64::AArch64MCLFIExpander::mayModifyLR(const MCInst &Inst) {
   return mayModifyRegister(Inst, AArch64::LR);
 }
 
-void AArch64::AArch64MCLFIExpander::expandLRModification(
-    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  MCRegister Scratch = getScratch();
+static MCInst replaceReg(const MCInst &Inst,
+                         MCRegister Dest, MCRegister Src) {
   MCInst New;
-  New.setLoc(Inst.getLoc());
   New.setOpcode(Inst.getOpcode());
+  New.setLoc(Inst.getLoc());
   for (unsigned I = 0; I < Inst.getNumOperands(); ++I) {
     const MCOperand &Op = Inst.getOperand(I);
-    if (Op.isReg() && Op.getReg() == AArch64::LR) {
-      New.addOperand(MCOperand::createReg(Scratch));
+    if (Op.isReg() && Op.getReg() == Src) {
+      New.addOperand(MCOperand::createReg(Dest));
     } else {
       New.addOperand(Op);
     }
   }
+  return New;
+}
+
+void AArch64::AArch64MCLFIExpander::expandLRModification(
+    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  MCRegister Scratch = getScratch();
+  MCInst New = replaceReg(Inst, Scratch, AArch64::LR);
   if (mayLoad(New) || mayStore(New))
     expandLoadStore(New, Out, STI);
   else
@@ -459,9 +470,20 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer 
 
   // Bail out with an error. In the future, we could consider automatically
   // rewriting uses of reserved LFI registers.
-  if (mayModifyReserved(Inst))
-    return Out.getContext().reportError(
-        Inst.getLoc(), "illegal modification of reserved LFI register");
+  if (mayModifyReserved(Inst)) {
+    if (AArch64LFIErrorReserved)
+      return Out.getContext().reportError(
+          Inst.getLoc(), "illegal modification of reserved LFI register");
+    Out.getContext().reportWarning(
+        Inst.getLoc(), "deleting modification of reserved LFI register");
+    MCInst New = replaceReg(Inst, AArch64::XZR, LFIBaseReg);
+    if (mayModifyReserved(New)) {
+      MCRegister Scratch = getScratch();
+      New = replaceReg(New, Scratch, LFIAddrReg);
+    }
+    assert(!mayModifyReserved(New));
+    return doExpandInst(New, Out, STI);
+  }
 
   if (mayModifyStack(Inst))
     return expandStackModification(Inst, Out, STI);
