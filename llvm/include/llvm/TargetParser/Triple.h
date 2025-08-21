@@ -149,8 +149,6 @@ public:
     AArch64SubArch_arm64ec,
 
     AArch64SubArch_lfi,
-    AArch64SubArch_lfi_stores,
-    AArch64SubArch_lfi_jumps,
 
     KalimbaSubArch_v3,
     KalimbaSubArch_v4,
@@ -684,30 +682,10 @@ public:
     return isAArch64LFI();
   }
 
-  /// Checks if we're targeting any subarch of AArch64 LFI.
+  /// Checks if we're targeting the AArch64 LFI subarch.
   bool isAArch64LFI() const {
     return getArch() == Triple::aarch64 &&
-           (getSubArch() == Triple::AArch64SubArch_lfi ||
-            getSubArch() == Triple::AArch64SubArch_lfi_stores ||
-            getSubArch() == Triple::AArch64SubArch_lfi_jumps);
-  }
-
-  /// Checks if we're targeting AArch64 LFI.
-  bool isAArch64LFIFull() const {
-    return getArch() == Triple::aarch64 &&
            getSubArch() == Triple::AArch64SubArch_lfi;
-  }
-
-  /// Checks if we're targeting AArch64 LFI stores-only.
-  bool isAArch64LFIStores() const {
-    return getArch() == Triple::aarch64 &&
-           getSubArch() == Triple::AArch64SubArch_lfi_stores;
-  }
-
-  /// Checks if we're targeting AArch64 LFI jumps-only.
-  bool isAArch64LFIJumps() const {
-    return getArch() == Triple::aarch64 &&
-           getSubArch() == Triple::AArch64SubArch_lfi_jumps;
   }
 
   bool isWindowsCoreCLREnvironment() const {
