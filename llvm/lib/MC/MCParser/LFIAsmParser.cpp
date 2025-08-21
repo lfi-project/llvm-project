@@ -37,6 +37,8 @@ class LFIAsmParser : public MCAsmParserExtension {
     MCAsmParserExtension::Initialize(Parser);
     addDirectiveHandler<&LFIAsmParser::ParseScratch>(".scratch");
     addDirectiveHandler<&LFIAsmParser::ParseUnscratch>(".scratch_clear");
+    addDirectiveHandler<&LFIAsmParser::ParseExpandDisable>(".no_expand");
+    addDirectiveHandler<&LFIAsmParser::ParseExpandEnable>(".expand");
   }
 
   /// ::= {.scratch} reg
@@ -63,7 +65,7 @@ class LFIAsmParser : public MCAsmParserExtension {
     return false;
   }
 
-  /// ::= {.unscratch}
+  /// ::= {.scratch_clear}
   bool ParseUnscratch(StringRef Directive, SMLoc Loc) {
     getParser().checkForValidSection();
     if (getLexer().isNot(AsmToken::EndOfStatement))
@@ -71,6 +73,30 @@ class LFIAsmParser : public MCAsmParserExtension {
     Lex();
 
     Expander->clearScratchRegs();
+
+    return false;
+  }
+
+  /// ::= {.no_expand}
+  bool ParseExpandDisable(StringRef Directive, SMLoc Loc) {
+    getParser().checkForValidSection();
+    if (getLexer().isNot(AsmToken::EndOfStatement))
+      return TokError("unexpected token in '.no_expand' directive");
+    Lex();
+
+    Expander->disable();
+
+    return false;
+  }
+
+  /// ::= {.expand}
+  bool ParseExpandEnable(StringRef Directive, SMLoc Loc) {
+    getParser().checkForValidSection();
+    if (getLexer().isNot(AsmToken::EndOfStatement))
+      return TokError("unexpected token in '.expand' directive");
+    Lex();
+
+    Expander->enable();
 
     return false;
   }
