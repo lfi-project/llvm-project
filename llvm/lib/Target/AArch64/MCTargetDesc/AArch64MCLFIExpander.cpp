@@ -250,7 +250,7 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(const MCInst &Inst, Mem
   emitAddMask(LFIAddrReg, Inst.getOperand(MII.BaseRegIdx).getReg(), Out, STI);
 
   if (MII.IsPrePost) {
-    assert(OffsetIdx != -1 && "Pre/Post must have valid OffsetIdx");
+    assert(MII.OffsetIdx != -1 && "Pre/Post must have valid OffsetIdx");
 
     emitSafeLoadStoreDemoted(Inst, MII.BaseRegIdx, Out, STI);
     MCRegister Base = Inst.getOperand(MII.BaseRegIdx).getReg();
@@ -354,8 +354,7 @@ void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
   if (!MII.has_value()) {
     MII = getStoreInfo(Inst);
     if (!MII.has_value())
-      return Out.getContext().reportError(
-          Inst.getLoc(), "this load/store is not supported by LFI");
+      return Out.emitInstruction(Inst, STI);
   }
 
   // Stack accesses without a register offset don't need rewriting.
@@ -427,12 +426,12 @@ static bool isSyscall(const MCInst &Inst) {
 
 static bool isTLSRead(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::MRS &&
-    Inst.getOperand(1).getReg() == AArch64SysReg::TPIDR_EL0;
+    Inst.getOperand(1).getImm() == AArch64SysReg::TPIDR_EL0;
 }
 
 static bool isTLSWrite(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::MSR &&
-    Inst.getOperand(0).getReg() == AArch64SysReg::TPIDR_EL0;
+    Inst.getOperand(0).getImm() == AArch64SysReg::TPIDR_EL0;
 }
 
 void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
