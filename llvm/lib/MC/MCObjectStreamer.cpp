@@ -343,7 +343,7 @@ void MCObjectStreamer::emitInstruction(const MCInst &Inst,
 void MCObjectStreamer::emitInstructionImpl(const MCInst &Inst,
                                            const MCSubtargetInfo &STI) {
   MCSection *Sec = getCurrentSectionOnly();
-  if (LFIExpander && LFIExpander->expandInst(Inst, *this, STI))
+  if (LFIExpander && LFIExpander->isEnabled() && LFIExpander->expandInst(Inst, *this, STI))
     return;
 
   MCStreamer::emitInstruction(Inst, STI);

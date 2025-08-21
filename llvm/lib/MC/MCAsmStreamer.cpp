@@ -2428,7 +2428,7 @@ void MCAsmStreamer::AddEncodingComment(const MCInst &Inst,
 
 void MCAsmStreamer::emitInstruction(const MCInst &Inst,
                                     const MCSubtargetInfo &STI) {
-  if (LFIExpander && LFIExpander->expandInst(Inst, *this, STI))
+  if (LFIExpander && LFIExpander->isEnabled() && LFIExpander->expandInst(Inst, *this, STI))
     return;
 
   if (MAI->isAIX() && CurFrag)

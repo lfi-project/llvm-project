@@ -47,6 +47,18 @@ void MCLFIExpander::clearScratchRegs() {
   ScratchRegs.clear();
 }
 
+void MCLFIExpander::disable() {
+  Enabled = false;
+}
+
+void MCLFIExpander::enable() {
+  Enabled = true;
+}
+
+bool MCLFIExpander::isEnabled() {
+  return Enabled;
+}
+
 MCRegister MCLFIExpander::getScratchReg(int index) {
   assert(index >= 0 && static_cast<unsigned>(index) < numScratchRegs());
   return ScratchRegs[numScratchRegs()  - index - 1];

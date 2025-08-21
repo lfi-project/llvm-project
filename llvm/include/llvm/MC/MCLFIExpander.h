@@ -31,6 +31,7 @@ class MCLFIExpander {
 private:
   SmallVector<MCRegister, 2> ScratchRegs;
   MCContext &Ctx;
+  bool Enabled;
 
 protected:
   std::unique_ptr<MCInstrInfo> InstInfo;
@@ -49,6 +50,10 @@ public:
 
   bool addScratchReg(MCRegister Reg);
   void clearScratchRegs();
+
+  void disable();
+  void enable();
+  bool isEnabled();
 
   bool isPseudo(const MCInst &Inst) const;
 
