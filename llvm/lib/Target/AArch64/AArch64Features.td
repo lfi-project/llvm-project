@@ -1001,3 +1001,6 @@ def FeatureLFIStores : SubtargetFeature<"lfi-stores", "LFIStores", "true",
 
 def FeatureLFIJumps : SubtargetFeature<"lfi-jumps", "LFIJumps", "true",
                                        "Isolate only jump instructions">;
+
+def FeatureLFITLSReg : SubtargetFeature<"lfi-tls-reg", "LFITLSReg", "true",
+                                        "Reserve a register for thread-local LFI data">;

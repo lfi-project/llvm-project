@@ -37,17 +37,11 @@ static cl::opt<bool> AArch64LFIErrorReserved("aarch64-lfi-error-reserved",
 static MCRegister LFIAddrReg = AArch64::X28;
 static MCRegister LFIBaseReg = AArch64::X27;
 static MCRegister LFIScratchReg = AArch64::X26;
+static MCRegister LFITLSReg = AArch64::X25;
 
-static bool featureStores(const MCSubtargetInfo &STI) {
-  const auto Stores = FeatureBitset({AArch64::FeatureLFIStores});
-  return (STI.getFeatureBits() & Stores) == Stores;
+static bool hasFeature(const FeatureBitset Feature, const MCSubtargetInfo &STI) {
+  return (STI.getFeatureBits() & Feature) == Feature;
 }
-
-static bool featureJumps(const MCSubtargetInfo &STI) {
-  const auto Jumps = FeatureBitset({AArch64::FeatureLFIJumps});
-  return (STI.getFeatureBits() & Jumps) == Jumps;
-}
-
 
 bool AArch64::AArch64MCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
   return Reg != AArch64::SP;
@@ -373,9 +367,9 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(const MCInst &Inst, MemIn
 void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
                                                     MCStreamer &Out,
                                                     const MCSubtargetInfo &STI) {
-  if (featureJumps(STI))
+  if (hasFeature(FeatureBitset({AArch64::FeatureLFIJumps}), STI))
     return Out.emitInstruction(Inst, STI);
-  if (featureStores(STI) && !mayStore(Inst))
+  if (hasFeature(FeatureBitset({AArch64::FeatureLFIStores}), STI) && !mayStore(Inst))
     return Out.emitInstruction(Inst, STI);
 
   auto MII = getLoadInfo(Inst);
@@ -427,6 +421,10 @@ static void emitSwap(MCRegister Reg1, MCRegister Reg2, MCStreamer &Out, const MC
 void AArch64::AArch64MCLFIExpander::expandTLSRead(const MCInst &Inst, MCStreamer &Out,
                    const MCSubtargetInfo &STI) {
   MCRegister Reg = Inst.getOperand(0).getReg();
+
+  if (hasFeature(FeatureBitset({AArch64::FeatureLFITLSReg}), STI))
+    return emit(AArch64::LDRXui, Reg, LFITLSReg, 0, Out, STI);
+
   if (Reg == AArch64::X0) {
     emitLFICall(LFITLSRead, Out, STI);
   } else {
