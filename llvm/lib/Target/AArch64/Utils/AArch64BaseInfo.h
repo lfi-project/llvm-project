@@ -1057,6 +1057,16 @@ static inline std::optional<MemInstInfo> getStoreInfo(const MCInst &Inst) {
   return MemInstInfo { DestRegIdx, BaseRegIdx, OffsetIdx, IsPrePost, IsPair };
 }
 
+struct LdStNInstrDesc {
+  unsigned Opcode;
+  const char *Mnemonic;
+  const char *Layout;
+  int ListOperand;
+  bool HasLane;
+  int NaturalOffset;
+};
+
+const LdStNInstrDesc *getLdStNInstrDesc(unsigned Opcode);
 
 namespace AArch64CC {
 

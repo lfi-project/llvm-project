@@ -37,6 +37,7 @@
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/CodeGen/StackMaps.h"
+#include "llvm/CodeGen/TargetOpcodes.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DebugInfoMetadata.h"
@@ -118,6 +119,7 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   unsigned NumBytes = 0;
   const MCInstrDesc &Desc = MI.getDesc();
 
+  const auto &STI = MF->getSubtarget<AArch64Subtarget>();
   if (!MI.isBundle() && isTailCallReturnInst(MI)) {
     NumBytes = Desc.getSize() ? Desc.getSize() : 4;
 
@@ -125,7 +127,6 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
     if (!MFI->shouldSignReturnAddress(MF))
       return NumBytes;
 
-    const auto &STI = MF->getSubtarget<AArch64Subtarget>();
     auto Method = STI.getAuthenticatedLRCheckMethod(*MF);
     NumBytes += AArch64PAuth::getCheckerSizeInBytes(Method);
     return NumBytes;
@@ -136,8 +137,10 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   // Specific cases handle instructions of variable sizes
   switch (Desc.getOpcode()) {
   default:
-    if (Desc.getSize())
-      return Desc.getSize();
+    if (Desc.getSize()) {
+      NumBytes = Desc.getSize();
+      break;
+    }
 
     // Anything not explicitly designated otherwise (i.e. pseudo-instructions
     // with fixed constant size but not specified in .td file) is a normal
@@ -185,6 +188,14 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   case TargetOpcode::BUNDLE:
     NumBytes = getInstBundleLength(MI);
     break;
+  }
+
+  if (STI.getTargetTriple().isAArch64LFI()) {
+    // Loads and stores are frequent and may be expanded to include an
+    // additional guard instruction, so we overestimate the size here to allow
+    // things like branch relaxation to be more accurate.
+    if (Desc.mayLoad() || Desc.mayStore())
+      NumBytes += 4;
   }
 
   return NumBytes;
