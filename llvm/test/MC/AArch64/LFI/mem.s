@@ -132,3 +132,17 @@ stp x0, x1, [x2, #-8]!
 // CHECK:      add x28, x27, w2, uxtw
 // CHECK-NEXT: stp x0, x1, [x28, #-8]
 // CHECK-NEXT: sub x2, x2, #8
+
+ld3 { v0.4s, v1.4s, v2.4s }, [x0], #48
+// CHECK:      add x28, x27, w0, uxtw
+// CHECK-NEXT: ld3 { v0.4s, v1.4s, v2.4s }, [x28]
+// CHECK-NEXT: add x0, x0, #48
+
+st2 { v1.8b, v2.8b }, [x14], #16
+// CHECK:      add x28, x27, w14, uxtw
+// CHECK-NEXT: st2 { v1.8b, v2.8b }, [x28]
+// CHECK-NEXT: add x14, x14, #16
+
+st2 { v1.8b, v2.8b }, [x14]
+// CHECK:      add x28, x27, w14, uxtw
+// CHECK-NEXT: st2 { v1.8b, v2.8b }, [x28]

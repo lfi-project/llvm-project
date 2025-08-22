@@ -277,18 +277,14 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(const MCInst &Inst, Mem
       // it is encoded as a post-index addressing with XZR register operand.
       // e.g., LD3Threev3d_POST can only have #48 as its operand and its offset
       // MachineOperand holds XZR, which is a *Register* kind, not Imm.
-
-      // TODO: handle this case: ld3 { v0.4s, v1.4s, v2.4s }, [x0], #48
-      // MCRegister OffReg = OffsetMO.getReg();
-      // if (OffReg == AArch64::XZR) {
-      //   const LdStNInstrDesc *Info = getLdStNInstrDesc(Inst.getOpcode());
-      //   assert(Info && Info->NaturalOffset >= 0);
-      //   return emit(AArch64::ADDXri, Base, Base, Info->NaturalOffset, 0, Out, STI);
-      // } else {
-      //   assert(OffReg != AArch64::WZR);
-      //   return emit(AArch64::ADDXrs, Base, Base, OffsetMO.getReg(), 0, Out, STI);
-      // }
-      return;
+      MCRegister OffReg = OffsetMO.getReg();
+      if (OffReg == AArch64::XZR) {
+        const LdStNInstrDesc *Info = getLdStNInstrDesc(Inst.getOpcode());
+        assert(Info && Info->NaturalOffset >= 0);
+        return emit(AArch64::ADDXri, Base, Base, Info->NaturalOffset, 0, Out, STI);
+      }
+      assert(OffReg != AArch64::WZR);
+      return emit(AArch64::ADDXrs, Base, Base, OffsetMO.getReg(), 0, Out, STI);
     } else {
       auto Offset = Inst.getOperand(MII.OffsetIdx).getImm() * getPrePostScale(Inst.getOpcode());
       if (Offset >= 0)
