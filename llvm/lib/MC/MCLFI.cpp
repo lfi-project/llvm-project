@@ -23,11 +23,6 @@ static const char NoteNamespace[] = "LFI";
 
 namespace llvm {
 
-cl::opt<bool> FlagEnableAutoSandboxing("nacl-enable-autosandboxing",
-                                cl::desc("Don't use the autosandboxing"
-                                         " assembler for the NaCl SFI."),
-                                cl::init(true));
-
 void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
                               const Triple &TheTriple) {
   assert(TheTriple.isLFI());
@@ -48,13 +43,11 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
 
   // Create the Target specific MCLFIExpander
   assert(TheTarget != nullptr);
-  if (FlagEnableAutoSandboxing) {
-    TheTarget->createMCLFIExpander(
-      Streamer,
-      std::unique_ptr<MCRegisterInfo>(
-          TheTarget->createMCRegInfo(TheTriple.getTriple())),
-      std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo()));
-  }
+  TheTarget->createMCLFIExpander(
+    Streamer,
+    std::unique_ptr<MCRegisterInfo>(
+        TheTarget->createMCRegInfo(TheTriple.getTriple())),
+    std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo()));
 
   // Emit an ELF Note section in its own COMDAT group which identifies LFI
   // object files.
