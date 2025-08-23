@@ -30,8 +30,8 @@ using namespace llvm;
 
 #define DEBUG_TYPE "lfi"
 
-static cl::opt<bool> AArch64LFIErrorReserved("aarch64-lfi-error-reserved",
-    cl::Hidden, cl::init(false),
+static cl::opt<bool> AArch64LFIErrorReserved(
+    "aarch64-lfi-error-reserved", cl::Hidden, cl::init(false),
     cl::desc("Produce errors for uses of LFI reserved registers"));
 
 static MCRegister LFIAddrReg = AArch64::X28;
@@ -39,11 +39,13 @@ static MCRegister LFIBaseReg = AArch64::X27;
 static MCRegister LFIScratchReg = AArch64::X26;
 static MCRegister LFITLSReg = AArch64::X25;
 
-static bool hasFeature(const FeatureBitset Feature, const MCSubtargetInfo &STI) {
+static bool hasFeature(const FeatureBitset Feature,
+                       const MCSubtargetInfo &STI) {
   return (STI.getFeatureBits() & Feature) == Feature;
 }
 
-bool AArch64::AArch64MCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
+bool AArch64::AArch64MCLFIExpander::isValidScratchRegister(
+    MCRegister Reg) const {
   return Reg != AArch64::SP;
 }
 
@@ -54,8 +56,8 @@ MCRegister AArch64::AArch64MCLFIExpander::getScratch() {
   return getScratchReg(0);
 }
 
-static void emit(unsigned int Op, MCRegister Rd, MCRegister Rs,
-    int64_t Imm, MCStreamer &Out, const MCSubtargetInfo &STI) {
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rs, int64_t Imm,
+                 MCStreamer &Out, const MCSubtargetInfo &STI) {
   MCInst Inst;
   Inst.setOpcode(Op);
   Inst.addOperand(MCOperand::createReg(Rd));
@@ -64,8 +66,8 @@ static void emit(unsigned int Op, MCRegister Rd, MCRegister Rs,
   Out.emitInstruction(Inst, STI);
 }
 
-static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1,
-    MCRegister Rt2, int64_t Imm, MCStreamer &Out, const MCSubtargetInfo &STI) {
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1, MCRegister Rt2,
+                 int64_t Imm, MCStreamer &Out, const MCSubtargetInfo &STI) {
   MCInst Inst;
   Inst.setOpcode(Op);
   Inst.addOperand(MCOperand::createReg(Rd));
@@ -75,9 +77,9 @@ static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1,
   Out.emitInstruction(Inst, STI);
 }
 
-static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1,
-    MCRegister Rt2, int64_t Imm1, int64_t Imm2,
-    MCStreamer &Out, const MCSubtargetInfo &STI) {
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1, MCRegister Rt2,
+                 int64_t Imm1, int64_t Imm2, MCStreamer &Out,
+                 const MCSubtargetInfo &STI) {
   MCInst Inst;
   Inst.setOpcode(Op);
   Inst.addOperand(MCOperand::createReg(Rd));
@@ -88,9 +90,8 @@ static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1,
   Out.emitInstruction(Inst, STI);
 }
 
-static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt,
-    int64_t Imm1, int64_t Imm2,
-    MCStreamer &Out, const MCSubtargetInfo &STI) {
+static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt, int64_t Imm1,
+                 int64_t Imm2, MCStreamer &Out, const MCSubtargetInfo &STI) {
   MCInst Inst;
   Inst.setOpcode(Op);
   Inst.addOperand(MCOperand::createReg(Rd));
@@ -101,30 +102,28 @@ static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt,
 }
 
 static void emit(unsigned int Op, MCRegister Reg, MCStreamer &Out,
-    const MCSubtargetInfo &STI) {
+                 const MCSubtargetInfo &STI) {
   MCInst Inst;
   Inst.setOpcode(Op);
   Inst.addOperand(MCOperand::createReg(Reg));
   Out.emitInstruction(Inst, STI);
 }
 
-static void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out, const MCSubtargetInfo &STI) {
+static void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out,
+                    const MCSubtargetInfo &STI) {
   emit(AArch64::ORRXrs, Dest, AArch64::XZR, Src, 0, Out, STI);
 }
 
 // Emit 'add Dest, LFIBaseReg, W(Src), uxtw'
 static void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,
                         const MCSubtargetInfo &STI) {
-  emit(AArch64::ADDXrx,
-      Dest,
-      LFIBaseReg,
-      getWRegFromXReg(Src),
-      AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0),
-      Out, STI);
+  emit(AArch64::ADDXrx, Dest, LFIBaseReg, getWRegFromXReg(Src),
+       AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0), Out, STI);
 }
 
 // Emit 'Op(ld/st) Dest, [LFIBaseReg, W(Target), uxtw]'
-static void emitMemMask(unsigned Op, MCRegister Dest, MCRegister Target, MCStreamer &Out, const MCSubtargetInfo &STI) {
+static void emitMemMask(unsigned Op, MCRegister Dest, MCRegister Target,
+                        MCStreamer &Out, const MCSubtargetInfo &STI) {
   emit(Op, Dest, LFIBaseReg, getWRegFromXReg(Target), 0, 0, Out, STI);
 }
 
@@ -136,11 +135,10 @@ static void emitBranch(unsigned int Opcode, MCRegister Target, MCStreamer &Out,
   Out.emitInstruction(Branch, STI);
 }
 
-void AArch64::AArch64MCLFIExpander::expandIndirectBranch(const MCInst &Inst,
-                                                         MCStreamer &Out,
-                                                         const MCSubtargetInfo &STI,
-                                                         bool IsCall) {
-  (void) IsCall;
+void AArch64::AArch64MCLFIExpander::expandIndirectBranch(
+    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI,
+    bool IsCall) {
+  (void)IsCall;
 
   assert(Inst.getOperand(0).isReg());
   MCRegister BranchReg = Inst.getOperand(0).getReg();
@@ -149,7 +147,8 @@ void AArch64::AArch64MCLFIExpander::expandIndirectBranch(const MCInst &Inst,
   emitBranch(Inst.getOpcode(), LFIAddrReg, Out, STI);
 }
 
-void AArch64::AArch64MCLFIExpander::expandCall(const MCInst &Inst, MCStreamer &Out,
+void AArch64::AArch64MCLFIExpander::expandCall(const MCInst &Inst,
+                                               MCStreamer &Out,
                                                const MCSubtargetInfo &STI) {
   if (Inst.getOperand(0).isReg())
     expandIndirectBranch(Inst, Out, STI, true);
@@ -157,7 +156,8 @@ void AArch64::AArch64MCLFIExpander::expandCall(const MCInst &Inst, MCStreamer &O
     Out.emitInstruction(Inst, STI);
 }
 
-void AArch64::AArch64MCLFIExpander::expandReturn(const MCInst &Inst, MCStreamer &Out,
+void AArch64::AArch64MCLFIExpander::expandReturn(const MCInst &Inst,
+                                                 MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
   assert(Inst.getOperand(0).isReg());
   if (Inst.getOperand(0).getReg() != AArch64::LR)
@@ -171,15 +171,15 @@ bool AArch64::AArch64MCLFIExpander::mayModifyStack(const MCInst &Inst) {
 }
 
 bool AArch64::AArch64MCLFIExpander::mayModifyReserved(const MCInst &Inst) {
-  return mayModifyRegister(Inst, LFIAddrReg) || mayModifyRegister(Inst, LFIBaseReg);
+  return mayModifyRegister(Inst, LFIAddrReg) ||
+         mayModifyRegister(Inst, LFIBaseReg);
 }
 
 bool AArch64::AArch64MCLFIExpander::mayModifyLR(const MCInst &Inst) {
   return mayModifyRegister(Inst, AArch64::LR);
 }
 
-static MCInst replaceReg(const MCInst &Inst,
-                         MCRegister Dest, MCRegister Src) {
+static MCInst replaceReg(const MCInst &Inst, MCRegister Dest, MCRegister Src) {
   MCInst New;
   New.setOpcode(Inst.getOpcode());
   New.setLoc(Inst.getLoc());
@@ -215,7 +215,8 @@ void AArch64::AArch64MCLFIExpander::expandStackModification(
 
   MCInst ModInst;
   MCRegister Scratch = getScratch();
-  assert(Inst.getOperand(0).isReg() && Inst.getOperand(0).getReg() == AArch64::SP);
+  assert(Inst.getOperand(0).isReg() &&
+         Inst.getOperand(0).getReg() == AArch64::SP);
   ModInst.setOpcode(Inst.getOpcode());
   ModInst.setLoc(Inst.getLoc());
   ModInst.addOperand(MCOperand::createReg(Scratch));
@@ -233,13 +234,17 @@ static unsigned convertUiToRoW(unsigned Op);
 static unsigned convertPreToRoW(unsigned Op);
 static unsigned convertPostToRoW(unsigned Op);
 
-static unsigned convertPrePostToBase(unsigned Op, bool &IsPre, bool &IsBaseNoOffset);
+static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
+                                     bool &IsBaseNoOffset);
 static unsigned getPrePostScale(unsigned Op);
 
-static void emitSafeLoadStoreDemoted(const MCInst &Inst, unsigned N, MCStreamer &Out, const MCSubtargetInfo &STI) {
+static void emitSafeLoadStoreDemoted(const MCInst &Inst, unsigned N,
+                                     MCStreamer &Out,
+                                     const MCSubtargetInfo &STI) {
   MCInst LoadStore;
   bool IsPre, IsBaseNoOffset;
-  auto NewOpCode = convertPrePostToBase(Inst.getOpcode(), IsPre, IsBaseNoOffset);
+  auto NewOpCode =
+      convertPrePostToBase(Inst.getOpcode(), IsPre, IsBaseNoOffset);
   LoadStore.setOpcode(NewOpCode);
   for (unsigned I = 1; I < N; I++)
     LoadStore.addOperand(Inst.getOperand(I));
@@ -251,7 +256,8 @@ static void emitSafeLoadStoreDemoted(const MCInst &Inst, unsigned N, MCStreamer 
   Out.emitInstruction(LoadStore, STI);
 }
 
-static void emitSafeLoadStore(const MCInst &Inst, unsigned N, MCStreamer &Out, const MCSubtargetInfo &STI) {
+static void emitSafeLoadStore(const MCInst &Inst, unsigned N, MCStreamer &Out,
+                              const MCSubtargetInfo &STI) {
   MCInst LoadStore;
   LoadStore.setOpcode(Inst.getOpcode());
   for (unsigned I = 0; I < N; ++I)
@@ -262,8 +268,9 @@ static void emitSafeLoadStore(const MCInst &Inst, unsigned N, MCStreamer &Out, c
   Out.emitInstruction(LoadStore, STI);
 }
 
-void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(const MCInst &Inst, MemInstInfo &MII,
-    MCStreamer &Out, const MCSubtargetInfo &STI) {
+void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(
+    const MCInst &Inst, MemInstInfo &MII, MCStreamer &Out,
+    const MCSubtargetInfo &STI) {
   emitAddMask(LFIAddrReg, Inst.getOperand(MII.BaseRegIdx).getReg(), Out, STI);
 
   if (MII.IsPrePost) {
@@ -273,20 +280,23 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(const MCInst &Inst, Mem
     MCRegister Base = Inst.getOperand(MII.BaseRegIdx).getReg();
     MCOperand OffsetMO = Inst.getOperand(MII.OffsetIdx);
     if (OffsetMO.isReg()) {
-      // The immediate offset of post-indexed addressing NEON Instrs has a fixed value, and
-      // it is encoded as a post-index addressing with XZR register operand.
-      // e.g., LD3Threev3d_POST can only have #48 as its operand and its offset
-      // MachineOperand holds XZR, which is a *Register* kind, not Imm.
+      // The immediate offset of post-indexed addressing NEON Instrs has a fixed
+      // value, and it is encoded as a post-index addressing with XZR register
+      // operand. e.g., LD3Threev3d_POST can only have #48 as its operand and
+      // its offset MachineOperand holds XZR, which is a *Register* kind, not
+      // Imm.
       MCRegister OffReg = OffsetMO.getReg();
       if (OffReg == AArch64::XZR) {
         const LdStNInstrDesc *Info = getLdStNInstrDesc(Inst.getOpcode());
         assert(Info && Info->NaturalOffset >= 0);
-        return emit(AArch64::ADDXri, Base, Base, Info->NaturalOffset, 0, Out, STI);
+        return emit(AArch64::ADDXri, Base, Base, Info->NaturalOffset, 0, Out,
+                    STI);
       }
       assert(OffReg != AArch64::WZR);
       return emit(AArch64::ADDXrs, Base, Base, OffsetMO.getReg(), 0, Out, STI);
     } else {
-      auto Offset = Inst.getOperand(MII.OffsetIdx).getImm() * getPrePostScale(Inst.getOpcode());
+      auto Offset = Inst.getOperand(MII.OffsetIdx).getImm() *
+                    getPrePostScale(Inst.getOpcode());
       if (Offset >= 0)
         return emit(AArch64::ADDXri, Base, Base, Offset, 0, Out, STI);
       return emit(AArch64::SUBXri, Base, Base, -Offset, 0, Out, STI);
@@ -296,14 +306,16 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(const MCInst &Inst, Mem
   return emitSafeLoadStore(Inst, MII.BaseRegIdx, Out, STI);
 }
 
-void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(const MCInst &Inst, MemInstInfo &MII,
-    MCStreamer &Out, const MCSubtargetInfo &STI) {
+void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(
+    const MCInst &Inst, MemInstInfo &MII, MCStreamer &Out,
+    const MCSubtargetInfo &STI) {
   unsigned MemOp;
   unsigned Op = Inst.getOpcode();
   if ((MemOp = convertUiToRoW(Op)) != AArch64::INSTRUCTION_LIST_END) {
     auto OffsetMCO = Inst.getOperand(2);
     if (OffsetMCO.isImm() && OffsetMCO.getImm() == 0)
-      return emitMemMask(MemOp, Inst.getOperand(0).getReg(), Inst.getOperand(1).getReg(), Out, STI);
+      return emitMemMask(MemOp, Inst.getOperand(0).getReg(),
+                         Inst.getOperand(1).getReg(), Out, STI);
     return expandLoadStoreBasic(Inst, MII, Out, STI);
   }
 
@@ -338,9 +350,11 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(const MCInst &Inst, MemIn
     if (!IsShift)
       Shift = 0;
     if (Extend)
-      emit(AArch64::ADDXrx, Scratch, Reg1, Reg2, AArch64_AM::getArithExtendImm(AArch64_AM::SXTX, Shift), Out, STI);
+      emit(AArch64::ADDXrx, Scratch, Reg1, Reg2,
+           AArch64_AM::getArithExtendImm(AArch64_AM::SXTX, Shift), Out, STI);
     else
-      emit(AArch64::ADDXrs, Scratch, Reg1, Reg2, AArch64_AM::getShifterImm(AArch64_AM::LSL, Shift), Out, STI);
+      emit(AArch64::ADDXrs, Scratch, Reg1, Reg2,
+           AArch64_AM::getShifterImm(AArch64_AM::LSL, Shift), Out, STI);
     return emitMemMask(MemOp, Inst.getOperand(0).getReg(), Scratch, Out, STI);
   }
 
@@ -353,19 +367,21 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(const MCInst &Inst, MemIn
     if (!IsShift)
       Shift = 0;
     if (S)
-      emit(AArch64::ADDXrx, Scratch, Reg1, Reg2, AArch64_AM::getArithExtendImm(AArch64_AM::SXTW, Shift), Out, STI);
+      emit(AArch64::ADDXrx, Scratch, Reg1, Reg2,
+           AArch64_AM::getArithExtendImm(AArch64_AM::SXTW, Shift), Out, STI);
     else
-      emit(AArch64::ADDXrx, Scratch, Reg1, Reg2, AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, Shift), Out, STI);
+      emit(AArch64::ADDXrx, Scratch, Reg1, Reg2,
+           AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, Shift), Out, STI);
     return emitMemMask(MemOp, Inst.getOperand(0).getReg(), Scratch, Out, STI);
   }
 }
 
-void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
-                                                    MCStreamer &Out,
-                                                    const MCSubtargetInfo &STI) {
+void AArch64::AArch64MCLFIExpander::expandLoadStore(
+    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
   if (hasFeature(FeatureBitset({AArch64::FeatureLFIJumps}), STI))
     return Out.emitInstruction(Inst, STI);
-  if (hasFeature(FeatureBitset({AArch64::FeatureLFIStores}), STI) && !mayStore(Inst))
+  if (hasFeature(FeatureBitset({AArch64::FeatureLFIStores}), STI) &&
+      !mayStore(Inst))
     return Out.emitInstruction(Inst, STI);
 
   auto MII = getLoadInfo(Inst);
@@ -377,7 +393,7 @@ void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
 
   // Stack accesses without a register offset don't need rewriting.
   if (Inst.getOperand(MII->BaseRegIdx).getReg() == AArch64::SP) {
-    if (MII->BaseRegIdx == (int) Inst.getNumOperands() - 1 ||
+    if (MII->BaseRegIdx == (int)Inst.getNumOperands() - 1 ||
         !Inst.getOperand(MII->BaseRegIdx + 1).isReg())
       return Out.emitInstruction(Inst, STI);
   }
@@ -389,33 +405,44 @@ void AArch64::AArch64MCLFIExpander::expandLoadStore(const MCInst &Inst,
     expandLoadStoreBasic(Inst, MII.value(), Out, STI);
 }
 
-void AArch64::AArch64MCLFIExpander::emitLFICall(LFICallType CallType, MCStreamer &Out, const MCSubtargetInfo &STI) {
+void AArch64::AArch64MCLFIExpander::emitLFICall(LFICallType CallType,
+                                                MCStreamer &Out,
+                                                const MCSubtargetInfo &STI) {
   MCRegister Scratch = getScratch();
   emitMov(Scratch, AArch64::LR, Out, STI);
   unsigned Offset;
   switch (CallType) {
-    case LFISyscall: Offset = 0; break;
-    case LFITLSRead: Offset = 1; break;
-    case LFITLSWrite: Offset = 2; break;
+  case LFISyscall:
+    Offset = 0;
+    break;
+  case LFITLSRead:
+    Offset = 1;
+    break;
+  case LFITLSWrite:
+    Offset = 2;
+    break;
   }
   emit(AArch64::LDRXui, AArch64::LR, LFIBaseReg, Offset, Out, STI);
   emit(AArch64::BLR, AArch64::LR, Out, STI);
   emitAddMask(AArch64::LR, Scratch, Out, STI);
 }
 
-void AArch64::AArch64MCLFIExpander::expandSyscall(const MCInst &Inst, MCStreamer &Out,
-                   const MCSubtargetInfo &STI) {
+void AArch64::AArch64MCLFIExpander::expandSyscall(const MCInst &Inst,
+                                                  MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI) {
   emitLFICall(LFISyscall, Out, STI);
 }
 
-static void emitSwap(MCRegister Reg1, MCRegister Reg2, MCStreamer &Out, const MCSubtargetInfo &STI) {
+static void emitSwap(MCRegister Reg1, MCRegister Reg2, MCStreamer &Out,
+                     const MCSubtargetInfo &STI) {
   emit(AArch64::EORXrs, Reg1, Reg1, Reg2, 0, Out, STI);
   emit(AArch64::EORXrs, Reg2, Reg1, Reg2, 0, Out, STI);
   emit(AArch64::EORXrs, Reg1, Reg1, Reg2, 0, Out, STI);
 }
 
-void AArch64::AArch64MCLFIExpander::expandTLSRead(const MCInst &Inst, MCStreamer &Out,
-                   const MCSubtargetInfo &STI) {
+void AArch64::AArch64MCLFIExpander::expandTLSRead(const MCInst &Inst,
+                                                  MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI) {
   MCRegister Reg = Inst.getOperand(0).getReg();
 
   if (hasFeature(FeatureBitset({AArch64::FeatureLFITLSReg}), STI))
@@ -430,8 +457,9 @@ void AArch64::AArch64MCLFIExpander::expandTLSRead(const MCInst &Inst, MCStreamer
   }
 }
 
-void AArch64::AArch64MCLFIExpander::expandTLSWrite(const MCInst &Inst, MCStreamer &Out,
-                    const MCSubtargetInfo &STI) {
+void AArch64::AArch64MCLFIExpander::expandTLSWrite(const MCInst &Inst,
+                                                   MCStreamer &Out,
+                                                   const MCSubtargetInfo &STI) {
   MCRegister Reg = Inst.getOperand(1).getReg();
   if (Reg == AArch64::X0) {
     emitLFICall(LFITLSWrite, Out, STI);
@@ -448,15 +476,16 @@ static bool isSyscall(const MCInst &Inst) {
 
 static bool isTLSRead(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::MRS &&
-    Inst.getOperand(1).getImm() == AArch64SysReg::TPIDR_EL0;
+         Inst.getOperand(1).getImm() == AArch64SysReg::TPIDR_EL0;
 }
 
 static bool isTLSWrite(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::MSR &&
-    Inst.getOperand(0).getImm() == AArch64SysReg::TPIDR_EL0;
+         Inst.getOperand(0).getImm() == AArch64SysReg::TPIDR_EL0;
 }
 
-void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
+void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
+                                                 MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
   if (isSyscall(Inst))
     return expandSyscall(Inst, Out, STI);
@@ -508,7 +537,8 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer 
   return Out.emitInstruction(Inst, STI);
 }
 
-bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst, MCStreamer &Out,
+bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst,
+                                               MCStreamer &Out,
                                                const MCSubtargetInfo &STI) {
   if (Guard)
     return false;
@@ -823,13 +853,14 @@ static unsigned convertPostToRoW(unsigned Op) {
 static bool canConvertToRoW(unsigned Op) {
   unsigned Shift;
   return convertUiToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
-    convertPreToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
-    convertPostToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
-    convertRoXToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END ||
-    convertRoWToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END;
+         convertPreToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
+         convertPostToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
+         convertRoXToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END ||
+         convertRoWToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END;
 }
 
-static unsigned convertPrePostToBase(unsigned Op, bool &IsPre, bool &IsBaseNoOffset) {
+static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
+                                     bool &IsBaseNoOffset) {
   IsPre = false;
   IsBaseNoOffset = false;
   switch (Op) {
@@ -895,7 +926,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre, bool &IsBaseNoOff
   // case AArch64::STLRXpre:
   //   IsPre = true;
   //   IsBaseNoOffset = true;
-    // return AArch64::STLRX;
+  // return AArch64::STLRX;
   case AArch64::LD1i64_POST:
     IsBaseNoOffset = true;
     return AArch64::LD1i64;

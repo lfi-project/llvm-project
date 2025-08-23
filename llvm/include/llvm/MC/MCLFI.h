@@ -19,4 +19,4 @@ class Triple;
 void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
                              const Triple &TheTriple);
 
-}
+} // namespace llvm

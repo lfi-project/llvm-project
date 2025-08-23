@@ -10,9 +10,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/MC/MCParser/MCAsmParserExtension.h"
 #include "llvm/MC/MCLFIExpander.h"
 #include "llvm/MC/MCParser/MCAsmLexer.h"
+#include "llvm/MC/MCParser/MCAsmParserExtension.h"
 #include "llvm/MC/MCParser/MCTargetAsmParser.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCStreamer.h"
@@ -23,15 +23,15 @@ using namespace llvm;
 
 class LFIAsmParser : public MCAsmParserExtension {
   MCLFIExpander *Expander;
-  template<bool (LFIAsmParser::*HandlerMethod)(StringRef, SMLoc)>
+  template <bool (LFIAsmParser::*HandlerMethod)(StringRef, SMLoc)>
   void addDirectiveHandler(StringRef Directive) {
-    MCAsmParser::ExtensionDirectiveHandler Handler = std::make_pair(
-        this, HandleDirective<LFIAsmParser, HandlerMethod>);
+    MCAsmParser::ExtensionDirectiveHandler Handler =
+        std::make_pair(this, HandleDirective<LFIAsmParser, HandlerMethod>);
 
     getParser().addDirectiveHandler(Directive, Handler);
   }
 
- public:
+public:
   LFIAsmParser(MCLFIExpander *Exp) : Expander(Exp) {}
   void Initialize(MCAsmParser &Parser) override {
     // Call the base implementation.
@@ -55,13 +55,12 @@ class LFIAsmParser : public MCAsmParserExtension {
 
       else if (getLexer().isNot(AsmToken::EndOfStatement))
         return Error(Loc, kInvalidOptionError);
-    }
-    else {
+    } else {
       return Error(Loc, kInvalidOptionError);
     }
     Lex();
 
-    if(Expander->addScratchReg(RegNo))
+    if (Expander->addScratchReg(RegNo))
       return Error(Loc, "Register can't be used as a scratch register");
     return false;
   }
@@ -107,4 +106,4 @@ namespace llvm {
 MCAsmParserExtension *createLFIAsmParser(MCLFIExpander *Exp) {
   return new LFIAsmParser(Exp);
 }
-}
+} // namespace llvm
