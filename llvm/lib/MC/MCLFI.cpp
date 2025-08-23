@@ -24,36 +24,36 @@ static const char NoteNamespace[] = "LFI";
 namespace llvm {
 
 void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
-                              const Triple &TheTriple) {
+                             const Triple &TheTriple) {
   assert(TheTriple.isLFI());
   const char *NoteName;
   const char *NoteArch;
   switch (TheTriple.getArch()) {
-    case Triple::aarch64:
-      NoteName = ".note.LFI.ABI.aarch64";
-      NoteArch = "aarch64";
-      break;
-    default:
-      report_fatal_error("Unsupported architecture for LFI");
+  case Triple::aarch64:
+    NoteName = ".note.LFI.ABI.aarch64";
+    NoteArch = "aarch64";
+    break;
+  default:
+    report_fatal_error("Unsupported architecture for LFI");
   }
 
-  std::string Error; //empty
+  std::string Error; // empty
   const Target *TheTarget =
-    TargetRegistry::lookupTarget(TheTriple.getTriple(), Error);
+      TargetRegistry::lookupTarget(TheTriple.getTriple(), Error);
 
   // Create the Target specific MCLFIExpander
   assert(TheTarget != nullptr);
   TheTarget->createMCLFIExpander(
-    Streamer,
-    std::unique_ptr<MCRegisterInfo>(
-        TheTarget->createMCRegInfo(TheTriple.getTriple())),
-    std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo()));
+      Streamer,
+      std::unique_ptr<MCRegisterInfo>(
+          TheTarget->createMCRegInfo(TheTriple.getTriple())),
+      std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo()));
 
   // Emit an ELF Note section in its own COMDAT group which identifies LFI
   // object files.
-  MCSectionELF* Note = Ctx.getELFSection(NoteName, ELF::SHT_NOTE,
-                                         ELF::SHF_ALLOC | ELF::SHF_GROUP,
-                                         0, NoteName, /*IsComdat=*/true);
+  MCSectionELF *Note = Ctx.getELFSection(NoteName, ELF::SHT_NOTE,
+                                         ELF::SHF_ALLOC | ELF::SHF_GROUP, 0,
+                                         NoteName, /*IsComdat=*/true);
 
   Streamer.pushSection();
   Streamer.switchSection(Note);

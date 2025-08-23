@@ -13,8 +13,8 @@
 using namespace clang::driver::toolchains;
 using namespace llvm::opt;
 
-void LFILinuxToolChain::AddCXXStdlibLibArgs(
-    const ArgList &Args, ArgStringList &CmdArgs) const {
+void LFILinuxToolChain::AddCXXStdlibLibArgs(const ArgList &Args,
+                                            ArgStringList &CmdArgs) const {
   switch (GetCXXStdlibType(Args)) {
   case ToolChain::CST_Libcxx:
     CmdArgs.push_back("-lc++");

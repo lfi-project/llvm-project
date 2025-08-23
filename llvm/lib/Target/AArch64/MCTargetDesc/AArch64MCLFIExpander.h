@@ -30,7 +30,7 @@ namespace AArch64 {
 class AArch64MCLFIExpander : public MCLFIExpander {
 public:
   AArch64MCLFIExpander(MCContext &Ctx, std::unique_ptr<MCRegisterInfo> &&RI,
-                    std::unique_ptr<MCInstrInfo> &&II)
+                       std::unique_ptr<MCInstrInfo> &&II)
       : MCLFIExpander(Ctx, std::move(RI), std::move(II)) {}
 
   bool expandInst(const MCInst &Inst, MCStreamer &Out,
@@ -66,7 +66,7 @@ private:
                                const MCSubtargetInfo &STI);
 
   void expandLRModification(const MCInst &Inst, MCStreamer &Out,
-                                 const MCSubtargetInfo &STI);
+                            const MCSubtargetInfo &STI);
 
   void expandPrefetch(const MCInst &Inst, MCStreamer &Out,
                       const MCSubtargetInfo &STI);
@@ -75,10 +75,10 @@ private:
                        const MCSubtargetInfo &STI);
 
   void expandLoadStoreBasic(const MCInst &Inst, MemInstInfo &InstInfo,
-      MCStreamer &Out, const MCSubtargetInfo &STI);
+                            MCStreamer &Out, const MCSubtargetInfo &STI);
 
   void expandLoadStoreRoW(const MCInst &Inst, MemInstInfo &InstInfo,
-      MCStreamer &Out, const MCSubtargetInfo &STI);
+                          MCStreamer &Out, const MCSubtargetInfo &STI);
 
   void expandSyscall(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
