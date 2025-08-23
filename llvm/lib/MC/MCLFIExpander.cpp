@@ -43,25 +43,17 @@ void MCLFIExpander::invalidateScratchRegs(const MCInst &Inst) {
   }
 }
 
-void MCLFIExpander::clearScratchRegs() {
-  ScratchRegs.clear();
-}
+void MCLFIExpander::clearScratchRegs() { ScratchRegs.clear(); }
 
-void MCLFIExpander::disable() {
-  Enabled = false;
-}
+void MCLFIExpander::disable() { Enabled = false; }
 
-void MCLFIExpander::enable() {
-  Enabled = true;
-}
+void MCLFIExpander::enable() { Enabled = true; }
 
-bool MCLFIExpander::isEnabled() {
-  return Enabled;
-}
+bool MCLFIExpander::isEnabled() { return Enabled; }
 
 MCRegister MCLFIExpander::getScratchReg(int index) {
   assert(index >= 0 && static_cast<unsigned>(index) < numScratchRegs());
-  return ScratchRegs[numScratchRegs()  - index - 1];
+  return ScratchRegs[numScratchRegs() - index - 1];
 }
 
 unsigned MCLFIExpander::numScratchRegs() const { return ScratchRegs.size(); }
@@ -102,12 +94,13 @@ bool MCLFIExpander::mayStore(const MCInst &Inst) const {
   return InstInfo->get(Inst.getOpcode()).mayStore();
 }
 
-bool MCLFIExpander::mayModifyRegister(const MCInst &Inst, MCRegister Reg) const {
+bool MCLFIExpander::mayModifyRegister(const MCInst &Inst,
+                                      MCRegister Reg) const {
   return InstInfo->get(Inst.getOpcode()).hasDefOfPhysReg(Inst, Reg, *RegInfo);
 }
 
 bool MCLFIExpander::explicitlyModifiesRegister(const MCInst &Inst,
-                                                MCRegister Reg) const {
+                                               MCRegister Reg) const {
   const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
   for (int i = 0; i < Desc.NumDefs; ++i) {
     if (Desc.operands()[i].OperandType == MCOI::OPERAND_REGISTER &&
@@ -116,4 +109,4 @@ bool MCLFIExpander::explicitlyModifiesRegister(const MCInst &Inst,
   }
   return false;
 }
-}
+} // namespace llvm

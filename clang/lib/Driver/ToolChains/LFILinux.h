@@ -20,13 +20,12 @@ public:
   LFILinuxToolChain(const Driver &D, const llvm::Triple &Triple,
                     const llvm::opt::ArgList &Args)
       : Linux(D, Triple, Args) {
-        ExtraOpts.push_back("-z");
-        ExtraOpts.push_back("separate-code");
-      }
+    ExtraOpts.push_back("-z");
+    ExtraOpts.push_back("separate-code");
+  }
 
-  void
-  AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
-                            llvm::opt::ArgStringList &CmdArgs) const override;
+  void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
+                           llvm::opt::ArgStringList &CmdArgs) const override;
 };
 
 } // end namespace toolchains

@@ -43,7 +43,7 @@ protected:
 
 public:
   MCLFIExpander(MCContext &Ctx, std::unique_ptr<MCRegisterInfo> &&RI,
-                 std::unique_ptr<MCInstrInfo> &&II)
+                std::unique_ptr<MCInstrInfo> &&II)
       : Ctx(Ctx), InstInfo(std::move(II)), RegInfo(std::move(RI)) {}
 
   void Error(const MCInst &Inst, const char msg[]);
@@ -75,5 +75,5 @@ public:
                           const MCSubtargetInfo &STI) = 0;
 };
 
-}
+} // namespace llvm
 #endif
