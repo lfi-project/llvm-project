@@ -242,6 +242,7 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAArch64Target() {
   initializeAArch64ConditionOptimizerPass(*PR);
   initializeAArch64DeadRegisterDefinitionsPass(*PR);
   initializeAArch64ExpandPseudoPass(*PR);
+  initializeAArch64LFIGuardEliminationPass(*PR);
   initializeAArch64LoadStoreOptPass(*PR);
   initializeAArch64MIPeepholeOptPass(*PR);
   initializeAArch64SIMDInstrOptPass(*PR);
@@ -880,6 +881,9 @@ void AArch64PassConfig::addPreEmitPass() {
   if (TM->getOptLevel() != CodeGenOptLevel::None && EnableCollectLOH &&
       TM->getTargetTriple().isOSBinFormatMachO())
     addPass(createAArch64CollectLOHPass());
+
+  if (Triple(TM->getTargetTriple()).isLFI())
+    addPass(createAArch64LFIGuardEliminationPass());
 }
 
 void AArch64PassConfig::addPostBBSections() {
