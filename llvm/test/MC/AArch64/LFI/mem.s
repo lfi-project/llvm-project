@@ -146,3 +146,36 @@ st2 { v1.8b, v2.8b }, [x14], #16
 st2 { v1.8b, v2.8b }, [x14]
 // CHECK:      add x28, x27, w14, uxtw
 // CHECK-NEXT: st2 { v1.8b, v2.8b }, [x28]
+
+ld1 { v0.s }[1], [x8]
+// CHECK:      add x28, x27, w8, uxtw
+// CHECK-NEXT: ld1 { v0.s }[1], [x28]
+
+ld1r { v3.2d }, [x9]
+// CHECK:      add x28, x27, w9, uxtw
+// CHECK-NEXT: ld1r { v3.2d }, [x28]
+
+ld1 { v0.s }[1], [x8], x10
+// CHECK:      add x28, x27, w8, uxtw
+// CHECK-NEXT: ld1 { v0.s }[1], [x28]
+// CHECK-NEXT: add x8, x8, x10
+
+ldaxr x0, [x2]
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: ldaxr x0, [x28]
+
+stlxr w15, w17, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: stlxr w15, w17, [x28]
+
+ldr w4, [sp, w3, uxtw #2]
+// CHECK:      add x26, sp, w3, uxtw #2
+// CHECK-NEXT: ldr w4, [x27, w26, uxtw]
+
+stxrb w11, w10, [x8]
+// CHECK:      add x28, x27, w8, uxtw
+// CHECK-NEXT: stxrb w11, w10, [x28]
+
+ldr x0, [x0, :got_lo12:x]
+// CHECK:      add x28, x27, w0, uxtw
+// CHECK-NEXT: ldr x0, [x28, :got_lo12:x]
