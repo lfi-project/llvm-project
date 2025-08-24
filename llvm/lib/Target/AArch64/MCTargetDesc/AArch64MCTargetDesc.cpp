@@ -13,6 +13,7 @@
 #include "AArch64MCTargetDesc.h"
 #include "AArch64ELFStreamer.h"
 #include "AArch64MCAsmInfo.h"
+#include "AArch64MCLFIExpander.h"
 #include "AArch64WinCOFFStreamer.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
 #include "MCTargetDesc/AArch64InstPrinter.h"
@@ -518,6 +519,16 @@ static MCInstrAnalysis *createAArch64InstrAnalysis(const MCInstrInfo *Info) {
   return new AArch64MCInstrAnalysis(Info);
 }
 
+static MCLFIExpander *createAArch64MCLFIExpander(MCStreamer &S,
+    std::unique_ptr<MCRegisterInfo> &&RegInfo,
+    std::unique_ptr<MCInstrInfo> &&InstInfo) {
+  auto *Exp = new AArch64::AArch64MCLFIExpander(S.getContext(),
+                                                std::move(RegInfo),
+                                                std::move(InstInfo));
+  S.setLFIExpander(Exp);
+  return Exp;
+}
+
 // Force static initialization.
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAArch64TargetMC() {
   for (Target *T : {&getTheAArch64leTarget(), &getTheAArch64beTarget(),
@@ -545,6 +556,8 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeAArch64TargetMC() {
     TargetRegistry::RegisterELFStreamer(*T, createELFStreamer);
     TargetRegistry::RegisterMachOStreamer(*T, createMachOStreamer);
     TargetRegistry::RegisterCOFFStreamer(*T, createWinCOFFStreamer);
+
+    TargetRegistry::RegisterMCLFIExpander(*T, createAArch64MCLFIExpander);
 
     // Register the obj target streamer.
     TargetRegistry::RegisterObjectTargetStreamer(

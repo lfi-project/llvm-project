@@ -382,7 +382,9 @@ InternalLongjmp(__hw_register_buf env, int retval) {
       "ldp	x21, x22, [%0, #2<<3];"
       "ldp	x23, x24, [%0, #4<<3];"
       "ldp	x25, x26, [%0, #6<<3];"
+#ifndef __LFI__
       "ldp	x27, x28, [%0, #8<<3];"
+#endif
       "ldp	x29, x30, [%0, #10<<3];"
       "ldp	 d8,  d9, [%0, #14<<3];"
       "ldp	d10, d11, [%0, #16<<3];"
