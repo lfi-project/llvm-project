@@ -1020,13 +1020,13 @@ static inline std::optional<MemInstInfo> getStoreInfo(const MCInst &Inst) {
     break;
 
   // Base = op Dst, [Base, (-4|-8)]!
-  case AArch64::STLRWpre:
-  case AArch64::STLRXpre:
-    DestRegIdx = 1;
-    BaseRegIdx = 2;
-    OffsetIdx = -1; // constant offset
-    IsPrePost = true;
-    break;
+  // case AArch64::STLRWpre:
+  // case AArch64::STLRXpre:
+  //   DestRegIdx = 1;
+  //   BaseRegIdx = 2;
+  //   OffsetIdx = -1; // constant offset
+  //   IsPrePost = true;
+  //   break;
 
   case AArch64::STXRB:
   case AArch64::STXRH:

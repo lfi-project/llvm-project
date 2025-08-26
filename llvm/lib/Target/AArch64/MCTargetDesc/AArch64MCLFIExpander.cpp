@@ -271,7 +271,16 @@ static void emitSafeLoadStore(const MCInst &Inst, unsigned N, MCStreamer &Out,
 void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(
     const MCInst &Inst, MemInstInfo &MII, MCStreamer &Out,
     const MCSubtargetInfo &STI) {
-  emitAddMask(LFIAddrReg, Inst.getOperand(MII.BaseRegIdx).getReg(), Out, STI);
+  MCRegister Base = Inst.getOperand(MII.BaseRegIdx).getReg();
+  bool SkipGuard = false;
+  if (GuardMap.count(Base)) {
+    if (GuardUses[Base] != 0)
+      SkipGuard = true;
+    GuardUses[Base]++;
+  }
+
+  if (!SkipGuard)
+    emitAddMask(LFIAddrReg, Inst.getOperand(MII.BaseRegIdx).getReg(), Out, STI);
 
   if (MII.IsPrePost) {
     assert(MII.OffsetIdx != -1 && "Pre/Post must have valid OffsetIdx");
@@ -499,6 +508,12 @@ static bool isTLSWrite(const MCInst &Inst) {
 void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
+  if (GuardMap.size() > 0)
+    for (auto &KV : GuardMap)
+      if (mayModifyRegister(Inst, KV.first))
+        return Out.getContext().reportError(
+            Inst.getLoc(), "illegal modification guarded register");
+
   if (isSyscall(Inst))
     return expandSyscall(Inst, Out, STI);
 
@@ -938,7 +953,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   // case AArch64::STLRXpre:
   //   IsPre = true;
   //   IsBaseNoOffset = true;
-  // return AArch64::STLRX;
+  //   return AArch64::STLRX;
   case AArch64::LD1i64_POST:
     IsBaseNoOffset = true;
     return AArch64::LD1i64;

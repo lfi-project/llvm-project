@@ -36,6 +36,8 @@ private:
 protected:
   std::unique_ptr<MCInstrInfo> InstInfo;
   std::unique_ptr<MCRegisterInfo> RegInfo;
+  SmallDenseMap<MCRegister, MCRegister, 2> GuardMap;
+  SmallDenseMap<MCRegister, int, 2> GuardUses;
   void invalidateScratchRegs(const MCInst &Inst);
   MCRegister getScratchReg(int index);
   unsigned numScratchRegs() const;
@@ -53,7 +55,10 @@ public:
 
   void disable();
   void enable();
-  bool isEnabled();
+  bool isEnabled() const;
+
+  bool guard(MCRegister Guard, MCRegister Src);
+  bool guardEnd(MCRegister Guard);
 
   bool isPseudo(const MCInst &Inst) const;
 

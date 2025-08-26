@@ -49,7 +49,23 @@ void MCLFIExpander::disable() { Enabled = false; }
 
 void MCLFIExpander::enable() { Enabled = true; }
 
-bool MCLFIExpander::isEnabled() { return Enabled; }
+bool MCLFIExpander::isEnabled() const { return Enabled; }
+
+bool MCLFIExpander::guard(MCRegister Guard, MCRegister Reg) {
+  GuardMap[Reg] = Guard;
+  GuardUses[Reg] = 0;
+  return false;
+}
+
+bool MCLFIExpander::guardEnd(MCRegister Reg) {
+  auto I = GuardMap.find(Reg);
+  if (I == GuardMap.end()) {
+    return true;
+  }
+  GuardMap.erase(I);
+  GuardUses.erase(Reg);
+  return false;
+}
 
 MCRegister MCLFIExpander::getScratchReg(int index) {
   assert(index >= 0 && static_cast<unsigned>(index) < numScratchRegs());

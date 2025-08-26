@@ -13,9 +13,13 @@
 
 using namespace llvm;
 
+static Register LFIAddrReg = AArch64::X28;
+static Register LFIBaseReg = AArch64::X27;
+
 namespace {
 class AArch64LFIGuardElimination : public MachineFunctionPass {
   const AArch64InstrInfo *TII;
+  MachineFunction *MF;
 
 public:
   static char ID;
@@ -36,6 +40,12 @@ public:
 private:
   void emitNoExpand(MachineBasicBlock &MBB, MachineInstr &MI);
   void emitExpand(MachineBasicBlock &MBB, MachineInstr &MI);
+  void emitGuard(MachineBasicBlock &MBB, MachineInstr &MI, Register Guard, Register Reg);
+  void emitGuardEnd(MachineBasicBlock &MBB, MachineInstr &MI, Register Reg);
+
+  void expandLoadStoreBasic(MachineBasicBlock &MBB, MachineInstr &MI);
+
+  MachineInstr *createAddMask(MachineInstr &MI, Register Dest, Register Src);
 };
 
 char AArch64LFIGuardElimination::ID = 0;
@@ -52,6 +62,39 @@ void AArch64LFIGuardElimination::emitExpand(MachineBasicBlock &MBB, MachineInstr
     .addExternalSymbol(".expand");
 }
 
+void AArch64LFIGuardElimination::emitGuard(MachineBasicBlock &MBB, MachineInstr &MI, Register Guard, Register Reg) {
+  BuildMI(MBB, MI, DebugLoc(), TII->get(TargetOpcode::INLINEASM))
+    .addExternalSymbol(".guard $0 $1")
+    .addImm(0)
+    .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
+    .addReg(Guard)
+    .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
+    .addReg(Reg);
+}
+
+void AArch64LFIGuardElimination::emitGuardEnd(MachineBasicBlock &MBB, MachineInstr &MI, Register Reg) {
+  BuildMI(MBB, MI, DebugLoc(), TII->get(TargetOpcode::INLINEASM))
+    .addExternalSymbol(".guard_end $0")
+    .addImm(0)
+    .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
+    .addReg(Reg);
+}
+
+MachineInstr *AArch64LFIGuardElimination::createAddMask(MachineInstr &MI, Register Dest, Register Src) {
+  return BuildMI(*MF, MI.getDebugLoc(), TII->get(AArch64::ADDXrx), Dest)
+    .addReg(LFIBaseReg)
+    .addReg(getWRegFromXReg(Src))
+    .addImm(AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0));
+}
+
+void AArch64LFIGuardElimination::expandLoadStoreBasic(MachineBasicBlock &MBB, MachineInstr &MI) {
+  // emitNoExpand(MBB, MI);
+  // emitAddMask
+  // if pre/post emit load/store demoted, plus add/sub
+  // else emit safe load store
+  // emitExpand(MBB, end...);
+}
+
 bool AArch64LFIGuardElimination::runOnMachineFunction(MachineFunction &MF) {
   bool Changed = false;
   LLVM_DEBUG(
@@ -59,22 +102,10 @@ bool AArch64LFIGuardElimination::runOnMachineFunction(MachineFunction &MF) {
              << MF.getName() << "\n");
 
   TII = static_cast<const AArch64InstrInfo *>(MF.getSubtarget().getInstrInfo());
+  this->MF = &MF;
 
   for (auto &MBB : MF) {
-    for (auto &MI : llvm::make_early_inc_range(MBB)) {
-      // TODO: Expand non RoW load/stores.
-    }
-    for (auto &MI : llvm::make_early_inc_range(MBB)) {
-      // TODO: Eliminate redundant guard instructions.
-      //
-      // Approach:
-      // 1. Find current guard instruction.
-      // 2. For each instruction:
-      // * if it modifies guarded reg: remove currently active guard instruction.
-      // * if it's a guard:
-      // ** if it's the same as the active guard: eliminate it
-      // ** if it's different, reset active guard
-    }
+
   }
 
   return Changed;
