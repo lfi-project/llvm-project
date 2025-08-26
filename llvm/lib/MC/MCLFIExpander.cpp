@@ -18,6 +18,7 @@
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCStreamer.h"
 
 namespace llvm {
 
@@ -124,5 +125,24 @@ bool MCLFIExpander::explicitlyModifiesRegister(const MCInst &Inst,
       return true;
   }
   return false;
+}
+
+void MCLFIExpander::emitInst(const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  if (!BBActive)
+    return Out.emitInstruction(Inst, STI);
+
+  BBInsts.push_back(Inst);
+}
+
+void MCLFIExpander::startBB(MCStreamer &Out, const MCSubtargetInfo &STI) {
+  BBActive = true;
+  BBInsts.clear();
+}
+
+void MCLFIExpander::endBB(MCStreamer &Out, const MCSubtargetInfo &STI) {
+  for (auto &Inst : BBInsts) {
+    Out.emitInstruction(Inst, STI);
+  }
+  BBActive = false;
 }
 } // namespace llvm

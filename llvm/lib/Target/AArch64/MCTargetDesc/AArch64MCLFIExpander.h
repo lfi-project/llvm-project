@@ -38,6 +38,7 @@ public:
 
 protected:
   bool isValidScratchRegister(MCRegister Reg) const override;
+  void endBB(MCStreamer &Out, const MCSubtargetInfo &STI) override;
 
 private:
   bool Guard = false; // recursion guard

@@ -40,6 +40,8 @@ public:
 private:
   void emitNoExpand(MachineBasicBlock &MBB, MachineInstr &MI);
   void emitExpand(MachineBasicBlock &MBB, MachineInstr &MI);
+  void emitBBStart(MachineBasicBlock &MBB, MachineInstr &MI);
+  void emitBBEnd(MachineBasicBlock &MBB, MachineInstr &MI);
   void emitGuard(MachineBasicBlock &MBB, MachineInstr &MI, Register Guard, Register Reg);
   void emitGuardEnd(MachineBasicBlock &MBB, MachineInstr &MI, Register Reg);
 
@@ -54,12 +56,26 @@ char AArch64LFIGuardElimination::ID = 0;
 
 void AArch64LFIGuardElimination::emitNoExpand(MachineBasicBlock &MBB, MachineInstr &MI) {
   BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(TargetOpcode::INLINEASM))
-    .addExternalSymbol(".no_expand");
+    .addExternalSymbol(".no_expand")
+    .addImm(0);
 }
 
 void AArch64LFIGuardElimination::emitExpand(MachineBasicBlock &MBB, MachineInstr &MI) {
   BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(TargetOpcode::INLINEASM))
-    .addExternalSymbol(".expand");
+    .addExternalSymbol(".expand")
+    .addImm(0);
+}
+
+void AArch64LFIGuardElimination::emitBBStart(MachineBasicBlock &MBB, MachineInstr &MI) {
+  BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(TargetOpcode::INLINEASM))
+    .addExternalSymbol(".bb_start")
+    .addImm(0);
+}
+
+void AArch64LFIGuardElimination::emitBBEnd(MachineBasicBlock &MBB, MachineInstr &MI) {
+  BuildMI(MBB, MI, MI.getDebugLoc(), TII->get(TargetOpcode::INLINEASM))
+    .addExternalSymbol(".bb_end")
+    .addImm(0);
 }
 
 void AArch64LFIGuardElimination::emitGuard(MachineBasicBlock &MBB, MachineInstr &MI, Register Guard, Register Reg) {
@@ -105,7 +121,8 @@ bool AArch64LFIGuardElimination::runOnMachineFunction(MachineFunction &MF) {
   this->MF = &MF;
 
   for (auto &MBB : MF) {
-
+    emitBBStart(MBB, MBB.instr_front());
+    emitBBEnd(MBB, MBB.instr_back());
   }
 
   return Changed;

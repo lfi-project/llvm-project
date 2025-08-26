@@ -42,6 +42,8 @@ public:
     addDirectiveHandler<&LFIAsmParser::ParseExpandEnable>(".expand");
     addDirectiveHandler<&LFIAsmParser::ParseGuard>(".guard");
     addDirectiveHandler<&LFIAsmParser::ParseGuardEnd>(".guard_end");
+    addDirectiveHandler<&LFIAsmParser::ParseBBStart>(".bb_start");
+    addDirectiveHandler<&LFIAsmParser::ParseBBEnd>(".bb_end");
   }
 
   /// ::= {.scratch} reg
@@ -99,6 +101,30 @@ public:
     Lex();
 
     Expander->enable();
+
+    return false;
+  }
+
+  /// ::= {.bb_start}
+  bool ParseBBStart(StringRef Directive, SMLoc Loc) {
+    getParser().checkForValidSection();
+    if (getLexer().isNot(AsmToken::EndOfStatement))
+      return TokError("unexpected token in '.bb_start' directive");
+    Lex();
+
+    Expander->startBB(getStreamer(), getParser().getTargetParser().getSTI());
+
+    return false;
+  }
+
+  /// ::= {.bb_end}
+  bool ParseBBEnd(StringRef Directive, SMLoc Loc) {
+    getParser().checkForValidSection();
+    if (getLexer().isNot(AsmToken::EndOfStatement))
+      return TokError("unexpected token in '.bb_end' directive");
+    Lex();
+
+    Expander->endBB(getStreamer(), getParser().getTargetParser().getSTI());
 
     return false;
   }
