@@ -19,7 +19,6 @@ static Register LFIBaseReg = AArch64::X27;
 namespace {
 class AArch64LFIGuardElimination : public MachineFunctionPass {
   const AArch64InstrInfo *TII;
-  MachineFunction *MF;
 
 public:
   static char ID;
@@ -96,12 +95,12 @@ void AArch64LFIGuardElimination::emitGuardEnd(MachineBasicBlock &MBB, MachineIns
     .addReg(Reg);
 }
 
-MachineInstr *AArch64LFIGuardElimination::createAddMask(MachineInstr &MI, Register Dest, Register Src) {
-  return BuildMI(*MF, MI.getDebugLoc(), TII->get(AArch64::ADDXrx), Dest)
-    .addReg(LFIBaseReg)
-    .addReg(getWRegFromXReg(Src))
-    .addImm(AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0));
-}
+// MachineInstr *AArch64LFIGuardElimination::createAddMask(MachineInstr &MI, Register Dest, Register Src) {
+//   return BuildMI(*MF, MI.getDebugLoc(), TII->get(AArch64::ADDXrx), Dest)
+//     .addReg(LFIBaseReg)
+//     .addReg(getWRegFromXReg(Src))
+//     .addImm(AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0));
+// }
 
 void AArch64LFIGuardElimination::expandLoadStoreBasic(MachineBasicBlock &MBB, MachineInstr &MI) {
   // emitNoExpand(MBB, MI);
@@ -118,11 +117,13 @@ bool AArch64LFIGuardElimination::runOnMachineFunction(MachineFunction &MF) {
              << MF.getName() << "\n");
 
   TII = static_cast<const AArch64InstrInfo *>(MF.getSubtarget().getInstrInfo());
-  this->MF = &MF;
 
   for (auto &MBB : MF) {
-    emitBBStart(MBB, MBB.instr_front());
-    emitBBEnd(MBB, MBB.instr_back());
+    if (MBB.empty())
+      continue;
+    emitBBStart(MBB, MBB.front());
+    emitBBEnd(MBB, MBB.back());
+    Changed = true;
   }
 
   return Changed;
