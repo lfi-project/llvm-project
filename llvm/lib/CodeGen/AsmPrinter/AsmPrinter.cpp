@@ -4297,6 +4297,8 @@ void AsmPrinter::emitBasicBlockStart(const MachineBasicBlock &MBB) {
     for (auto &Handler : EHHandlers)
       Handler->beginBasicBlockSection(MBB);
   }
+
+  OutStreamer->emitBBStart();
 }
 
 void AsmPrinter::emitBasicBlockEnd(const MachineBasicBlock &MBB) {
@@ -4308,6 +4310,7 @@ void AsmPrinter::emitBasicBlockEnd(const MachineBasicBlock &MBB) {
     for (auto &Handler : EHHandlers)
       Handler->endBasicBlockSection(MBB);
   }
+  OutStreamer->emitBBEnd();
 }
 
 void AsmPrinter::emitVisibility(MCSymbol *Sym, unsigned Visibility,

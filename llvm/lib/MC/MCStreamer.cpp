@@ -51,6 +51,8 @@ MCTargetStreamer::MCTargetStreamer(MCStreamer &S) : Streamer(S) {
 MCTargetStreamer::~MCTargetStreamer() = default;
 
 void MCTargetStreamer::emitLabel(MCSymbol *Symbol) {}
+void MCTargetStreamer::emitBBStart() {}
+void MCTargetStreamer::emitBBEnd() {}
 
 void MCTargetStreamer::finish() {}
 
@@ -434,6 +436,18 @@ void MCStreamer::emitLabel(MCSymbol *Symbol, SMLoc Loc) {
   MCTargetStreamer *TS = getTargetStreamer();
   if (TS)
     TS->emitLabel(Symbol);
+}
+
+void MCStreamer::emitBBStart() {
+  MCTargetStreamer *TS = getTargetStreamer();
+  if (TS)
+    TS->emitBBStart();
+}
+
+void MCStreamer::emitBBEnd() {
+  MCTargetStreamer *TS = getTargetStreamer();
+  if (TS)
+    TS->emitBBEnd();
 }
 
 void MCStreamer::emitConditionalAssignment(MCSymbol *Symbol,

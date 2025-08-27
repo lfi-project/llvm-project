@@ -896,8 +896,8 @@ void AArch64PassConfig::addPostBBSections() {
   if (TM->getOptLevel() != CodeGenOptLevel::None && EnableCompressJumpTables)
     addPass(createAArch64CompressJumpTablesPass());
 
-  if (Triple(TM->getTargetTriple()).isLFI())
-    addPass(createAArch64LFIGuardEliminationPass());
+  // if (Triple(TM->getTargetTriple()).isLFI())
+  //   addPass(createAArch64LFIGuardEliminationPass());
 }
 
 void AArch64PassConfig::addPreEmitPass2() {
