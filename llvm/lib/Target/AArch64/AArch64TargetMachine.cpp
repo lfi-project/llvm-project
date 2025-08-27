@@ -881,9 +881,6 @@ void AArch64PassConfig::addPreEmitPass() {
   if (TM->getOptLevel() != CodeGenOptLevel::None && EnableCollectLOH &&
       TM->getTargetTriple().isOSBinFormatMachO())
     addPass(createAArch64CollectLOHPass());
-
-  if (Triple(TM->getTargetTriple()).isLFI())
-    addPass(createAArch64LFIGuardEliminationPass());
 }
 
 void AArch64PassConfig::addPostBBSections() {
@@ -898,6 +895,9 @@ void AArch64PassConfig::addPostBBSections() {
 
   if (TM->getOptLevel() != CodeGenOptLevel::None && EnableCompressJumpTables)
     addPass(createAArch64CompressJumpTablesPass());
+
+  if (Triple(TM->getTargetTriple()).isLFI())
+    addPass(createAArch64LFIGuardEliminationPass());
 }
 
 void AArch64PassConfig::addPreEmitPass2() {
