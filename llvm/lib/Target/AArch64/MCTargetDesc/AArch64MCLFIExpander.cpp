@@ -594,6 +594,8 @@ void AArch64::AArch64MCLFIExpander::endBB(MCStreamer &Out,
 
 void AArch64::AArch64MCLFIExpander::markLabel(MCStreamer &Out,
                                               const MCSubtargetInfo &STI) {
+  if (Guard || BBInsts.size() == 0)
+    return;
   Guard = true;
   const MCInst *ActiveGuard = nullptr;
   MCRegister ActiveReg;
