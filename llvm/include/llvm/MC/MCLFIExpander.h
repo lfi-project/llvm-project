@@ -87,6 +87,8 @@ public:
   virtual ~MCLFIExpander() = default;
   virtual bool expandInst(const MCInst &Inst, MCStreamer &Out,
                           const MCSubtargetInfo &STI) = 0;
+
+  virtual void markLabel(MCStreamer &Out, const MCSubtargetInfo &STI) = 0;
 };
 
 } // namespace llvm

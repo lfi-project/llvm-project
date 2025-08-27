@@ -571,6 +571,8 @@ void MCAsmStreamer::emitELFSymverDirective(const MCSymbol *OriginalSym,
 }
 
 void MCAsmStreamer::emitLabel(MCSymbol *Symbol, SMLoc Loc) {
+  if (LFIExpander && LFIExpander->isEnabled())
+    LFIExpander->markLabel(*this, *getContext().getSubtargetInfo());
   MCStreamer::emitLabel(Symbol, Loc);
 
   Symbol->print(OS, MAI);
@@ -2554,6 +2556,9 @@ void MCAsmStreamer::emitRawTextImpl(StringRef String) {
 }
 
 void MCAsmStreamer::finishImpl() {
+  if (LFIExpander && LFIExpander->isEnabled())
+    LFIExpander->markLabel(*this, *getContext().getSubtargetInfo());
+
   // If we are generating dwarf for assembly source files dump out the sections.
   if (getContext().getGenDwarfForAssembly())
     MCGenDwarfInfo::Emit(this);

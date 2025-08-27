@@ -19,6 +19,7 @@
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSection.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -224,6 +225,9 @@ void MCObjectStreamer::emitCFIEndProcImpl(MCDwarfFrameInfo &Frame) {
 }
 
 void MCObjectStreamer::emitLabel(MCSymbol *Symbol, SMLoc Loc) {
+  if (LFIExpander && LFIExpander->isEnabled())
+    LFIExpander->markLabel(*this, *getContext().getSubtargetInfo());
+
   MCStreamer::emitLabel(Symbol, Loc);
 
   getAssembler().registerSymbol(*Symbol);
@@ -817,6 +821,9 @@ void MCObjectStreamer::emitAddrsigSym(const MCSymbol *Sym) {
 }
 
 void MCObjectStreamer::finishImpl() {
+  if (LFIExpander && LFIExpander->isEnabled())
+    LFIExpander->markLabel(*this, *getContext().getSubtargetInfo());
+
   getContext().RemapDebugPaths();
 
   // If we are generating dwarf for assembly source files dump out the sections.

@@ -590,12 +590,17 @@ static bool isSame(const MCInst &Guard1, const MCInst &Guard2) {
 
 void AArch64::AArch64MCLFIExpander::endBB(MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
+}
+
+void AArch64::AArch64MCLFIExpander::markLabel(MCStreamer &Out,
+                                              const MCSubtargetInfo &STI) {
   Guard = true;
   const MCInst *ActiveGuard = nullptr;
   MCRegister ActiveReg;
   for (const MCInst &Inst : BBInsts) {
     if (ActiveGuard && (mayModifyRegister(Inst, ActiveReg) ||
-                        mayModifyRegister(Inst, getXRegFromWReg(ActiveReg)))) {
+                        mayModifyRegister(Inst, getXRegFromWReg(ActiveReg)) ||
+                        mayAffectControlFlow(Inst))) {
       ActiveGuard = nullptr;
     } else if (isGuard(Inst)) {
       if (ActiveGuard && isSame(Inst, *ActiveGuard))
@@ -606,7 +611,7 @@ void AArch64::AArch64MCLFIExpander::endBB(MCStreamer &Out,
     Out.emitInstruction(Inst, STI);
   }
   Guard = false;
-  BBActive = false;
+  BBInsts.clear();
 }
 
 bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst,
