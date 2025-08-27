@@ -595,7 +595,8 @@ void AArch64::AArch64MCLFIExpander::endBB(MCStreamer &Out,
   MCRegister ActiveReg;
   for (const MCInst &Inst : BBInsts) {
     if (ActiveGuard && (mayModifyRegister(Inst, ActiveReg) ||
-                        mayModifyRegister(Inst, getXRegFromWReg(ActiveReg)))) {
+                        mayModifyRegister(Inst, getXRegFromWReg(ActiveReg)) ||
+                        mayAffectControlFlow(Inst))) {
       ActiveGuard = nullptr;
     } else if (isGuard(Inst)) {
       if (ActiveGuard && isSame(Inst, *ActiveGuard))
