@@ -118,10 +118,25 @@ static void emitMov(MCRegister Dest, MCRegister Src, MCLFIExpander &Exp,
 }
 
 // Emit 'add Dest, LFIBaseReg, W(Src), uxtw'
-static void emitAddMask(MCRegister Dest, MCRegister Src, MCLFIExpander &Exp,
+void AArch64::AArch64MCLFIExpander::emitAddMask(MCRegister Dest, MCRegister Src,
                         MCStreamer &Out, const MCSubtargetInfo &STI) {
+  if (Dest == LFIAddrReg && ActiveGuard && ActiveGuardReg == Src)
+    return;
   emit(AArch64::ADDXrx, Dest, LFIBaseReg, getWRegFromXReg(Src),
-       AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0), Exp, Out, STI);
+       AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0), *this, Out, STI);
+  if (Dest == LFIAddrReg) {
+    ActiveGuard = true;
+    ActiveGuardReg = Src;
+  }
+}
+
+void AArch64::AArch64MCLFIExpander::emitInst(const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  if (ActiveGuard && (mayModifyRegister(Inst, ActiveGuardReg) ||
+      mayModifyRegister(Inst, getWRegFromXReg(ActiveGuardReg)) ||
+      mayAffectControlFlow(Inst)))
+    ActiveGuard = false;
+
+  Out.emitInstruction(Inst, STI);
 }
 
 // Emit 'Op(ld/st) Dest, [LFIBaseReg, W(Target), uxtw]'
@@ -148,7 +163,7 @@ void AArch64::AArch64MCLFIExpander::expandIndirectBranch(
   assert(Inst.getOperand(0).isReg());
   MCRegister BranchReg = Inst.getOperand(0).getReg();
 
-  emitAddMask(LFIAddrReg, BranchReg, *this, Out, STI);
+  emitAddMask(LFIAddrReg, BranchReg, Out, STI);
   emitBranch(Inst.getOpcode(), LFIAddrReg, *this, Out, STI);
 }
 
@@ -207,7 +222,7 @@ void AArch64::AArch64MCLFIExpander::expandLRModification(
     expandLoadStore(New, Out, STI);
   else
     emitInst(New, Out, STI);
-  emitAddMask(AArch64::LR, Scratch, *this, Out, STI);
+  emitAddMask(AArch64::LR, Scratch, Out, STI);
 }
 
 void AArch64::AArch64MCLFIExpander::expandStackModification(
@@ -229,7 +244,7 @@ void AArch64::AArch64MCLFIExpander::expandStackModification(
     ModInst.addOperand(Inst.getOperand(I));
   }
   emitInst(ModInst, Out, STI);
-  emitAddMask(AArch64::SP, Scratch, *this, Out, STI);
+  emitAddMask(AArch64::SP, Scratch, Out, STI);
 }
 
 static bool canConvertToRoW(unsigned Op);
@@ -286,7 +301,7 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(
   }
 
   if (!SkipGuard)
-    emitAddMask(LFIAddrReg, Inst.getOperand(MII.BaseRegIdx).getReg(), *this,
+    emitAddMask(LFIAddrReg, Inst.getOperand(MII.BaseRegIdx).getReg(),
                 Out, STI);
 
   if (MII.IsPrePost) {
@@ -459,7 +474,7 @@ void AArch64::AArch64MCLFIExpander::emitLFICall(LFICallType CallType,
   }
   emit(AArch64::LDRXui, AArch64::LR, LFIBaseReg, Offset, *this, Out, STI);
   emit(AArch64::BLR, AArch64::LR, *this, Out, STI);
-  emitAddMask(AArch64::LR, Scratch, *this, Out, STI);
+  emitAddMask(AArch64::LR, Scratch, Out, STI);
 }
 
 void AArch64::AArch64MCLFIExpander::expandSyscall(const MCInst &Inst,
@@ -588,26 +603,14 @@ static bool isSame(const MCInst &Guard1, const MCInst &Guard2) {
   return Guard1.getOperand(2).getReg() == Guard2.getOperand(2).getReg();
 }
 
+void AArch64::AArch64MCLFIExpander::startBB(MCStreamer &Out,
+                                            const MCSubtargetInfo &STI) {
+    ActiveGuard = false;
+}
+
 void AArch64::AArch64MCLFIExpander::endBB(MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
-  Guard = true;
-  const MCInst *ActiveGuard = nullptr;
-  MCRegister ActiveReg;
-  for (const MCInst &Inst : BBInsts) {
-    if (ActiveGuard && (mayModifyRegister(Inst, ActiveReg) ||
-                        mayModifyRegister(Inst, getXRegFromWReg(ActiveReg)) ||
-                        mayAffectControlFlow(Inst))) {
-      ActiveGuard = nullptr;
-    } else if (isGuard(Inst)) {
-      if (ActiveGuard && isSame(Inst, *ActiveGuard))
-        continue;
-      ActiveGuard = &Inst;
-      ActiveReg = Inst.getOperand(2).getReg();
-    }
-    Out.emitInstruction(Inst, STI);
-  }
-  Guard = false;
-  BBActive = false;
+    ActiveGuard = false;
 }
 
 bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst,

@@ -38,10 +38,14 @@ public:
 
 protected:
   bool isValidScratchRegister(MCRegister Reg) const override;
+  void startBB(MCStreamer &Out, const MCSubtargetInfo &STI) override;
   void endBB(MCStreamer &Out, const MCSubtargetInfo &STI) override;
 
 private:
   bool Guard = false; // recursion guard
+
+  bool ActiveGuard = false;
+  MCRegister ActiveGuardReg;
 
   MCRegister getScratch();
 
@@ -99,8 +103,12 @@ private:
     LFITLSWrite,
   };
 
+  void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out, const MCSubtargetInfo &STI);
+
   void emitLFICall(LFICallType CallType, MCStreamer &Out,
                    const MCSubtargetInfo &STI);
+
+  void emitInst(const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) override;
 };
 } // namespace AArch64
 } // namespace llvm

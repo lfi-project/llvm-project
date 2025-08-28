@@ -39,9 +39,6 @@ protected:
   SmallDenseMap<MCRegister, MCRegister, 2> GuardMap;
   SmallDenseMap<MCRegister, int, 2> GuardUses;
 
-  bool BBActive;
-  SmallVector<MCInst, 16> BBInsts;
-
   void invalidateScratchRegs(const MCInst &Inst);
   MCRegister getScratchReg(int index);
   unsigned numScratchRegs() const;
@@ -64,8 +61,8 @@ public:
   bool guard(MCRegister Guard, MCRegister Src);
   bool guardEnd(MCRegister Guard);
 
-  virtual void startBB(MCStreamer &Out, const MCSubtargetInfo &STI);
-  virtual void endBB(MCStreamer &Out, const MCSubtargetInfo &STI);
+  virtual void startBB(MCStreamer &Out, const MCSubtargetInfo &STI) = 0;
+  virtual void endBB(MCStreamer &Out, const MCSubtargetInfo &STI) = 0;
 
   bool isPseudo(const MCInst &Inst) const;
 
@@ -82,7 +79,7 @@ public:
   bool mayModifyRegister(const MCInst &Inst, MCRegister Reg) const;
   bool explicitlyModifiesRegister(const MCInst &Inst, MCRegister Reg) const;
 
-  void emitInst(const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI);
+  virtual void emitInst(const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI);
 
   virtual ~MCLFIExpander() = default;
   virtual bool expandInst(const MCInst &Inst, MCStreamer &Out,
