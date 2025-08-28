@@ -120,11 +120,11 @@ static void emitMov(MCRegister Dest, MCRegister Src, MCLFIExpander &Exp,
 // Emit 'add Dest, LFIBaseReg, W(Src), uxtw'
 void AArch64::AArch64MCLFIExpander::emitAddMask(MCRegister Dest, MCRegister Src,
                         MCStreamer &Out, const MCSubtargetInfo &STI) {
-  if (Dest == LFIAddrReg && ActiveGuard && ActiveGuardReg == Src)
+  if (Dest == LFIAddrReg && ActiveBB && ActiveGuard && ActiveGuardReg == Src)
     return;
   emit(AArch64::ADDXrx, Dest, LFIBaseReg, getWRegFromXReg(Src),
        AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0), *this, Out, STI);
-  if (Dest == LFIAddrReg) {
+  if (Dest == LFIAddrReg && ActiveBB) {
     ActiveGuard = true;
     ActiveGuardReg = Src;
   }
@@ -593,24 +593,16 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
   return emitInst(Inst, Out, STI);
 }
 
-static bool isGuard(const MCInst &Inst) {
-  return Inst.getOpcode() == AArch64::ADDXrx &&
-         Inst.getOperand(0).getReg() == LFIAddrReg &&
-         Inst.getOperand(1).getReg() == LFIBaseReg;
-}
-
-static bool isSame(const MCInst &Guard1, const MCInst &Guard2) {
-  return Guard1.getOperand(2).getReg() == Guard2.getOperand(2).getReg();
-}
-
 void AArch64::AArch64MCLFIExpander::startBB(MCStreamer &Out,
                                             const MCSubtargetInfo &STI) {
-    ActiveGuard = false;
+  ActiveBB = true;
+  ActiveGuard = false;
 }
 
 void AArch64::AArch64MCLFIExpander::endBB(MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
-    ActiveGuard = false;
+  ActiveBB = false;
+  ActiveGuard = false;
 }
 
 bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst,

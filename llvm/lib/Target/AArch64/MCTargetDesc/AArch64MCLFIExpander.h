@@ -44,6 +44,7 @@ protected:
 private:
   bool Guard = false; // recursion guard
 
+  bool ActiveBB = false;
   bool ActiveGuard = false;
   MCRegister ActiveGuardReg;
 
