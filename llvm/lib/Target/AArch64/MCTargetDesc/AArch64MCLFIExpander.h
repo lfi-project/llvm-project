@@ -42,7 +42,7 @@ protected:
   void endBB(MCStreamer &Out, const MCSubtargetInfo &STI) override;
 
 private:
-  bool Guard = false; // recursion guard
+  bool RecGuard = false; // recursion guard
 
   bool ActiveBB = false;
   bool ActiveGuard = false;
@@ -110,6 +110,10 @@ private:
                    const MCSubtargetInfo &STI);
 
   void emitInst(const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) override;
+
+  bool guardLoad(MCRegister Guard, MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) override;
+  bool guardSave(MCRegister Guard, MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) override;
+  bool guardRestore(MCRegister Guard, MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) override;
 };
 } // namespace AArch64
 } // namespace llvm

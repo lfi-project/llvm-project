@@ -41,7 +41,10 @@ public:
     addDirectiveHandler<&LFIAsmParser::ParseExpandDisable>(".no_expand");
     addDirectiveHandler<&LFIAsmParser::ParseExpandEnable>(".expand");
     addDirectiveHandler<&LFIAsmParser::ParseGuard>(".guard");
-    addDirectiveHandler<&LFIAsmParser::ParseGuardEnd>(".guard_end");
+    addDirectiveHandler<&LFIAsmParser::ParseNoGuard>(".no_guard");
+    addDirectiveHandler<&LFIAsmParser::ParseGuardLoad>(".guard_load");
+    addDirectiveHandler<&LFIAsmParser::ParseGuardSave>(".guard_save");
+    addDirectiveHandler<&LFIAsmParser::ParseGuardRestore>(".guard_restore");
     addDirectiveHandler<&LFIAsmParser::ParseBBStart>(".bb_start");
     addDirectiveHandler<&LFIAsmParser::ParseBBEnd>(".bb_end");
   }
@@ -131,38 +134,64 @@ public:
 
   /// ::= {.guard} reg reg
   bool ParseGuard(StringRef Directive, SMLoc Loc) {
-    getParser().checkForValidSection();
-    MCRegister GuardRegNo, RegNo;
-    const char *kInvalidOptionError =
-        "expected register name after '.guard' directive";
+    MCRegister Guard, Reg;
+    ParseGuardDirective(Directive, Loc, Guard, Reg);
 
-    if (getLexer().isNot(AsmToken::EndOfStatement)) {
-      if (getParser().getTargetParser().parseRegister(GuardRegNo, Loc, Loc))
-        return Error(Loc, kInvalidOptionError);
-      if (getParser().getTargetParser().parseRegister(RegNo, Loc, Loc))
-        return Error(Loc, kInvalidOptionError);
-
-      else if (getLexer().isNot(AsmToken::EndOfStatement))
-        return Error(Loc, kInvalidOptionError);
-    } else {
-      return Error(Loc, kInvalidOptionError);
-    }
-    Lex();
-
-    if (Expander->guard(GuardRegNo, RegNo))
+    if (Expander->guard(Guard, Reg))
       return Error(Loc, "Invalid registers for .guard");
     return false;
   }
 
-  /// ::= {.guard_end} reg
-  bool ParseGuardEnd(StringRef Directive, SMLoc Loc) {
+  /// ::= {.no_guard} reg reg
+  bool ParseNoGuard(StringRef Directive, SMLoc Loc) {
+    MCRegister Guard, Reg;
+    ParseGuardDirective(Directive, Loc, Guard, Reg);
+
+    if (Expander->noGuard(Guard, Reg))
+      return Error(Loc, "Invalid registers for .no_guard");
+    return false;
+  }
+
+  /// ::= {.guard_load} reg reg
+  bool ParseGuardLoad(StringRef Directive, SMLoc Loc) {
+    MCRegister Guard, Reg;
+    ParseGuardDirective(Directive, Loc, Guard, Reg);
+
+    if (Expander->guardLoad(Guard, Reg, getStreamer(), *getContext().getSubtargetInfo()))
+      return Error(Loc, "Invalid registers for .guard_load");
+    return false;
+  }
+
+  /// ::= {.guard_save} reg reg
+  bool ParseGuardSave(StringRef Directive, SMLoc Loc) {
+    MCRegister Guard, Reg;
+    ParseGuardDirective(Directive, Loc, Guard, Reg);
+
+    if (Expander->guardSave(Guard, Reg, getStreamer(), *getContext().getSubtargetInfo()))
+      return Error(Loc, "Invalid registers for .guard_save");
+    return false;
+  }
+
+  /// ::= {.guard_restore} reg reg
+  bool ParseGuardRestore(StringRef Directive, SMLoc Loc) {
+    MCRegister Guard, Reg;
+    ParseGuardDirective(Directive, Loc, Guard, Reg);
+
+    if (Expander->guardRestore(Guard, Reg, getStreamer(), *getContext().getSubtargetInfo()))
+      return Error(Loc, "Invalid registers for .guard_restore");
+    return false;
+  }
+
+private:
+  bool ParseGuardDirective(StringRef Directive, SMLoc Loc, MCRegister &Guard, MCRegister &Reg) {
     getParser().checkForValidSection();
-    MCRegister RegNo;
     const char *kInvalidOptionError =
-        "expected register name after '.guard_end' directive";
+        "expected register name after '.guard' directive";
 
     if (getLexer().isNot(AsmToken::EndOfStatement)) {
-      if (getParser().getTargetParser().parseRegister(RegNo, Loc, Loc))
+      if (getParser().getTargetParser().parseRegister(Guard, Loc, Loc))
+        return Error(Loc, kInvalidOptionError);
+      if (getParser().getTargetParser().parseRegister(Reg, Loc, Loc))
         return Error(Loc, kInvalidOptionError);
 
       else if (getLexer().isNot(AsmToken::EndOfStatement))
@@ -172,8 +201,6 @@ public:
     }
     Lex();
 
-    if (Expander->guardEnd(RegNo))
-      return Error(Loc, "Invalid register for .guard_end");
     return false;
   }
 };

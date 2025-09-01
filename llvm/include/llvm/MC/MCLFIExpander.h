@@ -59,7 +59,10 @@ public:
   bool isEnabled() const;
 
   bool guard(MCRegister Guard, MCRegister Src);
-  bool guardEnd(MCRegister Guard);
+  bool noGuard(MCRegister Guard, MCRegister Src);
+  virtual bool guardLoad(MCRegister Guard, MCRegister Src, MCStreamer &Out, const MCSubtargetInfo &STI) = 0;
+  virtual bool guardSave(MCRegister Guard, MCRegister Src, MCStreamer &Out, const MCSubtargetInfo &STI) = 0;
+  virtual bool guardRestore(MCRegister Guard, MCRegister Src, MCStreamer &Out, const MCSubtargetInfo &STI) = 0;
 
   virtual void startBB(MCStreamer &Out, const MCSubtargetInfo &STI) = 0;
   virtual void endBB(MCStreamer &Out, const MCSubtargetInfo &STI) = 0;

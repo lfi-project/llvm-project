@@ -58,7 +58,7 @@ bool MCLFIExpander::guard(MCRegister Guard, MCRegister Reg) {
   return false;
 }
 
-bool MCLFIExpander::guardEnd(MCRegister Reg) {
+bool MCLFIExpander::noGuard(MCRegister Guard, MCRegister Reg) {
   auto I = GuardMap.find(Reg);
   if (I == GuardMap.end()) {
     return true;

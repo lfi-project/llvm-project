@@ -464,6 +464,7 @@ AArch64RegisterInfo::getStrictlyReservedRegs(const MachineFunction &MF) const {
     markSuperRegs(Reserved, AArch64::W28);
     markSuperRegs(Reserved, AArch64::W27);
     markSuperRegs(Reserved, AArch64::W26);
+    markSuperRegs(Reserved, AArch64::W24);
     auto TLSReg = FeatureBitset({AArch64::FeatureLFITLSReg});
     if ((MF.getSubtarget<AArch64Subtarget>().getFeatureBits() & TLSReg) == TLSReg)
       markSuperRegs(Reserved, AArch64::W25);

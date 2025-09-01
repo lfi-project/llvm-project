@@ -30,6 +30,10 @@ using namespace llvm;
 
 #define DEBUG_TYPE "lfi"
 
+static cl::opt<bool> FlagEnableRewriter("lfi-enable-rewriter",
+    cl::desc("Use the automatic rewriting assembler for LFI"),
+    cl::init(true));
+
 static cl::opt<bool> AArch64LFIErrorReserved(
     "aarch64-lfi-error-reserved", cl::Hidden, cl::init(false),
     cl::desc("Produce errors for uses of LFI reserved registers"));
@@ -38,6 +42,7 @@ static MCRegister LFIAddrReg = AArch64::X28;
 static MCRegister LFIBaseReg = AArch64::X27;
 static MCRegister LFIScratchReg = AArch64::X26;
 static MCRegister LFITLSReg = AArch64::X25;
+static MCRegister SPReg = AArch64::SP;
 
 static bool hasFeature(const FeatureBitset Feature,
                        const MCSubtargetInfo &STI) {
@@ -258,7 +263,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
                                      bool &IsBaseNoOffset);
 static unsigned getPrePostScale(unsigned Op);
 
-static void emitSafeLoadStoreDemoted(const MCInst &Inst, unsigned N,
+static void emitSafeLoadStoreDemoted(const MCInst &Inst, MCRegister AddrReg, unsigned N,
                                      MCLFIExpander &Exp, MCStreamer &Out,
                                      const MCSubtargetInfo &STI) {
   MCInst LoadStore;
@@ -268,7 +273,7 @@ static void emitSafeLoadStoreDemoted(const MCInst &Inst, unsigned N,
   LoadStore.setOpcode(NewOpCode);
   for (unsigned I = 1; I < N; I++)
     LoadStore.addOperand(Inst.getOperand(I));
-  LoadStore.addOperand(MCOperand::createReg(LFIAddrReg));
+  LoadStore.addOperand(MCOperand::createReg(AddrReg));
   if (IsPre)
     LoadStore.addOperand(Inst.getOperand(N + 1));
   else if (!IsBaseNoOffset)
@@ -276,14 +281,14 @@ static void emitSafeLoadStoreDemoted(const MCInst &Inst, unsigned N,
   Exp.emitInst(LoadStore, Out, STI);
 }
 
-static void emitSafeLoadStore(const MCInst &Inst, unsigned N,
+static void emitSafeLoadStore(const MCInst &Inst, MCRegister AddrReg, unsigned N,
                               MCLFIExpander &Exp, MCStreamer &Out,
                               const MCSubtargetInfo &STI) {
   MCInst LoadStore;
   LoadStore.setOpcode(Inst.getOpcode());
   for (unsigned I = 0; I < N; ++I)
     LoadStore.addOperand(Inst.getOperand(I));
-  LoadStore.addOperand(MCOperand::createReg(LFIAddrReg));
+  LoadStore.addOperand(MCOperand::createReg(AddrReg));
   for (unsigned I = N + 1; I < Inst.getNumOperands(); ++I)
     LoadStore.addOperand(Inst.getOperand(I));
   Exp.emitInst(LoadStore, Out, STI);
@@ -294,10 +299,11 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(
     const MCSubtargetInfo &STI) {
   MCRegister Base = Inst.getOperand(MII.BaseRegIdx).getReg();
   bool SkipGuard = false;
+  MCRegister AddrReg = LFIAddrReg;
   if (GuardMap.count(Base)) {
-    if (GuardUses[Base] != 0)
-      SkipGuard = true;
+    SkipGuard = true;
     GuardUses[Base]++;
+    AddrReg = GuardMap[Base];
   }
 
   if (!SkipGuard)
@@ -307,7 +313,7 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(
   if (MII.IsPrePost) {
     assert(MII.OffsetIdx != -1 && "Pre/Post must have valid OffsetIdx");
 
-    emitSafeLoadStoreDemoted(Inst, MII.BaseRegIdx, *this, Out, STI);
+    emitSafeLoadStoreDemoted(Inst, AddrReg, MII.BaseRegIdx, *this, Out, STI);
     MCRegister Base = Inst.getOperand(MII.BaseRegIdx).getReg();
     MCOperand OffsetMO = Inst.getOperand(MII.OffsetIdx);
     if (OffsetMO.isReg()) {
@@ -335,7 +341,7 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(
     }
   }
 
-  return emitSafeLoadStore(Inst, MII.BaseRegIdx, *this, Out, STI);
+  return emitSafeLoadStore(Inst, AddrReg, MII.BaseRegIdx, *this, Out, STI);
 }
 
 void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(
@@ -541,7 +547,7 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
     for (auto &KV : GuardMap)
       if (mayModifyRegister(Inst, KV.first))
         return Out.getContext().reportError(
-            Inst.getLoc(), "illegal modification guarded register");
+            Inst.getLoc(), "illegal modification of guarded register");
 
   if (isSyscall(Inst))
     return expandSyscall(Inst, Out, STI);
@@ -593,6 +599,29 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
   return emitInst(Inst, Out, STI);
 }
 
+bool AArch64::AArch64MCLFIExpander::guardLoad(MCRegister Guard, MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  RecGuard = true;
+  emitAddMask(Guard, Reg, Out, STI);
+  RecGuard = false;
+  return false;
+}
+
+bool AArch64::AArch64MCLFIExpander::guardSave(MCRegister Guard, MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  RecGuard = true;
+  emit(AArch64::STRXpre, SPReg, Guard, SPReg, -16, *this, Out, STI);
+  emitAddMask(Guard, Reg, Out, STI);
+  RecGuard = false;
+  return false;
+}
+
+bool AArch64::AArch64MCLFIExpander::guardRestore(MCRegister Guard, MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  RecGuard = true;
+  emit(AArch64::LDRXpost, SPReg, Guard, SPReg, 16, *this, Out, STI);
+  emitAddMask(Guard, Reg, Out, STI);
+  RecGuard = false;
+  return false;
+}
+
 void AArch64::AArch64MCLFIExpander::startBB(MCStreamer &Out,
                                             const MCSubtargetInfo &STI) {
   ActiveBB = true;
@@ -608,13 +637,13 @@ void AArch64::AArch64MCLFIExpander::endBB(MCStreamer &Out,
 bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst,
                                                MCStreamer &Out,
                                                const MCSubtargetInfo &STI) {
-  if (Guard)
+  if (RecGuard)
     return false;
-  Guard = true;
+  RecGuard = true;
 
   doExpandInst(Inst, Out, STI);
 
-  Guard = false;
+  RecGuard = false;
   return true;
 }
 

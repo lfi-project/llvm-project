@@ -1,6 +1,7 @@
 #include "AArch64.h"
 #include "AArch64InstrInfo.h"
 #include "MCTargetDesc/AArch64AddressingModes.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -13,12 +14,12 @@
 
 using namespace llvm;
 
-static Register LFIAddrReg = AArch64::X28;
-static Register LFIBaseReg = AArch64::X27;
+static Register LFIHoistReg = AArch64::X24;
 
 namespace {
 class AArch64LFIGuardElimination : public MachineFunctionPass {
   const AArch64InstrInfo *TII;
+  MachineFunction *MF;
 
 public:
   static char ID;
@@ -41,8 +42,8 @@ private:
   void emitExpand(MachineBasicBlock &MBB, MachineInstr &MI);
   void emitBBStart(MachineBasicBlock &MBB, MachineInstr &MI);
   void emitBBEnd(MachineBasicBlock &MBB, MachineInstr &MI);
-  void emitGuard(MachineBasicBlock &MBB, MachineInstr &MI, Register Guard, Register Reg);
-  void emitGuardEnd(MachineBasicBlock &MBB, MachineInstr &MI, Register Reg);
+  void emitGuard(MachineBasicBlock &MBB, Register Guard, Register Reg);
+  void emitGuardEnd(MachineBasicBlock &MBB, Register Reg);
 
   void expandLoadStoreBasic(MachineBasicBlock &MBB, MachineInstr &MI);
 
@@ -77,22 +78,24 @@ void AArch64LFIGuardElimination::emitBBEnd(MachineBasicBlock &MBB, MachineInstr 
     .addImm(0);
 }
 
-void AArch64LFIGuardElimination::emitGuard(MachineBasicBlock &MBB, MachineInstr &MI, Register Guard, Register Reg) {
-  BuildMI(MBB, MI, DebugLoc(), TII->get(TargetOpcode::INLINEASM))
+void AArch64LFIGuardElimination::emitGuard(MachineBasicBlock &MBB, Register Guard, Register Reg) {
+  auto MIB = BuildMI(*MF, DebugLoc(), TII->get(TargetOpcode::INLINEASM))
     .addExternalSymbol(".guard $0 $1")
     .addImm(0)
     .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
     .addReg(Guard)
     .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
     .addReg(Reg);
+  MBB.insert(MBB.begin(), MIB);
 }
 
-void AArch64LFIGuardElimination::emitGuardEnd(MachineBasicBlock &MBB, MachineInstr &MI, Register Reg) {
-  BuildMI(MBB, MI, DebugLoc(), TII->get(TargetOpcode::INLINEASM))
+void AArch64LFIGuardElimination::emitGuardEnd(MachineBasicBlock &MBB, Register Reg) {
+  auto MIB = BuildMI(*MF, DebugLoc(), TII->get(TargetOpcode::INLINEASM))
     .addExternalSymbol(".guard_end $0")
     .addImm(0)
     .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
     .addReg(Reg);
+  MBB.insert(MBB.end(), MIB);
 }
 
 // MachineInstr *AArch64LFIGuardElimination::createAddMask(MachineInstr &MI, Register Dest, Register Src) {
@@ -117,13 +120,86 @@ bool AArch64LFIGuardElimination::runOnMachineFunction(MachineFunction &MF) {
              << MF.getName() << "\n");
 
   TII = static_cast<const AArch64InstrInfo *>(MF.getSubtarget().getInstrInfo());
+  this->MF = &MF;
+  MachineLoopInfo &MLI = getAnalysis<MachineLoopInfoWrapperPass>().getLI();
+  const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
 
-  for (auto &MBB : MF) {
-    if (MBB.empty())
+  for (auto *ML : MLI) {
+    SmallDenseMap<Register, int, 8> Uses;
+    SmallSet<Register, 8> Defs;
+
+    bool HasCall = false;
+
+    for (auto *MBB : ML->blocks()) {
+      for (auto &MI : *MBB) {
+        bool IsMemAccess = MI.mayLoad() || MI.mayStore();
+        if (MI.isCall()) {
+          HasCall = true;
+        }
+
+        for (auto &MO : MI.operands()) {
+          if (!MO.isReg())
+            continue;
+          Register R = MO.getReg();
+          if (!R)
+            continue;
+
+          if (MO.isUse() && IsMemAccess)
+            Uses[R]++;
+          if (MO.isDef())
+            Defs.insert(R);
+        }
+      }
+    }
+
+    if (HasCall)
       continue;
-    emitBBStart(MBB, MBB.front());
-    emitBBEnd(MBB, MBB.back());
-    Changed = true;
+
+    std::pair<Register, int> BestReg(AArch64::XZR, 0);
+    for (auto &KV : Uses) {
+      Register R = KV.first;
+      int NumUses = KV.second;
+      if (!Defs.contains(R))
+        if (NumUses > BestReg.second)
+          BestReg = std::pair(R, NumUses);
+    }
+
+    if (BestReg.second > 0) {
+      auto *Preheader = ML->getLoopPreheader();
+      if (!Preheader)
+        continue;
+      dbgs() << MF.getName() << ": hoisting use of register " << TRI->getRegAsmName(BestReg.first) << ", uses: " << BestReg.second << "\n";
+      auto MIB = BuildMI(MF, DebugLoc(), TII->get(TargetOpcode::INLINEASM))
+        .addExternalSymbol(".guard_load $0 $1")
+        .addImm(0)
+        .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
+        .addReg(LFIHoistReg)
+        .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
+        .addReg(BestReg.first);
+      Preheader->insert(Preheader->end(), MIB);
+
+      for (auto *MBB : ML->blocks()) {
+        if (MBB->empty())
+          continue;
+        auto Guard = BuildMI(MF, DebugLoc(), TII->get(TargetOpcode::INLINEASM))
+          .addExternalSymbol(".guard $0 $1")
+          .addImm(0)
+          .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
+          .addReg(LFIHoistReg)
+          .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
+          .addReg(BestReg.first);
+        MBB->insert(MBB->begin(), Guard);
+
+        auto NoGuard = BuildMI(MF, DebugLoc(), TII->get(TargetOpcode::INLINEASM))
+          .addExternalSymbol(".no_guard $0 $1")
+          .addImm(0)
+          .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
+          .addReg(LFIHoistReg)
+          .addImm(InlineAsm::Flag(InlineAsm::Kind::RegUse, 1))
+          .addReg(BestReg.first);
+        MBB->insert(MBB->end(), NoGuard);
+      }
+    }
   }
 
   return Changed;
