@@ -252,13 +252,6 @@ void AArch64::AArch64MCLFIExpander::expandStackModification(
   emitAddMask(AArch64::SP, Scratch, Out, STI);
 }
 
-static bool canConvertToRoW(unsigned Op);
-static unsigned convertRoXToRoW(unsigned Op, unsigned &Shift);
-static unsigned convertRoWToRoW(unsigned Op, unsigned &Shift);
-static unsigned convertUiToRoW(unsigned Op);
-static unsigned convertPreToRoW(unsigned Op);
-static unsigned convertPostToRoW(unsigned Op);
-
 static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
                                      bool &IsBaseNoOffset);
 static unsigned getPrePostScale(unsigned Op);
@@ -423,10 +416,10 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(
 static std::optional<MemInstInfo> getAtomicLoadStoreInfo(const MCInst &Inst);
 
 static std::optional<MemInstInfo> getMemInstInfo(const MCInst &Inst) {
-  auto MII = getLoadInfo(Inst);
+  auto MII = getLoadInfo(Inst.getOpcode());
   if (MII.has_value())
     return MII;
-  MII = getStoreInfo(Inst);
+  MII = getStoreInfo(Inst.getOpcode());
   if (MII.has_value())
     return MII;
   MII = getAtomicLoadStoreInfo(Inst);
@@ -609,15 +602,15 @@ bool AArch64::AArch64MCLFIExpander::guardLoad(MCRegister Guard, MCRegister Reg, 
 bool AArch64::AArch64MCLFIExpander::guardSave(MCRegister Guard, MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) {
   RecGuard = true;
   emit(AArch64::STRXpre, SPReg, Guard, SPReg, -16, *this, Out, STI);
-  emitAddMask(Guard, Reg, Out, STI);
   RecGuard = false;
   return false;
 }
 
 bool AArch64::AArch64MCLFIExpander::guardRestore(MCRegister Guard, MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) {
   RecGuard = true;
-  emit(AArch64::LDRXpost, SPReg, Guard, SPReg, 16, *this, Out, STI);
-  emitAddMask(Guard, Reg, Out, STI);
+  MCRegister Scratch = getScratch();
+  emit(AArch64::LDRXpost, SPReg, Scratch, SPReg, 16, *this, Out, STI);
+  emitAddMask(Guard, Scratch, Out, STI);
   RecGuard = false;
   return false;
 }
@@ -645,315 +638,6 @@ bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst,
 
   RecGuard = false;
   return true;
-}
-
-static unsigned convertRoXToRoW(unsigned Op, unsigned &Shift) {
-  Shift = 0;
-  switch (Op) {
-  case AArch64::LDRBBroX:
-    return AArch64::LDRBBroW;
-  case AArch64::LDRBroX:
-    return AArch64::LDRBroW;
-  case AArch64::LDRDroX:
-    Shift = 3;
-    return AArch64::LDRDroW;
-  case AArch64::LDRHHroX:
-    Shift = 1;
-    return AArch64::LDRHHroW;
-  case AArch64::LDRHroX:
-    Shift = 1;
-    return AArch64::LDRHroW;
-  case AArch64::LDRQroX:
-    Shift = 4;
-    return AArch64::LDRQroW;
-  case AArch64::LDRSBWroX:
-    Shift = 1;
-    return AArch64::LDRSBWroW;
-  case AArch64::LDRSBXroX:
-    Shift = 1;
-    return AArch64::LDRSBXroW;
-  case AArch64::LDRSHWroX:
-    Shift = 1;
-    return AArch64::LDRSHWroW;
-  case AArch64::LDRSHXroX:
-    Shift = 1;
-    return AArch64::LDRSHXroW;
-  case AArch64::LDRSWroX:
-    Shift = 2;
-    return AArch64::LDRSWroW;
-  case AArch64::LDRSroX:
-    Shift = 2;
-    return AArch64::LDRSroW;
-  case AArch64::LDRWroX:
-    Shift = 2;
-    return AArch64::LDRWroW;
-  case AArch64::LDRXroX:
-    Shift = 3;
-    return AArch64::LDRXroW;
-  case AArch64::STRBBroX:
-    return AArch64::STRBBroW;
-  case AArch64::STRBroX:
-    return AArch64::STRBroW;
-  case AArch64::STRDroX:
-    Shift = 3;
-    return AArch64::STRDroW;
-  case AArch64::STRHHroX:
-    Shift = 1;
-    return AArch64::STRHHroW;
-  case AArch64::STRHroX:
-    Shift = 1;
-    return AArch64::STRHroW;
-  case AArch64::STRQroX:
-    Shift = 4;
-    return AArch64::STRQroW;
-  case AArch64::STRSroX:
-    Shift = 2;
-    return AArch64::STRSroW;
-  case AArch64::STRWroX:
-    Shift = 2;
-    return AArch64::STRWroW;
-  case AArch64::STRXroX:
-    Shift = 3;
-    return AArch64::STRXroW;
-  }
-  return AArch64::INSTRUCTION_LIST_END;
-}
-
-static unsigned convertRoWToRoW(unsigned Op, unsigned &Shift) {
-  Shift = 0;
-  switch (Op) {
-  case AArch64::LDRBBroW:
-    return AArch64::LDRBBroW;
-  case AArch64::LDRBroW:
-    return AArch64::LDRBroW;
-  case AArch64::LDRDroW:
-    Shift = 3;
-    return AArch64::LDRDroW;
-  case AArch64::LDRHHroW:
-    Shift = 1;
-    return AArch64::LDRHHroW;
-  case AArch64::LDRHroW:
-    Shift = 1;
-    return AArch64::LDRHroW;
-  case AArch64::LDRQroW:
-    Shift = 4;
-    return AArch64::LDRQroW;
-  case AArch64::LDRSBWroW:
-    Shift = 1;
-    return AArch64::LDRSBWroW;
-  case AArch64::LDRSBXroW:
-    Shift = 1;
-    return AArch64::LDRSBXroW;
-  case AArch64::LDRSHWroW:
-    Shift = 1;
-    return AArch64::LDRSHWroW;
-  case AArch64::LDRSHXroW:
-    Shift = 1;
-    return AArch64::LDRSHXroW;
-  case AArch64::LDRSWroW:
-    Shift = 2;
-    return AArch64::LDRSWroW;
-  case AArch64::LDRSroW:
-    Shift = 2;
-    return AArch64::LDRSroW;
-  case AArch64::LDRWroW:
-    Shift = 2;
-    return AArch64::LDRWroW;
-  case AArch64::LDRXroW:
-    Shift = 3;
-    return AArch64::LDRXroW;
-  case AArch64::STRBBroW:
-    return AArch64::STRBBroW;
-  case AArch64::STRBroW:
-    return AArch64::STRBroW;
-  case AArch64::STRDroW:
-    Shift = 3;
-    return AArch64::STRDroW;
-  case AArch64::STRHHroW:
-    Shift = 1;
-    return AArch64::STRHHroW;
-  case AArch64::STRHroW:
-    Shift = 1;
-    return AArch64::STRHroW;
-  case AArch64::STRQroW:
-    Shift = 4;
-    return AArch64::STRQroW;
-  case AArch64::STRSroW:
-    Shift = 2;
-    return AArch64::STRSroW;
-  case AArch64::STRWroW:
-    Shift = 2;
-    return AArch64::STRWroW;
-  case AArch64::STRXroW:
-    Shift = 3;
-    return AArch64::STRXroW;
-  }
-  return AArch64::INSTRUCTION_LIST_END;
-}
-
-static unsigned convertUiToRoW(unsigned Op) {
-  switch (Op) {
-  case AArch64::LDRBBui:
-    return AArch64::LDRBBroW;
-  case AArch64::LDRBui:
-    return AArch64::LDRBroW;
-  case AArch64::LDRDui:
-    return AArch64::LDRDroW;
-  case AArch64::LDRHHui:
-    return AArch64::LDRHHroW;
-  case AArch64::LDRHui:
-    return AArch64::LDRHroW;
-  case AArch64::LDRQui:
-    return AArch64::LDRQroW;
-  case AArch64::LDRSBWui:
-    return AArch64::LDRSBWroW;
-  case AArch64::LDRSBXui:
-    return AArch64::LDRSBXroW;
-  case AArch64::LDRSHWui:
-    return AArch64::LDRSHWroW;
-  case AArch64::LDRSHXui:
-    return AArch64::LDRSHXroW;
-  case AArch64::LDRSWui:
-    return AArch64::LDRSWroW;
-  case AArch64::LDRSui:
-    return AArch64::LDRSroW;
-  case AArch64::LDRWui:
-    return AArch64::LDRWroW;
-  case AArch64::LDRXui:
-    return AArch64::LDRXroW;
-  case AArch64::STRBBui:
-    return AArch64::STRBBroW;
-  case AArch64::STRBui:
-    return AArch64::STRBroW;
-  case AArch64::STRDui:
-    return AArch64::STRDroW;
-  case AArch64::STRHHui:
-    return AArch64::STRHHroW;
-  case AArch64::STRHui:
-    return AArch64::STRHroW;
-  case AArch64::STRQui:
-    return AArch64::STRQroW;
-  case AArch64::STRSui:
-    return AArch64::STRSroW;
-  case AArch64::STRWui:
-    return AArch64::STRWroW;
-  case AArch64::STRXui:
-    return AArch64::STRXroW;
-  }
-  return AArch64::INSTRUCTION_LIST_END;
-}
-
-static unsigned convertPreToRoW(unsigned Op) {
-  switch (Op) {
-  case AArch64::LDRBBpre:
-    return AArch64::LDRBBroW;
-  case AArch64::LDRBpre:
-    return AArch64::LDRBroW;
-  case AArch64::LDRDpre:
-    return AArch64::LDRDroW;
-  case AArch64::LDRHHpre:
-    return AArch64::LDRHHroW;
-  case AArch64::LDRHpre:
-    return AArch64::LDRHroW;
-  case AArch64::LDRQpre:
-    return AArch64::LDRQroW;
-  case AArch64::LDRSBWpre:
-    return AArch64::LDRSBWroW;
-  case AArch64::LDRSBXpre:
-    return AArch64::LDRSBXroW;
-  case AArch64::LDRSHWpre:
-    return AArch64::LDRSHWroW;
-  case AArch64::LDRSHXpre:
-    return AArch64::LDRSHXroW;
-  case AArch64::LDRSWpre:
-    return AArch64::LDRSWroW;
-  case AArch64::LDRSpre:
-    return AArch64::LDRSroW;
-  case AArch64::LDRWpre:
-    return AArch64::LDRWroW;
-  case AArch64::LDRXpre:
-    return AArch64::LDRXroW;
-  case AArch64::STRBBpre:
-    return AArch64::STRBBroW;
-  case AArch64::STRBpre:
-    return AArch64::STRBroW;
-  case AArch64::STRDpre:
-    return AArch64::STRDroW;
-  case AArch64::STRHHpre:
-    return AArch64::STRHHroW;
-  case AArch64::STRHpre:
-    return AArch64::STRHroW;
-  case AArch64::STRQpre:
-    return AArch64::STRQroW;
-  case AArch64::STRSpre:
-    return AArch64::STRSroW;
-  case AArch64::STRWpre:
-    return AArch64::STRWroW;
-  case AArch64::STRXpre:
-    return AArch64::STRXroW;
-  }
-  return AArch64::INSTRUCTION_LIST_END;
-}
-
-static unsigned convertPostToRoW(unsigned Op) {
-  switch (Op) {
-  case AArch64::LDRBBpost:
-    return AArch64::LDRBBroW;
-  case AArch64::LDRBpost:
-    return AArch64::LDRBroW;
-  case AArch64::LDRDpost:
-    return AArch64::LDRDroW;
-  case AArch64::LDRHHpost:
-    return AArch64::LDRHHroW;
-  case AArch64::LDRHpost:
-    return AArch64::LDRHroW;
-  case AArch64::LDRQpost:
-    return AArch64::LDRQroW;
-  case AArch64::LDRSBWpost:
-    return AArch64::LDRSBWroW;
-  case AArch64::LDRSBXpost:
-    return AArch64::LDRSBXroW;
-  case AArch64::LDRSHWpost:
-    return AArch64::LDRSHWroW;
-  case AArch64::LDRSHXpost:
-    return AArch64::LDRSHXroW;
-  case AArch64::LDRSWpost:
-    return AArch64::LDRSWroW;
-  case AArch64::LDRSpost:
-    return AArch64::LDRSroW;
-  case AArch64::LDRWpost:
-    return AArch64::LDRWroW;
-  case AArch64::LDRXpost:
-    return AArch64::LDRXroW;
-  case AArch64::STRBBpost:
-    return AArch64::STRBBroW;
-  case AArch64::STRBpost:
-    return AArch64::STRBroW;
-  case AArch64::STRDpost:
-    return AArch64::STRDroW;
-  case AArch64::STRHHpost:
-    return AArch64::STRHHroW;
-  case AArch64::STRHpost:
-    return AArch64::STRHroW;
-  case AArch64::STRQpost:
-    return AArch64::STRQroW;
-  case AArch64::STRSpost:
-    return AArch64::STRSroW;
-  case AArch64::STRWpost:
-    return AArch64::STRWroW;
-  case AArch64::STRXpost:
-    return AArch64::STRXroW;
-  }
-  return AArch64::INSTRUCTION_LIST_END;
-}
-
-static bool canConvertToRoW(unsigned Op) {
-  unsigned Shift;
-  return convertUiToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
-         convertPreToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
-         convertPostToRoW(Op) != AArch64::INSTRUCTION_LIST_END ||
-         convertRoXToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END ||
-         convertRoWToRoW(Op, Shift) != AArch64::INSTRUCTION_LIST_END;
 }
 
 static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
