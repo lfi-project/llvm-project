@@ -181,6 +181,8 @@ namespace {
       Subtarget = &MF.getSubtarget<X86Subtarget>();
       IndirectTlsSegRefs = MF.getFunction().hasFnAttribute(
                              "indirect-tls-seg-refs");
+      if (Subtarget->getTargetTriple().isVendorLFI())
+        IndirectTlsSegRefs = true;
 
       // OptFor[Min]Size are used in pattern predicates that isel is matching.
       OptForMinSize = MF.getFunction().hasMinSize();

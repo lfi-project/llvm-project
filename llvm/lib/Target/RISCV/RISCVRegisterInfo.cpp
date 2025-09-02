@@ -51,9 +51,11 @@ static_assert(RISCV::F31_D == RISCV::F0_D + 31,
 static_assert(RISCV::V1 == RISCV::V0 + 1, "Register list not consecutive");
 static_assert(RISCV::V31 == RISCV::V0 + 31, "Register list not consecutive");
 
-RISCVRegisterInfo::RISCVRegisterInfo(unsigned HwMode)
+RISCVRegisterInfo::RISCVRegisterInfo(const Triple &TT, unsigned HwMode)
     : RISCVGenRegisterInfo(RISCV::X1, /*DwarfFlavour*/0, /*EHFlavor*/0,
-                           /*PC*/0, HwMode) {}
+                           /*PC*/0, HwMode) {
+  IsLFI = TT.isVendorLFI();
+}
 
 const MCPhysReg *
 RISCVRegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
@@ -111,6 +113,14 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     // Mark all the registers defined as constant in TableGen as reserved.
     if (isConstantPhysReg(Reg))
       markSuperRegs(Reserved, Reg);
+  }
+
+  if (IsLFI) {
+    markSuperRegs(Reserved, RISCV::X27_H); // s11
+    markSuperRegs(Reserved, RISCV::X26_H); // s10
+    markSuperRegs(Reserved, RISCV::X25_H); // s9
+    markSuperRegs(Reserved, RISCV::X24_H); // s8
+    markSuperRegs(Reserved, RISCV::X1_H);  // ra
   }
 
   // Use markSuperRegs to ensure any register aliases are also reserved
