@@ -31,6 +31,10 @@ private:
   ///
   bool IsWin64;
 
+  /// IsLFI - Is the target LFI
+  ///
+  bool IsLFI;
+
   /// SlotSize - Stack slot size in bytes.
   ///
   unsigned SlotSize;

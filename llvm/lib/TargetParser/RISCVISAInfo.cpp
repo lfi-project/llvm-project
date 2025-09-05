@@ -981,7 +981,8 @@ StringRef RISCVISAInfo::computeDefaultABI() const {
       return "lp64d";
     if (Exts.count("f"))
       return "lp64f";
-    return "lp64";
+    // HACK for LFI reassembler: lp64 -> lp64d
+    return "lp64d";
   }
   llvm_unreachable("Invalid XLEN");
 }

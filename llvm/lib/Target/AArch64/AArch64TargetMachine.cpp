@@ -369,6 +369,9 @@ AArch64TargetMachine::AArch64TargetMachine(const Target &T, const Triple &TT,
     this->Options.NoTrapAfterNoreturn = true;
   }
 
+  if (TT.isVendorLFI())
+    EnableCompressJumpTables = false;
+
   if (getMCAsmInfo()->usesWindowsCFI()) {
     // Unwinding can get confused if the last instruction in an
     // exception-handling region (function, funclet, try block, etc.)
