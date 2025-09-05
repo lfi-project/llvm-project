@@ -325,6 +325,8 @@ std::string riscv::getRISCVArch(const llvm::opt::ArgList &Args,
     else if (MABI.starts_with_insensitive("lp64")) {
       if (Triple.isAndroid())
         return "rv64imafdcv_zba_zbb_zbs";
+      if (Triple.isVendorLFI())
+        return "rv64imafdc_zba_zbb";
 
       return "rv64imafdc";
     }
@@ -345,6 +347,8 @@ std::string riscv::getRISCVArch(const llvm::opt::ArgList &Args,
       return "rv64imac";
     else if (Triple.isAndroid())
       return "rv64imafdcv_zba_zbb_zbs";
+    else if (Triple.isVendorLFI())
+      return "rv64imafdc_zba_zbb";
     else
       return "rv64imafdc";
   }
