@@ -149,6 +149,7 @@ public:
     AArch64SubArch_arm64ec,
 
     AArch64SubArch_lfi,
+    riscv64SubArch_lfi,
 
     KalimbaSubArch_v3,
     KalimbaSubArch_v4,
@@ -679,13 +680,19 @@ public:
   }
 
   bool isLFI() const {
-    return isAArch64LFI();
+    return isAArch64LFI() || isRISCV64LFI();
   }
 
   /// Checks if we're targeting the AArch64 LFI subarch.
   bool isAArch64LFI() const {
     return getArch() == Triple::aarch64 &&
            getSubArch() == Triple::AArch64SubArch_lfi;
+  }
+
+  /// Checks if we're targeting the RISC-V 64-bit LFI subarch.
+  bool isRISCV64LFI() const {
+    return getArch() == Triple::riscv64 &&
+          getSubArch() == Triple::riscv64SubArch_lfi;
   }
 
   bool isWindowsCoreCLREnvironment() const {
