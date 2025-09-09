@@ -115,6 +115,9 @@ StringRef Triple::getArchName(ArchType Kind, SubArchType SubArch) {
     if (SubArch == AArch64SubArch_lfi)
       return "aarch64_lfi";
     break;
+    if (SubArch == riscv64SubArch_lfi)
+      return "riscv64_lfi";
+    break;
   case Triple::spirv:
     switch (SubArch) {
     case Triple::SPIRVSubArch_v10:
@@ -578,6 +581,7 @@ static Triple::ArchType parseArch(StringRef ArchName) {
           .Case("arm64e", Triple::aarch64)
           .Case("arm64ec", Triple::aarch64)
           .Case("aarch64_lfi", Triple::aarch64)
+          .Case("riscv64_lfi", Triple::riscv64)
           .Case("arm", Triple::arm)
           .Case("armeb", Triple::armeb)
           .Case("thumb", Triple::thumb)
@@ -802,6 +806,9 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
 
   if (SubArchName == "aarch64_lfi")
     return Triple::AArch64SubArch_lfi;
+
+  if (SubArchName == "riscv64_lfi")
+    return Triple::riscv64SubArch_lfi;
 
   if (SubArchName.starts_with("spirv"))
     return StringSwitch<Triple::SubArchType>(SubArchName)
