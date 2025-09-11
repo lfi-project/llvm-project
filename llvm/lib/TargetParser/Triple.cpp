@@ -95,6 +95,10 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
 
 StringRef Triple::getArchName(ArchType Kind, SubArchType SubArch) {
   switch (Kind) {
+  case Triple::x86_64:
+    if (SubArch == X8664SubArch_lfi)
+      return "x86_64_lfi";
+    break;
   case Triple::mips:
     if (SubArch == MipsSubArch_r6)
       return "mipsisa32r6";
@@ -584,6 +588,7 @@ static Triple::ArchType parseArch(StringRef ArchName) {
                 // FIXME: Do we need to support these?
                 .Cases("i786", "i886", "i986", Triple::x86)
                 .Cases("amd64", "x86_64", "x86_64h", Triple::x86_64)
+                .Cases("amd64_lfi", "x86_64_lfi", Triple::x86_64)
                 .Cases("powerpc", "powerpcspe", "ppc", "ppc32", Triple::ppc)
                 .Cases("powerpcle", "ppcle", "ppc32le", Triple::ppcle)
                 .Cases("powerpc64", "ppu", "ppc64", Triple::ppc64)
@@ -832,6 +837,9 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
 
   if (SubArchName == "aarch64_lfi")
     return Triple::AArch64SubArch_lfi;
+
+  if (SubArchName == "x86_64_lfi")
+    return Triple::X8664SubArch_lfi;
 
   if (SubArchName.starts_with("spirv"))
     return StringSwitch<Triple::SubArchType>(SubArchName)

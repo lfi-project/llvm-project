@@ -172,6 +172,8 @@ public:
     SPIRVSubArch_v15,
     SPIRVSubArch_v16,
 
+    X8664SubArch_lfi,
+
     // DXIL sub-arch corresponds to its version.
     DXILSubArch_v1_0,
     DXILSubArch_v1_1,
@@ -700,13 +702,18 @@ public:
   }
 
   bool isLFI() const {
-    return isAArch64LFI();
+    return isAArch64LFI() || isX8664LFI();
   }
 
   /// Checks if we're targeting the AArch64 LFI subarch.
   bool isAArch64LFI() const {
     return getArch() == Triple::aarch64 &&
            getSubArch() == Triple::AArch64SubArch_lfi;
+  }
+
+  bool isX8664LFI() const {
+    return getArch() == Triple::x86_64 &&
+           getSubArch() == Triple::X8664SubArch_lfi;
   }
 
   bool isWindowsCoreCLREnvironment() const {

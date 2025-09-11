@@ -41,6 +41,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
+#include "llvm/MC/MCLFI.h"
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
@@ -942,6 +943,9 @@ void X86AsmPrinter::emitStartOfAsmFile(Module &M) {
         static_cast<X86TargetStreamer *>(OutStreamer->getTargetStreamer());
     XTS->emitCode16();
   }
+
+  if (TT.isLFI())
+    initializeLFIMCStreamer(*OutStreamer.get(), OutContext, TT);
 }
 
 static void
