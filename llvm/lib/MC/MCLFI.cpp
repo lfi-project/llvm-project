@@ -28,6 +28,7 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
   assert(TheTriple.isLFI());
   const char *NoteName;
   const char *NoteArch;
+  Align BundleAlign = Align(1);
   switch (TheTriple.getArch()) {
   case Triple::aarch64:
     NoteName = ".note.LFI.ABI.aarch64";
@@ -36,6 +37,7 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
   case Triple::x86_64:
     NoteName = ".note.LFI.ABI.x86_64";
     NoteArch = "x86_64";
+    BundleAlign = Align(32);
     break;
   default:
     report_fatal_error("Unsupported architecture for LFI");
@@ -52,6 +54,9 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
       std::unique_ptr<MCRegisterInfo>(
           TheTarget->createMCRegInfo(TheTriple.getTriple())),
       std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo()));
+
+  if (BundleAlign != Align(1))
+    Streamer.emitBundleAlignMode(BundleAlign);
 
   // Emit an ELF Note section in its own COMDAT group which identifies LFI
   // object files.
