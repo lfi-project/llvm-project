@@ -179,6 +179,8 @@ public:
     return Is64Bit && (!TargetTriple.isX32() && !TargetTriple.isOSNaCl());
   }
 
+  bool isLFI() const { return TargetTriple.isX8664LFI(); }
+
   PICStyles::Style getPICStyle() const { return PICStyle; }
   void setPICStyle(PICStyles::Style Style)  { PICStyle = Style; }
 

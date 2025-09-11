@@ -182,6 +182,10 @@ namespace {
       IndirectTlsSegRefs = MF.getFunction().hasFnAttribute(
                              "indirect-tls-seg-refs");
 
+      // Always enable IndirectTlsSegRefs for LFI.
+      if (Subtarget->isLFI())
+        IndirectTlsSegRefs = true;
+
       // OptFor[Min]Size are used in pattern predicates that isel is matching.
       OptForMinSize = MF.getFunction().hasMinSize();
       assert((!OptForMinSize || MF.getFunction().hasOptSize()) &&
