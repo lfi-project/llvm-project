@@ -9,7 +9,7 @@
 // This file implements the X86MCLFIExpander class, the X86 specific
 // subclass of MCLFIExpander.
 //
-// This file was written by the Native Client authors.
+// This file was written by the Native Client authors, modified for LFI.
 //
 //===----------------------------------------------------------------------===//
 #include "X86MCLFIExpander.h"
@@ -57,6 +57,25 @@ static MCRegister getReg32(MCRegister Reg) {
   case X86::RIP:
     llvm_unreachable("Trying to demote %rip");
   }
+}
+
+static bool isStringOperation(const MCInst &Inst) {
+  switch (Inst.getOpcode()) {
+  case X86::CMPSB:
+  case X86::CMPSW:
+  case X86::CMPSL:
+  case X86::CMPSQ:
+  case X86::MOVSB:
+  case X86::MOVSW:
+  case X86::MOVSL:
+  case X86::MOVSQ:
+  case X86::STOSB:
+  case X86::STOSW:
+  case X86::STOSL:
+  case X86::STOSQ:
+    return true;
+  }
+  return false;
 }
 
 bool X86::X86MCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
@@ -196,6 +215,35 @@ void X86::X86MCLFIExpander::expandLoadStore(const MCInst &Inst,
                                              MCStreamer &Out,
                                              const MCSubtargetInfo &STI,
                                              bool EmitPrefixes) {
+  emitInstruction(Inst, Out, STI, EmitPrefixes);
+}
+
+// Emits movl Reg32, Reg32
+// Used as a helper in various places.
+static void clearHighBits(const MCOperand &Reg, MCStreamer &Out,
+                          const MCSubtargetInfo &STI) {
+  MCInst Mov;
+  Mov.setOpcode(X86::MOV32rr);
+  MCOperand Op = MCOperand::createReg(getReg32(Reg.getReg()));
+
+  Mov.addOperand(Op);
+  Mov.addOperand(Op);
+  Out.emitInstruction(Mov, STI);
+}
+
+static void fixupStringOpReg(const MCOperand &Op, MCStreamer &Out,
+                             const MCSubtargetInfo &STI) {
+  clearHighBits(Op, Out, STI);
+
+  MCInst Lea;
+  Lea.setOpcode(X86::LEA64r);
+  Lea.addOperand(MCOperand::createReg(getReg64(Op.getReg())));
+  Lea.addOperand(MCOperand::createReg(LFIBaseReg));
+  Lea.addOperand(MCOperand::createImm(1));
+  Lea.addOperand(MCOperand::createReg(getReg64(Op.getReg())));
+  Lea.addOperand(MCOperand::createImm(0));
+  Lea.addOperand(MCOperand::createReg(0));
+  Out.emitInstruction(Lea, STI);
 }
 
 void X86::X86MCLFIExpander::expandStringOperation(
@@ -203,16 +251,33 @@ void X86::X86MCLFIExpander::expandStringOperation(
     MCStreamer &Out,
     const MCSubtargetInfo &STI,
     bool EmitPrefixes) {
+  Out.emitBundleLock(false);
+  switch (Inst.getOpcode()) {
+  case X86::CMPSB:
+  case X86::CMPSW:
+  case X86::CMPSL:
+  case X86::CMPSQ:
+  case X86::MOVSB:
+  case X86::MOVSW:
+  case X86::MOVSL:
+  case X86::MOVSQ:
+    fixupStringOpReg(Inst.getOperand(1), Out, STI);
+    fixupStringOpReg(Inst.getOperand(0), Out, STI);
+    break;
+  case X86::STOSB:
+  case X86::STOSW:
+  case X86::STOSL:
+  case X86::STOSQ:
+    fixupStringOpReg(Inst.getOperand(0), Out, STI);
+    break;
+  }
+  emitInstruction(Inst, Out, STI, EmitPrefixes);
+  Out.emitBundleUnlock();
 }
 
 void X86::X86MCLFIExpander::expandExplicitStackManipulation(
     MCRegister StackReg, const MCInst &Inst, MCStreamer &Out,
     const MCSubtargetInfo &STI, bool EmitPrefixes) {
-}
-
-void X86::X86MCLFIExpander::expandStackRegPush(const MCInst &Inst,
-                                                MCStreamer &Out,
-                                                const MCSubtargetInfo &STI) {
 }
 
 // Returns true if Inst is an X86 prefix
@@ -252,6 +317,30 @@ void X86::X86MCLFIExpander::emitInstruction(const MCInst &Inst,
   Out.emitInstruction(Inst, STI);
 }
 
+// returns the stack register that is used in xchg instruction
+static MCRegister xchgStackReg(const MCInst &Inst) {
+  MCRegister Reg1 = 0, Reg2 = 0;
+  switch (Inst.getOpcode()) {
+  case X86::XCHG64ar:
+  case X86::XCHG64rm:
+    Reg1 = Inst.getOperand(0).getReg();
+    break;
+  case X86::XCHG64rr:
+    Reg1 = Inst.getOperand(0).getReg();
+    Reg2 = Inst.getOperand(2).getReg();
+    break;
+  default:
+    return 0;
+  }
+  if (Reg1 == X86::RSP)
+    return Reg1;
+
+  if (Reg2 == X86::RSP)
+    return Reg2;
+
+  return 0;
+}
+
 void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst,
                                           MCStreamer &Out,
                                           const MCSubtargetInfo &STI,
@@ -265,8 +354,15 @@ void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst,
     expandIndirectBranch(Inst, Out, STI);
   } else if (isReturn(Inst)) {
     expandReturn(Inst, Out, STI);
+  } else if (isStringOperation(Inst)) {
+    expandStringOperation(Inst, Out, STI, EmitPrefixes);
+  } else if (explicitlyModifiesRegister(Inst, X86::RSP)) {
+    expandExplicitStackManipulation(X86::RSP, Inst, Out, STI, EmitPrefixes);
+  } else if (MCRegister StackReg = xchgStackReg(Inst)) {
+    // The previous case doesn't catch xchg so special case it.
+    expandExplicitStackManipulation(X86::RSP, Inst, Out, STI, EmitPrefixes);
   } else {
-    emitInstruction(Inst, Out, STI, EmitPrefixes);
+    expandLoadStore(Inst, Out, STI, EmitPrefixes);
   }
 }
 
