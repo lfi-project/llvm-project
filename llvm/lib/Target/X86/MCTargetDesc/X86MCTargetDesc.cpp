@@ -16,6 +16,7 @@
 #include "X86BaseInfo.h"
 #include "X86IntelInstPrinter.h"
 #include "X86MCAsmInfo.h"
+#include "X86MCLFIExpander.h"
 #include "X86TargetStreamer.h"
 #include "llvm-c/Visibility.h"
 #include "llvm/ADT/APInt.h"
@@ -708,6 +709,14 @@ static MCInstrAnalysis *createX86MCInstrAnalysis(const MCInstrInfo *Info) {
   return new X86_MC::X86MCInstrAnalysis(Info);
 }
 
+static MCLFIExpander *createX86_64MCLFIExpander(MCStreamer &S, std::unique_ptr<MCRegisterInfo> &&RegInfo, std::unique_ptr<MCInstrInfo> &&InstInfo) {
+  auto *Exp =
+      new X86::X86MCLFIExpander(S.getContext(), std::move(RegInfo),
+                                std::move(InstInfo));
+  S.setLFIExpander(Exp);
+  return Exp;
+}
+
 // Force static initialization.
 extern "C" LLVM_C_ABI void LLVMInitializeX86TargetMC() {
   for (Target *T : {&getTheX86_32Target(), &getTheX86_64Target()}) {
@@ -755,6 +764,9 @@ extern "C" LLVM_C_ABI void LLVMInitializeX86TargetMC() {
                                        createX86_32AsmBackend);
   TargetRegistry::RegisterMCAsmBackend(getTheX86_64Target(),
                                        createX86_64AsmBackend);
+
+  TargetRegistry::RegisterMCLFIExpander(getTheX86_64Target(),
+                                        createX86_64MCLFIExpander);
 }
 
 MCRegister llvm::getX86SubSuperRegister(MCRegister Reg, unsigned Size,
