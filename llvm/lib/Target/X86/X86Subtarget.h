@@ -175,6 +175,8 @@ public:
   /// Is this x86_64 with the LP64 programming model (standard AMD64, no x32)?
   bool isTarget64BitLP64() const { return Is64Bit && !IsX32; }
 
+  bool isLFI() const { return TargetTriple.isX8664LFI(); }
+
   PICStyles::Style getPICStyle() const { return PICStyle; }
   void setPICStyle(PICStyles::Style Style)  { PICStyle = Style; }
 

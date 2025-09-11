@@ -508,6 +508,13 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   // Set the SIMD floating point control register as reserved.
   Reserved.set(X86::MXCSR);
 
+  if (MF.getSubtarget<X86Subtarget>().isLFI()) {
+    for (const MCPhysReg &SubReg : subregs_inclusive(X86::R11)) // scratch
+      Reserved.set(SubReg);
+    for (const MCPhysReg &SubReg : subregs_inclusive(X86::R14)) // base
+      Reserved.set(SubReg);
+  }
+
   // Set the stack-pointer register and its aliases as reserved.
   for (const MCPhysReg &SubReg : subregs_inclusive(X86::RSP))
     Reserved.set(SubReg);
