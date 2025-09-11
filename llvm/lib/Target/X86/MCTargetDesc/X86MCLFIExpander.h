@@ -67,10 +67,6 @@ private:
                                        const MCSubtargetInfo &STI,
                                        bool EmitPrefixes);
 
-  void expandStackRegPush(const MCInst &Inst,
-                          MCStreamer &Out,
-                          const MCSubtargetInfo &STI);
-
   void emitSandboxMemOp(MCInst &Inst, int MemIdx, MCRegister ScratchReg,
                         MCStreamer &Out, const MCSubtargetInfo &STI);
 
