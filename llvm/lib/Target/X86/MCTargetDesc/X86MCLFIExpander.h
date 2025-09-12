@@ -53,6 +53,9 @@ private:
   void expandReturn(const MCInst &Inst, MCStreamer &Out,
                     const MCSubtargetInfo &STI);
 
+  void expandSyscall(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI);
+
   void expandLoadStore(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI, bool EmitPrefixes);
 
@@ -82,6 +85,15 @@ private:
                            const MCSubtargetInfo &STI);
   void emitIndirectCallReg(MCRegister Reg, MCStreamer &Out,
                            const MCSubtargetInfo &STI);
+
+  enum LFICallType {
+    LFISyscall,
+    LFITLSRead,
+    LFITLSWrite,
+  };
+
+  void emitLFICall(LFICallType CallType, MCStreamer &Out,
+                   const MCSubtargetInfo &STI);
 };
 }
 }
