@@ -768,6 +768,22 @@ def TuningBranchHint: SubtargetFeature<"branch-hint", "HasBranchHint", "true",
                                         "Target has branch hint feature">;
 
 //===----------------------------------------------------------------------===//
+// LFI Subtarget Features
+//===----------------------------------------------------------------------===//
+
+def FeatureLFIStores : SubtargetFeature<"lfi-stores", "LFIStores", "true",
+                                        "Isolate only store+jump instructions">;
+
+def FeatureLFIJumps : SubtargetFeature<"lfi-jumps", "LFIJumps", "true",
+                                       "Isolate only jump instructions">;
+
+def FeatureLFITLSReg : SubtargetFeature<"lfi-tls-reg", "LFITLSReg", "true",
+                                        "Reserve a register for thread-local LFI data">;
+
+def FeatureLFINoSegue : SubtargetFeature<"lfi-no-segue", "LFINoSegue", "true",
+                                         "Do not use segmentation register for LFI">;
+
+//===----------------------------------------------------------------------===//
 // X86 CPU Families
 // TODO: Remove these - use general tuning features to determine codegen.
 //===----------------------------------------------------------------------===//

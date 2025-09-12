@@ -12,7 +12,7 @@ callq *%rax
 // CHECK-NEXT: .bundle_unlock
 
 callq *(%rax)
-// CHECK:      movq (%rax), %r11
+// CHECK:      movq %gs:(%eax), %r11
 // CHECK-NEXT: .bundle_lock
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: addq %r14, %r11
@@ -28,7 +28,7 @@ jmpq *%rax
 // CHECK-NEXT: .bundle_unlock
 
 jmpq *(%rax)
-// CHECK:      movq (%rax), %r11
+// CHECK:      movq %gs:(%eax), %r11
 // CHECK-NEXT: .bundle_lock
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: addq %r14, %r11
