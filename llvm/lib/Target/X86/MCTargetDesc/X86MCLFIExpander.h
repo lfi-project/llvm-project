@@ -56,6 +56,9 @@ private:
   void expandSyscall(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
 
+  void expandTLSRead(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI);
+
   void expandLoadStore(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI, bool EmitPrefixes);
 
