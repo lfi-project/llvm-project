@@ -30,11 +30,12 @@ namespace X86 {
 class X86MCLFIExpander : public MCLFIExpander {
 public:
   X86MCLFIExpander(MCContext &Ctx, std::unique_ptr<MCRegisterInfo> &&RI,
-                    std::unique_ptr<MCInstrInfo> &&II)
+                   std::unique_ptr<MCInstrInfo> &&II)
       : MCLFIExpander(Ctx, std::move(RI), std::move(II)) {}
 
   bool expandInst(const MCInst &Inst, MCStreamer &Out,
                   const MCSubtargetInfo &STI) override;
+
 protected:
   bool isValidScratchRegister(MCRegister Reg) const override;
 
@@ -63,7 +64,7 @@ private:
                        const MCSubtargetInfo &STI, bool EmitPrefixes);
 
   void expandStringOperation(const MCInst &Inst, MCStreamer &Out,
-           const MCSubtargetInfo &STI, bool EmitPrefixes);
+                             const MCSubtargetInfo &STI, bool EmitPrefixes);
 
   void doExpandInst(const MCInst &Inst, MCStreamer &Out,
                     const MCSubtargetInfo &STI, bool EmitPrefixes);
@@ -98,6 +99,6 @@ private:
   void emitLFICall(LFICallType CallType, MCStreamer &Out,
                    const MCSubtargetInfo &STI);
 };
-}
-}
+} // namespace X86
+} // namespace llvm
 #endif

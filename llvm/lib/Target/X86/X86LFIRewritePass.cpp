@@ -18,23 +18,21 @@
 using namespace llvm;
 
 namespace {
-  class X86LFIRewritePass : public MachineFunctionPass {
-  public:
-    static char ID;
-    X86LFIRewritePass() : MachineFunctionPass(ID) {}
+class X86LFIRewritePass : public MachineFunctionPass {
+public:
+  static char ID;
+  X86LFIRewritePass() : MachineFunctionPass(ID) {}
 
-    virtual bool runOnMachineFunction(MachineFunction &Fn) override;
+  virtual bool runOnMachineFunction(MachineFunction &Fn) override;
 
-    virtual StringRef getPassName() const override {
-      return "LFI Rewrites";
-    }
+  virtual StringRef getPassName() const override { return "LFI Rewrites"; }
 
-  private:
-    const TargetInstrInfo *TII;
-    const X86Subtarget *Subtarget;
-  };
+private:
+  const TargetInstrInfo *TII;
+  const X86Subtarget *Subtarget;
+};
 
-  char X86LFIRewritePass::ID = 0;
+char X86LFIRewritePass::ID = 0;
 } // namespace
 
 bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
@@ -55,7 +53,5 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
 
 /// createX86LFIRewritePassPass - returns an instance of the pass.
 namespace llvm {
-  FunctionPass* createX86LFIRewritePass() {
-    return new X86LFIRewritePass();
-  }
+FunctionPass *createX86LFIRewritePass() { return new X86LFIRewritePass(); }
 } // namespace llvm

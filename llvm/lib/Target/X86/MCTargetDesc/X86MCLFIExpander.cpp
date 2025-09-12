@@ -21,8 +21,8 @@
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCLFIExpander.h"
-#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/CommandLine.h"
@@ -83,14 +83,15 @@ bool X86::X86MCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
 }
 
 void X86::X86MCLFIExpander::expandDirectCall(const MCInst &Inst,
-                                              MCStreamer &Out,
-                                              const MCSubtargetInfo &STI) {
+                                             MCStreamer &Out,
+                                             const MCSubtargetInfo &STI) {
   Out.emitInstruction(Inst, STI);
   Out.emitCodeAlignment(Align(BundleSize), &STI);
 }
 
-void X86::X86MCLFIExpander::emitSandboxBranchReg(MCRegister Reg, MCStreamer &Out,
-                                                  const MCSubtargetInfo &STI) {
+void X86::X86MCLFIExpander::emitSandboxBranchReg(MCRegister Reg,
+                                                 MCStreamer &Out,
+                                                 const MCSubtargetInfo &STI) {
 
   MCInst AndInst;
   AndInst.setOpcode(X86::AND32ri8);
@@ -112,7 +113,7 @@ void X86::X86MCLFIExpander::emitSandboxBranchReg(MCRegister Reg, MCStreamer &Out
 }
 
 void X86::X86MCLFIExpander::emitIndirectJumpReg(MCRegister Reg, MCStreamer &Out,
-                                                 const MCSubtargetInfo &STI) {
+                                                const MCSubtargetInfo &STI) {
   Out.emitBundleLock(false);
   emitSandboxBranchReg(Reg, Out, STI);
 
@@ -126,7 +127,7 @@ void X86::X86MCLFIExpander::emitIndirectJumpReg(MCRegister Reg, MCStreamer &Out,
 }
 
 void X86::X86MCLFIExpander::emitIndirectCallReg(MCRegister Reg, MCStreamer &Out,
-                                                 const MCSubtargetInfo &STI) {
+                                                const MCSubtargetInfo &STI) {
   MCOperand Target = MCOperand::createReg(getReg64(Reg));
 
   Out.emitBundleLock(false);
@@ -140,8 +141,8 @@ void X86::X86MCLFIExpander::emitIndirectCallReg(MCRegister Reg, MCStreamer &Out,
 }
 
 void X86::X86MCLFIExpander::expandIndirectBranch(const MCInst &Inst,
-                                                  MCStreamer &Out,
-                                                  const MCSubtargetInfo &STI) {
+                                                 MCStreamer &Out,
+                                                 const MCSubtargetInfo &STI) {
   MCRegister Target;
   if (mayLoad(Inst)) {
     // indirect jmp/call through memory
@@ -167,16 +168,13 @@ void X86::X86MCLFIExpander::expandIndirectBranch(const MCInst &Inst,
     emitIndirectJumpReg(Target, Out, STI);
 }
 
-static bool isValidReturnRegister(const MCRegister& Reg) {
-  return Reg == X86::EAX ||
-         Reg == X86::RAX ||
-         Reg == X86::AL ||
-         Reg == X86::AX ||
-         Reg == X86::XMM0;
+static bool isValidReturnRegister(const MCRegister &Reg) {
+  return Reg == X86::EAX || Reg == X86::RAX || Reg == X86::AL ||
+         Reg == X86::AX || Reg == X86::XMM0;
 }
 
 void X86::X86MCLFIExpander::expandReturn(const MCInst &Inst, MCStreamer &Out,
-                                          const MCSubtargetInfo &STI) {
+                                         const MCSubtargetInfo &STI) {
   MCRegister ScratchReg = X86::R11;
 
   MCInst Pop;
@@ -211,10 +209,9 @@ void X86::X86MCLFIExpander::expandReturn(const MCInst &Inst, MCStreamer &Out,
 
 // Expands any operations that load to or store from memory, but do
 // not explicitly modify the stack or base pointer.
-void X86::X86MCLFIExpander::expandLoadStore(const MCInst &Inst,
-                                             MCStreamer &Out,
-                                             const MCSubtargetInfo &STI,
-                                             bool EmitPrefixes) {
+void X86::X86MCLFIExpander::expandLoadStore(const MCInst &Inst, MCStreamer &Out,
+                                            const MCSubtargetInfo &STI,
+                                            bool EmitPrefixes) {
   emitInstruction(Inst, Out, STI, EmitPrefixes);
 }
 
@@ -246,11 +243,10 @@ static void fixupStringOpReg(const MCOperand &Op, MCStreamer &Out,
   Out.emitInstruction(Lea, STI);
 }
 
-void X86::X86MCLFIExpander::expandStringOperation(
-    const MCInst &Inst,
-    MCStreamer &Out,
-    const MCSubtargetInfo &STI,
-    bool EmitPrefixes) {
+void X86::X86MCLFIExpander::expandStringOperation(const MCInst &Inst,
+                                                  MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI,
+                                                  bool EmitPrefixes) {
   Out.emitBundleLock(false);
   switch (Inst.getOpcode()) {
   case X86::CMPSB:
@@ -286,7 +282,8 @@ static void demoteInst(MCInst &Inst, const MCInstrInfo &InstInfo) {
   unsigned NewOpc = demoteOpcode(Inst.getOpcode());
   Inst.setOpcode(NewOpc);
   // demote all general purpose 64 bit registers to 32 bits
-  const llvm::ArrayRef<llvm::MCOperandInfo> OpInfo = InstInfo.get(Inst.getOpcode()).operands();
+  const llvm::ArrayRef<llvm::MCOperandInfo> OpInfo =
+      InstInfo.get(Inst.getOpcode()).operands();
   for (int i = 0, e = Inst.getNumOperands(); i < e; ++i) {
     if (OpInfo[i].OperandType == MCOI::OPERAND_REGISTER) {
       assert(Inst.getOperand(i).isReg());
@@ -304,8 +301,7 @@ static void demoteInst(MCInst &Inst, const MCInstrInfo &InstInfo) {
 void X86::X86MCLFIExpander::emitSandboxMemOp(MCInst &Inst, int MemIdx,
                                              MCRegister ScratchReg,
                                              MCStreamer &Out,
-                                             const MCSubtargetInfo &STI) {
-}
+                                             const MCSubtargetInfo &STI) {}
 
 // Returns true if sandboxing the memory operand specified at Idx of
 // Inst will emit any auxillary instructions.
@@ -334,12 +330,13 @@ static bool willEmitSandboxInsts(const MCInst &Inst, int Idx) {
 // If EmitInstructions is set to false, this will not emit anything and return
 // whether it would emit any auxiliary instructions.
 bool X86::X86MCLFIExpander::emitSandboxMemOps(MCInst &Inst,
-                                               MCRegister ScratchReg,
-                                               MCStreamer &Out,
-                                               const MCSubtargetInfo &STI,
-                                               bool EmitInstructions) {
+                                              MCRegister ScratchReg,
+                                              MCStreamer &Out,
+                                              const MCSubtargetInfo &STI,
+                                              bool EmitInstructions) {
 
-  const llvm::ArrayRef<llvm::MCOperandInfo> OpInfo = InstInfo->get(Inst.getOpcode()).operands();
+  const llvm::ArrayRef<llvm::MCOperandInfo> OpInfo =
+      InstInfo->get(Inst.getOpcode()).operands();
 
   bool anyInstsEmitted = false;
 
@@ -419,10 +416,7 @@ void X86::X86MCLFIExpander::expandExplicitStackManipulation(
   else
     ScratchReg = 0;
 
-  bool MemSandboxed = emitSandboxMemOps(SandboxedInst,
-                                        ScratchReg,
-                                        Out,
-                                        STI,
+  bool MemSandboxed = emitSandboxMemOps(SandboxedInst, ScratchReg, Out, STI,
                                         /*emitInstructions=*/true);
 
   Out.emitBundleLock(false); // for stack fixup
@@ -450,20 +444,19 @@ static bool isPrefix(const MCInst &Inst) {
 
 static bool isDirectCall(const MCInst &Inst) {
   switch (Inst.getOpcode()) {
-    case X86::CALLpcrel32:
-    case X86::CALL64pcrel32:
-      return true;
-    default:
-      return false;
+  case X86::CALLpcrel32:
+  case X86::CALL64pcrel32:
+    return true;
+  default:
+    return false;
   }
 }
 
 // Emit prefixes + instruction if EmitPrefixes argument is true.
 // Otherwise, emit the bare instruction.
-void X86::X86MCLFIExpander::emitInstruction(const MCInst &Inst,
-                                             MCStreamer &Out,
-                                             const MCSubtargetInfo &STI,
-                                             bool EmitPrefixes) {
+void X86::X86MCLFIExpander::emitInstruction(const MCInst &Inst, MCStreamer &Out,
+                                            const MCSubtargetInfo &STI,
+                                            bool EmitPrefixes) {
   if (EmitPrefixes) {
     for (const MCInst &Prefix : Prefixes)
       Out.emitInstruction(Prefix, STI);
@@ -502,15 +495,14 @@ static bool isSyscall(const MCInst &Inst) {
 
 static bool isTLSRead(const MCInst &Inst) {
   return Inst.getOpcode() == X86::MOV64rm &&
-    Inst.getOperand(1).getReg() == X86::NoRegister &&
-    Inst.getOperand(2).getImm() == 1 &&
-    Inst.getOperand(3).getReg() == X86::NoRegister &&
-    Inst.getOperand(4).getImm() == 0 &&
-    Inst.getOperand(5).getReg() == X86::FS;
+         Inst.getOperand(1).getReg() == X86::NoRegister &&
+         Inst.getOperand(2).getImm() == 1 &&
+         Inst.getOperand(3).getReg() == X86::NoRegister &&
+         Inst.getOperand(4).getImm() == 0 &&
+         Inst.getOperand(5).getReg() == X86::FS;
 }
 
-void X86::X86MCLFIExpander::emitLFICall(LFICallType CallType,
-                                        MCStreamer &Out,
+void X86::X86MCLFIExpander::emitLFICall(LFICallType CallType, MCStreamer &Out,
                                         const MCSubtargetInfo &STI) {
   Out.emitBundleLock(false);
 
@@ -581,8 +573,7 @@ void X86::X86MCLFIExpander::expandTLSRead(const MCInst &Inst, MCStreamer &Out,
   }
 }
 
-void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst,
-                                         MCStreamer &Out,
+void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI,
                                          bool EmitPrefixes) {
   if (isPrefix(Inst)) {
@@ -620,7 +611,7 @@ void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst,
 }
 
 bool X86::X86MCLFIExpander::expandInst(const MCInst &Inst, MCStreamer &Out,
-                                        const MCSubtargetInfo &STI) {
+                                       const MCSubtargetInfo &STI) {
   if (Guard)
     return false;
   Guard = true;
@@ -756,9 +747,9 @@ static unsigned demoteOpcode(unsigned Opcode) {
   // two left since they were unified. The condition (above, equal, ...) used
   // to be part of the opcode, now it is encoded  differently as per
   // https://github.com/llvm/llvm-project/commit/e0bfeb5f24979416144c16e8b99204f5f163b889
-  // If there are errors, maybe the reason could be that here it is not sufficient
-  // to just lower the opcode, but the operation needs to be constructed
-  // in a more sophisticated way.
+  // If there are errors, maybe the reason could be that here it is not
+  // sufficient to just lower the opcode, but the operation needs to be
+  // constructed in a more sophisticated way.
   case X86::CMOV64rr:
     return X86::CMOV32rr;
   case X86::CMOV64rm:
