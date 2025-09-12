@@ -24,6 +24,7 @@
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
@@ -35,6 +36,16 @@ using namespace llvm;
 static const int BundleSize = 32;
 
 static const MCRegister LFIBaseReg = X86::R14;
+static const MCRegister LFIBaseSeg = X86::GS;
+
+static bool hasFeature(const FeatureBitset Feature,
+                       const MCSubtargetInfo &STI) {
+  return (STI.getFeatureBits() & Feature) == Feature;
+}
+
+static bool hasSegue(const MCSubtargetInfo &STI) {
+  return !hasFeature(FeatureBitset({X86::FeatureLFINoSegue}), STI);
+}
 
 static MCRegister getReg64(MCRegister Reg) {
   switch (Reg) {
@@ -173,6 +184,10 @@ static bool isValidReturnRegister(const MCRegister &Reg) {
          Reg == X86::AX || Reg == X86::XMM0;
 }
 
+static bool isHighReg(MCRegister Reg) {
+  return Reg == X86::AH || Reg == X86::BH || Reg == X86::CH || Reg == X86::DH;
+}
+
 void X86::X86MCLFIExpander::expandReturn(const MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI) {
   MCRegister ScratchReg = X86::R11;
@@ -212,7 +227,88 @@ void X86::X86MCLFIExpander::expandReturn(const MCInst &Inst, MCStreamer &Out,
 void X86::X86MCLFIExpander::expandLoadStore(const MCInst &Inst, MCStreamer &Out,
                                             const MCSubtargetInfo &STI,
                                             bool EmitPrefixes) {
-  emitInstruction(Inst, Out, STI, EmitPrefixes);
+  assert(!explicitlyModifiesRegister(Inst, X86::RSP));
+
+  // Optimize if we are doing a mov into a register
+  bool ElideScratchReg = false;
+  switch (Inst.getOpcode()) {
+  case X86::MOV64rm:
+  case X86::MOV32rm:
+  case X86::MOV16rm:
+  case X86::MOV8rm:
+    ElideScratchReg = true;
+    break;
+  default:
+    break;
+  }
+
+  MCInst SandboxedInst(Inst);
+
+  MCRegister ScratchReg;
+  if (ElideScratchReg)
+    ScratchReg = Inst.getOperand(0).getReg();
+  else if (numScratchRegs() > 0)
+    ScratchReg = getScratchReg(0);
+  else
+    ScratchReg = X86::R11D;
+
+  // Determine if the instruction requires sandboxing
+  bool InstNeedsSandboxing = emitSandboxMemOps(SandboxedInst,
+                                               ScratchReg,
+                                               Out,
+                                               STI,
+                                               /*EmitInstructions=*/false);
+
+  // We may want to load/store to a high byte register, which is not possible
+  // in combination with using Base for sandboxing.
+  // Instead, rotate the target register so that the load/store operates on the
+  // low byte instead.
+  MCRegister RotateRegister = X86::NoRegister;
+  if (InstNeedsSandboxing &&
+      (SandboxedInst.getOpcode() == X86::MOV8rm_NOREX ||
+       SandboxedInst.getOpcode() == X86::MOV8rm) &&
+      isHighReg(SandboxedInst.getOperand(0).getReg())) {
+    RotateRegister = SandboxedInst.getOperand(0).getReg();
+    SandboxedInst.setOpcode(X86::MOV8rm);
+    SandboxedInst.getOperand(0).setReg(
+        getX86SubSuperRegister(RotateRegister, 8, /*High=*/false));
+  } else if (InstNeedsSandboxing &&
+             (SandboxedInst.getOpcode() == X86::MOV8mr_NOREX ||
+              SandboxedInst.getOpcode() == X86::MOV8mr) &&
+             isHighReg(SandboxedInst.getOperand(5).getReg())) {
+    RotateRegister = SandboxedInst.getOperand(5).getReg();
+    SandboxedInst.setOpcode(X86::MOV8mr);
+    SandboxedInst.getOperand(5).setReg(
+        getX86SubSuperRegister(RotateRegister, 8, /*High=*/false));
+  }
+
+  if (RotateRegister != X86::NoRegister) {
+    MCInst RotateHtoLInst;
+    RotateHtoLInst.setOpcode(X86::ROR64ri);
+    RotateHtoLInst.addOperand(MCOperand::createReg(getReg64(RotateRegister)));
+    RotateHtoLInst.addOperand(MCOperand::createReg(getReg64(RotateRegister)));
+    RotateHtoLInst.addOperand(MCOperand::createImm(8));
+    Out.emitInstruction(RotateHtoLInst, STI);
+  }
+
+  bool BundleLock = emitSandboxMemOps(SandboxedInst,
+                                      ScratchReg,
+                                      Out,
+                                      STI,
+                                      /*EmitInstructions=*/true);
+  emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
+  if (BundleLock)
+    Out.emitBundleUnlock();
+
+  if (RotateRegister != X86::NoRegister) {
+    // Rotate the register back.
+    MCInst RotateLtoHInst;
+    RotateLtoHInst.setOpcode(X86::ROL64ri);
+    RotateLtoHInst.addOperand(MCOperand::createReg(getReg64(RotateRegister)));
+    RotateLtoHInst.addOperand(MCOperand::createReg(getReg64(RotateRegister)));
+    RotateLtoHInst.addOperand(MCOperand::createImm(8));
+    Out.emitInstruction(RotateLtoHInst, STI);
+  }
 }
 
 // Emits movl Reg32, Reg32
@@ -301,7 +397,115 @@ static void demoteInst(MCInst &Inst, const MCInstrInfo &InstInfo) {
 void X86::X86MCLFIExpander::emitSandboxMemOp(MCInst &Inst, int MemIdx,
                                              MCRegister ScratchReg,
                                              MCStreamer &Out,
-                                             const MCSubtargetInfo &STI) {}
+                                             const MCSubtargetInfo &STI) {
+  MCOperand &Base = Inst.getOperand(MemIdx);
+  MCOperand &Scale = Inst.getOperand(MemIdx + 1);
+  MCOperand &Index = Inst.getOperand(MemIdx + 2);
+  MCOperand &Offset = Inst.getOperand(MemIdx + 3);
+  MCOperand &Segment = Inst.getOperand(MemIdx + 4);
+
+  // In the cases below, we want to promote any registers in the
+  // memory operand to 64 bits.
+  if (isAbsoluteReg(Base.getReg()) && Index.getReg() == 0) {
+    Base.setReg(getReg64(Base.getReg()));
+    return;
+  }
+
+  if (Base.getReg() == 0 && isAbsoluteReg(Index.getReg()) &&
+             Scale.getImm() == 1) {
+    Base.setReg(getReg64(Index.getReg()));
+    Index.setReg(0);
+    return;
+  }
+
+  if (Index.getReg() == 0 && Base.getReg() == 0) {
+    Base.setReg(LFIBaseReg);
+    return;
+  }
+
+  if (hasSegue(STI) && Segment.getReg() == 0) {
+    Segment.setReg(LFIBaseSeg);
+    Base.setReg(getReg32(Base.getReg()));
+    Index.setReg(getReg32(Index.getReg()));
+    return;
+  }
+
+  MCRegister ScratchReg32 = 0;
+  if (ScratchReg != 0) {
+    ScratchReg32 = getReg32(ScratchReg);
+  } else {
+    Error(Inst,
+        "Not enough scratch registers when emitting sandboxed memory operation."
+    );
+  }
+
+  if (isAbsoluteReg(Base.getReg()) && !isAbsoluteReg(Index.getReg()) &&
+      Offset.isImm() && Offset.getImm() == 0) {
+    // Validation requires that for memory access, a 64-bit register is used,
+    // with its upper 32 bits clobbered by a 32-bit move just before.
+    // Move Index to 32 bit ScratchReg, and use ScratchReg32 instead of Index
+    // memory access.
+    MCInst MovIdxToScratchReg;
+    MovIdxToScratchReg.setOpcode(X86::MOV32rr);
+    MovIdxToScratchReg.addOperand(MCOperand::createReg(ScratchReg32));
+    MovIdxToScratchReg.addOperand(
+        MCOperand::createReg(getReg32(Index.getReg())));
+    Out.emitInstruction(MovIdxToScratchReg, STI);
+
+    Base.setReg(getReg64(Base.getReg()));
+    Index.setReg(getReg64(ScratchReg32));
+    return;
+  }
+
+  if (Index.getReg() == 0 && Base.getReg() != 0 && Offset.isImm() &&
+      Offset.getImm() == 0) {
+    // Validation requires that for memory access, a 64-bit register is used,
+    // with its upper 32 bits clobbered by a 32-bit move just before.
+    // Move Base to 32 bit ScratchReg, and use ScratchReg32 instead of Base for
+    // memory access.
+    MCInst MovBaseToScratchReg;
+    MovBaseToScratchReg.setOpcode(X86::MOV32rr);
+    MovBaseToScratchReg.addOperand(MCOperand::createReg(ScratchReg32));
+    MovBaseToScratchReg.addOperand(
+        MCOperand::createReg(getReg32(Base.getReg())));
+    Out.emitInstruction(MovBaseToScratchReg, STI);
+
+    Index.setReg(getReg64(ScratchReg32));
+    Base.setReg(LFIBaseReg);
+    return;
+  }
+
+  MCRegister ScratchReg64 = getReg64(ScratchReg32);
+  MCRegister BaseReg64 = getReg64(Base.getReg());
+  MCRegister IndexReg64 = getReg64(Index.getReg());
+
+  MCInst Lea;
+  Lea.setOpcode(X86::LEA64_32r);
+  Lea.addOperand(MCOperand::createReg(ScratchReg32));
+  Lea.addOperand(MCOperand::createReg(BaseReg64));
+  Lea.addOperand(Scale);
+  Lea.addOperand(MCOperand::createReg(IndexReg64));
+  Lea.addOperand(Offset);
+  Lea.addOperand(Segment);
+
+  // Specical case if there is no base or scale
+  if (Base.getReg() == 0 && Scale.getImm() == 1) {
+    Lea.getOperand(1).setReg(IndexReg64); // Base
+    Lea.getOperand(3).setReg(0);          // Index
+  }
+
+  Out.emitInstruction(Lea, STI);
+
+  Base.setReg(LFIBaseReg);
+  Scale.setImm(1);
+  Index.setReg(ScratchReg64);
+  if (Offset.isImm()) {
+    Offset.setImm(0);
+  } else {
+    Inst.erase(Inst.begin() + MemIdx + 3);
+    Inst.insert(Inst.begin() + MemIdx + 3, MCOperand::createImm(0));
+  }
+}
 
 // Returns true if sandboxing the memory operand specified at Idx of
 // Inst will emit any auxillary instructions.
@@ -346,8 +550,10 @@ bool X86::X86MCLFIExpander::emitSandboxMemOps(MCInst &Inst,
         if (!EmitInstructions)
           return true;
 
-        Out.emitBundleLock(false);
-        anyInstsEmitted = true;
+        if (!hasSegue(STI)) {
+          Out.emitBundleLock(false);
+          anyInstsEmitted = true;
+        }
       }
       emitSandboxMemOp(Inst, i, ScratchReg, Out, STI);
       i += 4;
@@ -380,7 +586,7 @@ void X86::X86MCLFIExpander::expandExplicitStackManipulation(
     // pop %r11
     // .bundle_lock
     // movl %r11d, %esp
-    // add %r15, %rsp
+    // add %r14, %rsp
     // .bundle_unlock
     // where %r11 is the scratch register, and %rsp the stack register.
 
@@ -397,12 +603,12 @@ void X86::X86MCLFIExpander::expandExplicitStackManipulation(
     MovR11ToESP.addOperand(MCOperand::createReg(X86::R11D));
     Out.emitInstruction(MovR11ToESP, STI);
 
-    MCInst AddR15Inst;
-    AddR15Inst.setOpcode(X86::ADD64rr);
-    AddR15Inst.addOperand(MCOperand::createReg(StackReg));
-    AddR15Inst.addOperand(MCOperand::createReg(StackReg));
-    AddR15Inst.addOperand(MCOperand::createReg(X86::R15));
-    Out.emitInstruction(AddR15Inst, STI);
+    MCInst AddBaseInst;
+    AddBaseInst.setOpcode(X86::ADD64rr);
+    AddBaseInst.addOperand(MCOperand::createReg(StackReg));
+    AddBaseInst.addOperand(MCOperand::createReg(StackReg));
+    AddBaseInst.addOperand(MCOperand::createReg(LFIBaseReg));
+    Out.emitInstruction(AddBaseInst, STI);
 
     return Out.emitBundleUnlock();
   }
