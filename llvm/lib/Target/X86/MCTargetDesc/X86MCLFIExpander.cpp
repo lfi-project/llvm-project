@@ -496,14 +496,69 @@ static MCRegister xchgStackReg(const MCInst &Inst) {
   return 0;
 }
 
+static bool isSyscall(const MCInst &Inst) {
+  return Inst.getOpcode() == X86::SYSCALL;
+}
+
+void X86::X86MCLFIExpander::emitLFICall(LFICallType CallType,
+                                        MCStreamer &Out,
+                                        const MCSubtargetInfo &STI) {
+  Out.emitBundleLock(false);
+
+  MCSymbol *Symbol = Ctx.createTempSymbol();
+
+  MCInst Lea;
+  Lea.setOpcode(X86::LEA64r);
+  Lea.addOperand(MCOperand::createReg(X86::R11));
+  Lea.addOperand(MCOperand::createReg(X86::RIP));
+  Lea.addOperand(MCOperand::createImm(1));
+  Lea.addOperand(MCOperand::createReg(X86::NoRegister));
+  Lea.addOperand(MCOperand::createExpr(MCSymbolRefExpr::create(Symbol, Ctx)));
+  Lea.addOperand(MCOperand::createReg(0));
+  Out.emitInstruction(Lea, STI);
+
+  unsigned Offset;
+  switch (CallType) {
+  case LFISyscall:
+    Offset = 0;
+    break;
+  case LFITLSRead:
+    Offset = 8;
+    break;
+  case LFITLSWrite:
+    Offset = 16;
+    break;
+  }
+
+  MCInst Jmp;
+  Jmp.setOpcode(X86::JMP64m);
+  Jmp.addOperand(MCOperand::createReg(LFIBaseReg));
+  Jmp.addOperand(MCOperand::createImm(1));
+  Jmp.addOperand(MCOperand::createReg(X86::NoRegister));
+  Jmp.addOperand(MCOperand::createImm(Offset));
+  Jmp.addOperand(MCOperand::createReg(0));
+  Out.emitInstruction(Jmp, STI);
+
+  Out.emitLabel(Symbol);
+
+  Out.emitBundleUnlock();
+}
+
+void X86::X86MCLFIExpander::expandSyscall(const MCInst &Inst, MCStreamer &Out,
+                                          const MCSubtargetInfo &STI) {
+  emitLFICall(LFISyscall, Out, STI);
+}
+
 void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst,
-                                          MCStreamer &Out,
-                                          const MCSubtargetInfo &STI,
-                                          bool EmitPrefixes) {
+                                         MCStreamer &Out,
+                                         const MCSubtargetInfo &STI,
+                                         bool EmitPrefixes) {
   if (isPrefix(Inst)) {
     return Prefixes.push_back(Inst);
   }
-  if (isDirectCall(Inst)) {
+  if (isSyscall(Inst)) {
+    expandSyscall(Inst, Out, STI);
+  } else if (isDirectCall(Inst)) {
     expandDirectCall(Inst, Out, STI);
   } else if (isIndirectBranch(Inst) || isCall(Inst)) {
     expandIndirectBranch(Inst, Out, STI);
