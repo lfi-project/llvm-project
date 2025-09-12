@@ -391,6 +391,48 @@ static void demoteInst(MCInst &Inst, const MCInstrInfo &InstInfo) {
   }
 }
 
+void X86::X86MCLFIExpander::prepareSandboxMemOp(MCInst &Inst, int MemIdx,
+                                             MCRegister ScratchReg,
+                                             MCStreamer &Out,
+                                             const MCSubtargetInfo &STI) {
+  MCOperand &Base = Inst.getOperand(MemIdx);
+  MCOperand &Index = Inst.getOperand(MemIdx + 2);
+  MCOperand &Segment = Inst.getOperand(MemIdx + 4);
+
+  if (Segment.getReg() == X86::FS) {
+    MCInst Push;
+    Push.setOpcode(X86::PUSH64r);
+    Push.addOperand(MCOperand::createReg(X86::RAX));
+    Out.emitInstruction(Push, STI);
+    MCInst Read;
+    Read.setOpcode(X86::MOV64rm);
+    Read.addOperand(MCOperand::createReg(X86::RAX));
+    Read.addOperand(Inst.getOperand(MemIdx));
+    Read.addOperand(Inst.getOperand(MemIdx + 1));
+    Read.addOperand(Inst.getOperand(MemIdx + 2));
+    Read.addOperand(Inst.getOperand(MemIdx + 3));
+    Read.addOperand(Inst.getOperand(MemIdx + 4));
+    expandTLSRead(Read, Out, STI);
+    MCInst Mov;
+    Mov.setOpcode(X86::MOV64rr);
+    Mov.addOperand(MCOperand::createReg(ScratchReg));
+    Mov.addOperand(MCOperand::createReg(X86::RAX));
+    Out.emitInstruction(Mov, STI);
+    MCInst Pop;
+    Pop.setOpcode(X86::POP64r);
+    Pop.addOperand(MCOperand::createReg(X86::RAX));
+    Out.emitInstruction(Pop, STI);
+    if (Base.getReg() == 0)
+      Base.setReg(ScratchReg);
+    else if (Index.getReg() == 0)
+      Index.setReg(ScratchReg);
+    else
+      return Out.getContext().reportError(
+          Inst.getLoc(), "invalid use of %fs segment register");
+    Segment.setReg(0);
+  }
+}
+
 // Emits the sandboxing operations necessary, and modifies the memory
 // operand specified by MemIdx.
 // Used as a helper function for emitSandboxMemOps.
@@ -546,6 +588,8 @@ bool X86::X86MCLFIExpander::emitSandboxMemOps(MCInst &Inst,
 
   for (int i = 0, e = Inst.getNumOperands(); i < e; ++i) {
     if (OpInfo[i].OperandType == MCOI::OPERAND_MEMORY) {
+      prepareSandboxMemOp(Inst, i, ScratchReg, Out, STI);
+
       if (!anyInstsEmitted && willEmitSandboxInsts(Inst, i)) {
         if (!EmitInstructions)
           return true;
@@ -806,9 +850,9 @@ void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
     for (int i = 0, e = Inst.getNumOperands(); i < e; ++i) {
       if (Inst.getOperand(i).isReg()) {
         MCRegister Reg = Inst.getOperand(i).getReg();
-        if (Reg == X86::FS || Reg == X86::GS)
+        if (Reg == X86::GS)
           return Out.getContext().reportError(
-              Inst.getLoc(), "invalid use of %fs or %gs segment register");
+              Inst.getLoc(), "invalid use of %gs segment register");
       }
     }
 
