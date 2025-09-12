@@ -74,6 +74,9 @@ private:
                                        const MCSubtargetInfo &STI,
                                        bool EmitPrefixes);
 
+  void prepareSandboxMemOp(MCInst &Inst, int MemIdx, MCRegister ScratchReg,
+                           MCStreamer &Out, const MCSubtargetInfo &STI);
+
   void emitSandboxMemOp(MCInst &Inst, int MemIdx, MCRegister ScratchReg,
                         MCStreamer &Out, const MCSubtargetInfo &STI);
 
