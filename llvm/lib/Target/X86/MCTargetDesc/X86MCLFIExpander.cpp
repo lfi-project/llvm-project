@@ -500,6 +500,15 @@ static bool isSyscall(const MCInst &Inst) {
   return Inst.getOpcode() == X86::SYSCALL;
 }
 
+static bool isTLSRead(const MCInst &Inst) {
+  return Inst.getOpcode() == X86::MOV64rm &&
+    Inst.getOperand(1).getReg() == X86::NoRegister &&
+    Inst.getOperand(2).getImm() == 1 &&
+    Inst.getOperand(3).getReg() == X86::NoRegister &&
+    Inst.getOperand(4).getImm() == 0 &&
+    Inst.getOperand(5).getReg() == X86::FS;
+}
+
 void X86::X86MCLFIExpander::emitLFICall(LFICallType CallType,
                                         MCStreamer &Out,
                                         const MCSubtargetInfo &STI) {
@@ -549,6 +558,29 @@ void X86::X86MCLFIExpander::expandSyscall(const MCInst &Inst, MCStreamer &Out,
   emitLFICall(LFISyscall, Out, STI);
 }
 
+void X86::X86MCLFIExpander::expandTLSRead(const MCInst &Inst, MCStreamer &Out,
+                                          const MCSubtargetInfo &STI) {
+  if (Inst.getOperand(0).getReg() != X86::RAX) {
+    MCInst Mov;
+    Mov.setOpcode(X86::MOV64rr);
+    Mov.addOperand(Inst.getOperand(0));
+    Mov.addOperand(MCOperand::createReg(X86::RAX));
+    Out.emitInstruction(Mov, STI);
+  }
+
+  emitLFICall(LFITLSRead, Out, STI);
+
+  if (Inst.getOperand(0).getReg() != X86::RAX) {
+    MCInst Xchg;
+    Xchg.setOpcode(X86::XCHG64rr);
+    Xchg.addOperand(Inst.getOperand(0));
+    Xchg.addOperand(MCOperand::createReg(X86::RAX));
+    Xchg.addOperand(Inst.getOperand(0));
+    Xchg.addOperand(MCOperand::createReg(X86::RAX));
+    Out.emitInstruction(Xchg, STI);
+  }
+}
+
 void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst,
                                          MCStreamer &Out,
                                          const MCSubtargetInfo &STI,
@@ -558,6 +590,8 @@ void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst,
   }
   if (isSyscall(Inst)) {
     expandSyscall(Inst, Out, STI);
+  } else if (isTLSRead(Inst)) {
+    expandTLSRead(Inst, Out, STI);
   } else if (isDirectCall(Inst)) {
     expandDirectCall(Inst, Out, STI);
   } else if (isIndirectBranch(Inst) || isCall(Inst)) {
@@ -572,6 +606,15 @@ void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst,
     // The previous case doesn't catch xchg so special case it.
     expandExplicitStackManipulation(X86::RSP, Inst, Out, STI, EmitPrefixes);
   } else {
+    for (int i = 0, e = Inst.getNumOperands(); i < e; ++i) {
+      if (Inst.getOperand(i).isReg()) {
+        MCRegister Reg = Inst.getOperand(i).getReg();
+        if (Reg == X86::FS || Reg == X86::GS)
+          return Out.getContext().reportError(
+              Inst.getLoc(), "invalid use of %fs or %gs segment register");
+      }
+    }
+
     expandLoadStore(Inst, Out, STI, EmitPrefixes);
   }
 }
