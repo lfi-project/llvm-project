@@ -30,10 +30,10 @@ class MCStreamer;
 class MCLFIExpander {
 private:
   SmallVector<MCRegister, 2> ScratchRegs;
-  MCContext &Ctx;
   bool Enabled = true;
 
 protected:
+  MCContext &Ctx;
   std::unique_ptr<MCInstrInfo> InstInfo;
   std::unique_ptr<MCRegisterInfo> RegInfo;
   void invalidateScratchRegs(const MCInst &Inst);
