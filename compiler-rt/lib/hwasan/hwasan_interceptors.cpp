@@ -409,7 +409,9 @@ InternalLongjmp(__hw_register_buf env, int retval) {
       "mov (1*8)(%0),%%rbp;"
       "mov (2*8)(%0),%%r12;"
       "mov (3*8)(%0),%%r13;"
+#ifndef __LFI__
       "mov (4*8)(%0),%%r14;"
+#endif
       "mov (5*8)(%0),%%r15;"
       "mov (6*8)(%0),%%rsp;"
       "mov (7*8)(%0),%%rdx;"
