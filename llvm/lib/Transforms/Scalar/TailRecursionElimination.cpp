@@ -79,6 +79,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include <cmath>
@@ -262,6 +263,11 @@ static bool markTails(Function &F, OptimizationRemarkEmitter *ORE) {
                       CI->hasOperandBundlesOtherThan(
                           {LLVMContext::OB_clang_arc_attachedcall,
                            LLVMContext::OB_ptrauth, LLVMContext::OB_kcfi});
+
+      // LFI: the CI->getNumOperands() >= 6 is needed because we reserve %r11
+      // on x86-64. See https://issuetracker.google.com/issues/42403689?pli=1
+      if (llvm::Triple(CI->getModule()->getTargetTriple()).isX8664LFI() && CI->getNumOperands() >= 6)
+        IsNoTail = true;
 
       if (!IsNoTail && CI->doesNotAccessMemory()) {
         // A call to a readnone function whose arguments are all things computed
