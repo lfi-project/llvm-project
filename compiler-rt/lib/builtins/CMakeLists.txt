@@ -670,6 +670,8 @@ endif()
 
 set(amdgcn_SOURCES ${GENERIC_SOURCES})
 
+set(x86_64_lfi_SOURCES ${x86_64_SOURCES})
+
 set(armv4t_SOURCES ${arm_min_SOURCES})
 set(armv5te_SOURCES ${arm_min_SOURCES})
 set(armv6_SOURCES ${arm_min_SOURCES})
