@@ -106,7 +106,9 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
   movq   88(%rdi), %r11
   movq   96(%rdi), %r12
   movq  104(%rdi), %r13
+#ifndef __LFI__
   movq  112(%rdi), %r14
+#endif
   movq  120(%rdi), %r15
   # skip rflags
   # skip cs
