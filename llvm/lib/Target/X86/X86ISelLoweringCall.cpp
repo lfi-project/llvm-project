@@ -2885,6 +2885,11 @@ bool X86TargetLowering::IsEligibleForTailCallOptimization(
     if (IsCalleeWin64 || IsCallerWin64)
       return false;
 
+    // Do not optimize vararg calls with 6 arguments for LFI because LFI
+    // reserves %r11.
+    if (Subtarget.isLFI() && ArgLocs.size() > 5)
+      return false;
+
     for (const auto &VA : ArgLocs)
       if (!VA.isRegLoc())
         return false;
