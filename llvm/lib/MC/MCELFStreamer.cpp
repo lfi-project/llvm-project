@@ -315,6 +315,67 @@ void MCELFStreamer::emitIdent(StringRef IdentString) {
   popSection();
 }
 
+void MCELFStreamer::emitBundleAlignMode(Align Alignment) {
+  assert(Log2(Alignment) <= 30 && "Invalid bundle alignment");
+  MCAssembler &Assembler = getAssembler();
+  if (!Assembler.getRelaxAll())
+    report_fatal_error(".bundle_align_mode requires `-mrelax-all`");
+
+  if (Alignment > 1 && (Assembler.getBundleAlignSize() == 0 ||
+                        Assembler.getBundleAlignSize() == Alignment.value()))
+    Assembler.setBundleAlignSize(Alignment.value());
+  else
+    report_fatal_error(".bundle_align_mode cannot be changed once set");
+}
+
+void MCELFStreamer::emitBundleLock(bool AlignToEnd, const MCSubtargetInfo &STI) {
+  MCSection &Sec = *getCurrentSectionOnly();
+  auto &Asm = getAssembler();
+
+  if (!Asm.isBundlingEnabled())
+    report_fatal_error(".bundle_lock forbidden when bundling is disabled");
+
+  // WARN: nested bundle?
+  // if (!isBundleLocked())
+  //   Sec.setBundleGroupBeforeFirstInst(true);
+
+  Sec.setBundleLockState(AlignToEnd ? MCSection::BundleLockedAlignToEnd
+                                    : MCSection::BundleLocked);
+
+  // MCFragment *CF = getCurrentFragment();
+
+  // CHECK: emitBundleUnlock does restart with an empty fragment, but not sure
+  // if there can be a series of non-bundled instructions that hasn't flushed.
+
+  // TODO: After we know we start with a fresh bundle, we can set the current fragment as FT_Align.
+  // This is safe because bundling requires getRelaxAll, i.e., no FT_Relaxable.
+  auto AlignBoundary = Asm.getBundleAlignSize();
+  emitCodeAlignment(Align(AlignBoundary), &STI, AlignBoundary);
+  BundleBA = newSpecialFragment<MCBoundaryAlignFragment>(Align(AlignBoundary), STI);
+}
+
+void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
+  MCSection &Sec = *getCurrentSectionOnly();
+
+  if (!getAssembler().isBundlingEnabled())
+    report_fatal_error(".bundle_unlock forbidden when bundling is disabled");
+  else if (!isBundleLocked())
+    report_fatal_error(".bundle_unlock without matching lock");
+  // else if (Sec.isBundleGroupBeforeFirstInst())
+  //   report_fatal_error("Empty bundle-locked group is forbidden");
+
+  Sec.setBundleLockState(MCSection::NotBundleLocked);
+
+  MCFragment *CF = getCurrentFragment();
+  BundleBA->setLastFragment(CF);
+  BundleBA = nullptr;
+
+  newFragment();
+
+  CF->getParent()->ensureMinAlignment(Align(getAssembler().getBundleAlignSize()));
+}
+
+
 void MCELFStreamer::finalizeCGProfileEntry(const MCSymbolRefExpr *Sym,
                                            uint64_t Offset,
                                            const MCSymbolRefExpr *&SRE) {

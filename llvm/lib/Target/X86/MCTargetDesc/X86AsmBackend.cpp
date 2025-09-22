@@ -457,6 +457,12 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
     return;
   }
 
+  // WARN: makes other backend-specific alignment incompatible
+  if (S.getAssembler().isBundlingEnabled()) {
+    S.MCObjectStreamer::emitInstruction(Inst, STI);
+    return;
+  }
+
   auto &Backend = static_cast<X86AsmBackend &>(S.getAssembler().getBackend());
   Backend.emitInstructionBegin(S, Inst, STI);
   S.MCObjectStreamer::emitInstruction(Inst, STI);
