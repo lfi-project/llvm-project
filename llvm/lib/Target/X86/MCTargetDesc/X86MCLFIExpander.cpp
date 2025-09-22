@@ -33,9 +33,14 @@ using namespace llvm;
 
 #define DEBUG_TYPE "lfi"
 
+static cl::opt<bool> X86LFIErrorReserved(
+    "x86-lfi-error-reserved", cl::Hidden, cl::init(false),
+    cl::desc("Produce errors for uses of LFI reserved registers"));
+
 static const int BundleSize = 32;
 
 static const MCRegister LFIBaseReg = X86::R14;
+static const MCRegister LFIScratchReg = X86::R11;
 static const MCRegister LFIBaseSeg = X86::GS;
 
 static bool hasFeature(const FeatureBitset Feature,
@@ -823,13 +828,36 @@ void X86::X86MCLFIExpander::expandTLSRead(const MCInst &Inst, MCStreamer &Out,
   }
 }
 
+static MCInst replaceReg(const MCInst &Inst, MCRegister Dest, MCRegister Src) {
+  MCInst New;
+  New.setOpcode(Inst.getOpcode());
+  New.setLoc(Inst.getLoc());
+  for (unsigned I = 0; I < Inst.getNumOperands(); ++I) {
+    const MCOperand &Op = Inst.getOperand(I);
+    if (Op.isReg() && Op.getReg() == Src) {
+      New.addOperand(MCOperand::createReg(Dest));
+    } else {
+      New.addOperand(Op);
+    }
+  }
+  return New;
+}
+
 void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI,
                                          bool EmitPrefixes) {
   if (isPrefix(Inst)) {
     return Prefixes.push_back(Inst);
   }
-  if (isSyscall(Inst)) {
+  if (explicitlyModifiesRegister(Inst, LFIBaseReg)) {
+    if (X86LFIErrorReserved)
+      return Out.getContext().reportError(
+          Inst.getLoc(), "illegal modification of reserved LFI register");
+    Out.getContext().reportWarning(
+        Inst.getLoc(), "deleting modification of reserved LFI register");
+    MCInst New = replaceReg(Inst, LFIScratchReg, LFIBaseReg);
+    return doExpandInst(New, Out, STI, EmitPrefixes);
+  } else if (isSyscall(Inst)) {
     expandSyscall(Inst, Out, STI);
   } else if (isTLSRead(Inst)) {
     expandTLSRead(Inst, Out, STI);
