@@ -16,6 +16,7 @@
 #include "RISCVMCAsmInfo.h"
 #include "RISCVMCObjectFileInfo.h"
 #include "RISCVTargetStreamer.h"
+include "RISCVMCLFIExpander.h"
 #include "TargetInfo/RISCVTargetInfo.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -342,6 +343,8 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTargetMC() {
     TargetRegistry::RegisterMCInstrInfo(*T, createRISCVMCInstrInfo);
     TargetRegistry::RegisterMCRegInfo(*T, createRISCVMCRegisterInfo);
     TargetRegistry::RegisterMCAsmBackend(*T, createRISCVAsmBackend);
+    TargetRegistry::RegisterMCLFIExpander(getTheRISCV_64Target(),
+                                        createRISCV_64MCLFIExpander);
     TargetRegistry::RegisterMCCodeEmitter(*T, createRISCVMCCodeEmitter);
     TargetRegistry::RegisterMCInstPrinter(*T, createRISCVMCInstPrinter);
     TargetRegistry::RegisterMCSubtargetInfo(*T, createRISCVMCSubtargetInfo);
@@ -356,4 +359,13 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTargetMC() {
     TargetRegistry::RegisterNullTargetStreamer(*T,
                                                createRISCVNullTargetStreamer);
   }
+}
+
+
+static MCLFIExpander *createRISCV_64MCLFIExpander(MCStreamer &S, std::unique_ptr<MCRegisterInfo> &&RegInfo, std::unique_ptr<MCInstrInfo> &&InstInfo) {
+  auto *Exp =
+      new RISCV::RISCVMCLFIExpander(S.getContext(), std::move(RegInfo),
+                                std::move(InstInfo));
+  S.setLFIExpander(Exp);
+  return Exp;
 }
