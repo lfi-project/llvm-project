@@ -38,6 +38,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/MC/MCLFI.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/RISCVISAInfo.h"
 #include "llvm/Transforms/Instrumentation/HWAddressSanitizer.h"
@@ -572,6 +573,10 @@ void RISCVAsmPrinter::emitStartOfAsmFile(Module &M) {
 
   if (TM.getTargetTriple().isOSBinFormatELF())
     emitAttributes(SubtargetInfo);
+
+  if (TT.isLFI())
+    initializeLFIMCStreamer(*OutStreamer.get(), OutContext, TT);
+  
 }
 
 void RISCVAsmPrinter::emitEndOfAsmFile(Module &M) {

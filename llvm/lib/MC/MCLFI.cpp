@@ -33,6 +33,10 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
     NoteName = ".note.LFI.ABI.aarch64";
     NoteArch = "aarch64";
     break;
+  case Triple::riscv64:
+    NoteName = ".note.LFI.ABI.riscv64";
+    NoteArch = "riscv64";
+    break;
   default:
     report_fatal_error("Unsupported architecture for LFI");
   }
