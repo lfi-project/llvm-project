@@ -873,9 +873,17 @@ void MCAssembler::relaxBoundaryAlign(MCBoundaryAlignFragment &BF) {
   }
 
   Align BoundaryAlignment = BF.getAlignment();
-  uint64_t NewSize = needPadding(AlignedOffset, AlignedSize, BoundaryAlignment)
-                         ? offsetToAlignment(AlignedOffset, BoundaryAlignment)
-                         : 0U;
+  uint64_t NewSize = 0;
+  if (isBundlingEnabled()) {
+    // for bundle alignment, we only pad instructions that cross the boundary.
+    NewSize = mayCrossBoundary(AlignedOffset, AlignedSize, BoundaryAlignment)
+                           ? offsetToAlignment(AlignedOffset, BoundaryAlignment)
+                           : 0U;
+  } else {
+    NewSize = needPadding(AlignedOffset, AlignedSize, BoundaryAlignment)
+                           ? offsetToAlignment(AlignedOffset, BoundaryAlignment)
+                           : 0U;
+  }
   if (NewSize == BF.getSize())
     return;
   BF.setSize(NewSize);
