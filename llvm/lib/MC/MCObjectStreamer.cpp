@@ -408,7 +408,8 @@ void MCObjectStreamer::emitInstruction(const MCInst &Inst,
   }
 
   // Otherwise, relax and emit it as data if RelaxAll is specified.
-  if (Assembler.getRelaxAll()) {
+  if (Assembler.getRelaxAll() ||
+      (Assembler.isBundlingEnabled() && Sec->isBundleLocked())) {
     MCInst Relaxed = Inst;
     while (Backend.mayNeedRelaxation(Relaxed.getOpcode(), Relaxed.getOperands(),
                                      STI))
