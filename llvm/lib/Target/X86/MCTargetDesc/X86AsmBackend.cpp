@@ -133,6 +133,8 @@ class X86AsmBackend : public MCAsmBackend {
   bool needAlign(const MCInst &Inst) const;
   bool canPadBranches(MCObjectStreamer &OS) const;
   bool canPadInst(const MCInst &Inst, MCObjectStreamer &OS) const;
+  void emitInstructionBeginBundle(MCObjectStreamer &OS);
+  void emitInstructionEndBundle(MCObjectStreamer &OS);
 
 public:
   X86AsmBackend(const Target &T, const MCSubtargetInfo &STI)
@@ -457,21 +459,56 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
     return;
   }
 
-  // WARN: makes other backend-specific alignment incompatible
-  if (S.getAssembler().isBundlingEnabled()) {
-    S.MCObjectStreamer::emitInstruction(Inst, STI);
-    return;
-  }
-
   auto &Backend = static_cast<X86AsmBackend &>(S.getAssembler().getBackend());
   Backend.emitInstructionBegin(S, Inst, STI);
   S.MCObjectStreamer::emitInstruction(Inst, STI);
   Backend.emitInstructionEnd(S, Inst);
 }
 
+void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS) {
+  // check if it is in bundle lock.
+  // if yes, let the OS emit instruction to the same fragment.
+  // if no, create PendingBA, which will be appended by emitInstructionEndBundle
+  assert(OS.getAssembler().isBundlingEnabled());
+  OS.getCurrentFragment()->setAllowAutoPadding(true);
+
+  if (OS.getCurrentSectionOnly()->isBundleLocked()) {
+    return;
+  }
+  PendingBA =
+        OS.newSpecialFragment<MCBoundaryAlignFragment>(Align(OS.getAssembler().getBundleAlignSize()), STI);
+}
+
+void X86AsmBackend::emitInstructionEndBundle(MCObjectStreamer &OS) {
+  // check if it is in bundle lock.
+  // if yes, check the current fragment is non-zero to ensure if other emit* append fragment correctly.
+  // if no, nothing to do. emitBundleUnlock will close the fragment and start a new empty fragment.
+  assert(OS.getAssembler().isBundlingEnabled());
+
+  MCFragment *CF = OS.getCurrentFragment();
+
+  if (OS.getCurrentSectionOnly()->isBundleLocked()) {
+    // we're still inside the lock, do not close the current fragment with BA.
+    assert(CF->getSize() != 0); // emitInstruction should've added an instruction.
+    return;
+  }
+  if (!PendingBA)
+    return;
+
+  // Tie the aligned instructions into a pending BoundaryAlign.
+  PendingBA->setLastFragment(CF);
+  PendingBA = nullptr;
+
+  // newSpecialFragment() always start a new fragment.
+  // OS.newFragment();
+  CF->getParent()->ensureMinAlignment(Align(OS.getAssembler().getBundleAlignSize()));
+}
+
 /// Insert BoundaryAlignFragment before instructions to align branches.
 void X86AsmBackend::emitInstructionBegin(MCObjectStreamer &OS,
                                          const MCInst &Inst, const MCSubtargetInfo &STI) {
+  if (OS.getAssembler().isBundlingEnabled())
+    return emitInstructionBeginBundle(OS);
   bool CanPadInst = canPadInst(Inst, OS);
   if (CanPadInst)
     OS.getCurrentFragment()->setAllowAutoPadding(true);
@@ -534,6 +571,8 @@ void X86AsmBackend::emitInstructionBegin(MCObjectStreamer &OS,
 /// Set the last fragment to be aligned for the BoundaryAlignFragment.
 void X86AsmBackend::emitInstructionEnd(MCObjectStreamer &OS,
                                        const MCInst &Inst) {
+  if (OS.getAssembler().isBundlingEnabled())
+    return emitInstructionEndBundle(OS);
   // Update PrevInstOpcode here, canPadInst() reads that.
   MCFragment *CF = OS.getCurrentFragment();
   PrevInstOpcode = Inst.getOpcode();
@@ -863,7 +902,7 @@ bool X86AsmBackend::finishLayout(const MCAssembler &Asm) const {
   // decode limited.  It is often better to reduce the number of instructions
   // (i.e. eliminate nops) even at the cost of increasing the size and
   // complexity of others.
-  if (!X86PadForAlign && !X86PadForBranchAlign)
+  if (!X86PadForAlign && !X86PadForBranchAlign && !Asm.isBundlingEnabled())
     return false;
 
   // The processed regions are delimitered by LabeledFragments. -g may have more

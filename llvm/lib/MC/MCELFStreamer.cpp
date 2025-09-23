@@ -318,8 +318,7 @@ void MCELFStreamer::emitIdent(StringRef IdentString) {
 void MCELFStreamer::emitBundleAlignMode(Align Alignment) {
   assert(Log2(Alignment) <= 30 && "Invalid bundle alignment");
   MCAssembler &Assembler = getAssembler();
-  if (!Assembler.getRelaxAll())
-    report_fatal_error(".bundle_align_mode requires `-mrelax-all`");
+  setAllowAutoPadding(true);
 
   if (Alignment > 1 && (Assembler.getBundleAlignSize() == 0 ||
                         Assembler.getBundleAlignSize() == Alignment.value()))
@@ -344,13 +343,14 @@ void MCELFStreamer::emitBundleLock(bool AlignToEnd, const MCSubtargetInfo &STI) 
 
   // MCFragment *CF = getCurrentFragment();
 
-  // CHECK: emitBundleUnlock does restart with an empty fragment, but not sure
-  // if there can be a series of non-bundled instructions that hasn't flushed.
+  // flush the previous insturctions if needed.
+  // NOTE: with bundling enabled, emitInstructionEndBundle always create new fragment,
+  // so this if condition might never be true.
+  // if (getCurrentFragment()->getSize() != 0) {
+  //   newFragment();
+  // }
 
-  // TODO: After we know we start with a fresh bundle, we can set the current fragment as FT_Align.
-  // This is safe because bundling requires getRelaxAll, i.e., no FT_Relaxable.
   auto AlignBoundary = Asm.getBundleAlignSize();
-  emitCodeAlignment(Align(AlignBoundary), &STI, AlignBoundary);
   BundleBA = newSpecialFragment<MCBoundaryAlignFragment>(Align(AlignBoundary), STI);
 }
 
