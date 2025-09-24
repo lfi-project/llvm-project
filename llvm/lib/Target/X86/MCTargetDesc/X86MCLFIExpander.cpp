@@ -101,8 +101,9 @@ bool X86::X86MCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
 void X86::X86MCLFIExpander::expandDirectCall(const MCInst &Inst,
                                              MCStreamer &Out,
                                              const MCSubtargetInfo &STI) {
+  Out.emitBundleLock(true, STI);
   Out.emitInstruction(Inst, STI);
-  Out.emitCodeAlignment(Align(BundleSize), &STI);
+  Out.emitBundleUnlock(STI);
 }
 
 void X86::X86MCLFIExpander::emitSandboxBranchReg(MCRegister Reg,
@@ -146,14 +147,13 @@ void X86::X86MCLFIExpander::emitIndirectCallReg(MCRegister Reg, MCStreamer &Out,
                                                 const MCSubtargetInfo &STI) {
   MCOperand Target = MCOperand::createReg(getReg64(Reg));
 
-  Out.emitBundleLock(false, STI);
+  Out.emitBundleLock(true, STI);
   emitSandboxBranchReg(Reg, Out, STI);
   MCInst Call;
   Call.setOpcode(X86::CALL64r);
   Call.addOperand(Target);
   Out.emitInstruction(Call, STI);
   Out.emitBundleUnlock(STI);
-  Out.emitCodeAlignment(Align(BundleSize), &STI);
 }
 
 void X86::X86MCLFIExpander::expandIndirectBranch(const MCInst &Inst,
