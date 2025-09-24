@@ -888,6 +888,9 @@ void MCAssembler::relaxBoundaryAlign(MCBoundaryAlignFragment &BF) {
     NewSize = mayCrossBoundary(AlignedOffset, AlignedSize, BoundaryAlignment)
                            ? offsetToAlignment(AlignedOffset, BoundaryAlignment)
                            : 0U;
+    if (BF.isAlignToEnd()) {
+      NewSize = offsetToAlignment(AlignedOffset + AlignedSize, BoundaryAlignment);
+    }
   } else {
     NewSize = needPadding(AlignedOffset, AlignedSize, BoundaryAlignment)
                            ? offsetToAlignment(AlignedOffset, BoundaryAlignment)

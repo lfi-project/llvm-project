@@ -492,16 +492,20 @@ class MCBoundaryAlignFragment : public MCFragment {
 
   /// When emitting Nops some subtargets have specific nop encodings.
   const MCSubtargetInfo &STI;
+  bool AlignToEnd : 1;
 
 public:
   MCBoundaryAlignFragment(Align AlignBoundary, const MCSubtargetInfo &STI)
-      : MCFragment(FT_BoundaryAlign), AlignBoundary(AlignBoundary), STI(STI) {}
+      : MCFragment(FT_BoundaryAlign), AlignBoundary(AlignBoundary), STI(STI), AlignToEnd(false) {}
 
   uint64_t getSize() const { return Size; }
   void setSize(uint64_t Value) { Size = Value; }
 
   Align getAlignment() const { return AlignBoundary; }
   void setAlignment(Align Value) { AlignBoundary = Value; }
+
+  bool isAlignToEnd() const { return AlignToEnd; }
+  void setAlignToEnd(bool Value) { AlignToEnd = Value; }
 
   const MCFragment *getLastFragment() const { return LastFragment; }
   void setLastFragment(const MCFragment *F) {

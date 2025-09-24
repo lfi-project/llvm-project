@@ -352,6 +352,7 @@ void MCELFStreamer::emitBundleLock(bool AlignToEnd, const MCSubtargetInfo &STI) 
 
   auto AlignBoundary = Asm.getBundleAlignSize();
   BundleBA = newSpecialFragment<MCBoundaryAlignFragment>(Align(AlignBoundary), STI);
+  BundleBA->setAlignToEnd(AlignToEnd);
 }
 
 void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
