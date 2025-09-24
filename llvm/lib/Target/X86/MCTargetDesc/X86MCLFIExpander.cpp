@@ -130,7 +130,7 @@ void X86::X86MCLFIExpander::emitSandboxBranchReg(MCRegister Reg,
 
 void X86::X86MCLFIExpander::emitIndirectJumpReg(MCRegister Reg, MCStreamer &Out,
                                                 const MCSubtargetInfo &STI) {
-  Out.emitBundleLock(false);
+  Out.emitBundleLock(false, STI);
   emitSandboxBranchReg(Reg, Out, STI);
 
   MCInst Jmp;
@@ -139,20 +139,20 @@ void X86::X86MCLFIExpander::emitIndirectJumpReg(MCRegister Reg, MCStreamer &Out,
   Jmp.addOperand(Target);
 
   Out.emitInstruction(Jmp, STI);
-  Out.emitBundleUnlock();
+  Out.emitBundleUnlock(STI);
 }
 
 void X86::X86MCLFIExpander::emitIndirectCallReg(MCRegister Reg, MCStreamer &Out,
                                                 const MCSubtargetInfo &STI) {
   MCOperand Target = MCOperand::createReg(getReg64(Reg));
 
-  Out.emitBundleLock(false);
+  Out.emitBundleLock(false, STI);
   emitSandboxBranchReg(Reg, Out, STI);
   MCInst Call;
   Call.setOpcode(X86::CALL64r);
   Call.addOperand(Target);
   Out.emitInstruction(Call, STI);
-  Out.emitBundleUnlock();
+  Out.emitBundleUnlock(STI);
   Out.emitCodeAlignment(Align(BundleSize), &STI);
 }
 
@@ -303,7 +303,7 @@ void X86::X86MCLFIExpander::expandLoadStore(const MCInst &Inst, MCStreamer &Out,
                                       /*EmitInstructions=*/true);
   emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
   if (BundleLock)
-    Out.emitBundleUnlock();
+    Out.emitBundleUnlock(STI);
 
   if (RotateRegister != X86::NoRegister) {
     // Rotate the register back.
@@ -348,7 +348,7 @@ void X86::X86MCLFIExpander::expandStringOperation(const MCInst &Inst,
                                                   MCStreamer &Out,
                                                   const MCSubtargetInfo &STI,
                                                   bool EmitPrefixes) {
-  Out.emitBundleLock(false);
+  Out.emitBundleLock(false, STI);
   switch (Inst.getOpcode()) {
   case X86::CMPSB:
   case X86::CMPSW:
@@ -369,7 +369,7 @@ void X86::X86MCLFIExpander::expandStringOperation(const MCInst &Inst,
     break;
   }
   emitInstruction(Inst, Out, STI, EmitPrefixes);
-  Out.emitBundleUnlock();
+  Out.emitBundleUnlock(STI);
 }
 
 static unsigned demoteOpcode(unsigned Reg);
@@ -600,7 +600,7 @@ bool X86::X86MCLFIExpander::emitSandboxMemOps(MCInst &Inst,
           return true;
 
         if (!hasSegue(STI)) {
-          Out.emitBundleLock(false);
+          Out.emitBundleLock(false, STI);
           anyInstsEmitted = true;
         }
       }
@@ -644,7 +644,7 @@ void X86::X86MCLFIExpander::expandExplicitStackManipulation(
     PopR11Inst.addOperand(MCOperand::createReg(X86::R11));
     Out.emitInstruction(PopR11Inst, STI);
 
-    Out.emitBundleLock(false);
+    Out.emitBundleLock(false, STI);
 
     MCInst MovR11ToESP;
     MovR11ToESP.setOpcode(X86::MOV32rr);
@@ -659,7 +659,7 @@ void X86::X86MCLFIExpander::expandExplicitStackManipulation(
     AddBaseInst.addOperand(MCOperand::createReg(LFIBaseReg));
     Out.emitInstruction(AddBaseInst, STI);
 
-    return Out.emitBundleUnlock();
+    return Out.emitBundleUnlock(STI);
   }
 
   MCInst SandboxedInst(Inst);
@@ -674,14 +674,14 @@ void X86::X86MCLFIExpander::expandExplicitStackManipulation(
   bool MemSandboxed = emitSandboxMemOps(SandboxedInst, ScratchReg, Out, STI,
                                         /*emitInstructions=*/true);
 
-  Out.emitBundleLock(false); // for stack fixup
+  Out.emitBundleLock(false, STI); // for stack fixup
 
   emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
   if (MemSandboxed)
-    Out.emitBundleUnlock(); // for memory reference
+    Out.emitBundleUnlock(STI); // for memory reference
   emitStackFixup(StackReg, Out, STI);
 
-  Out.emitBundleUnlock(); // for stack fixup
+  Out.emitBundleUnlock(STI); // for stack fixup
 }
 
 // Returns true if Inst is an X86 prefix
@@ -759,7 +759,7 @@ static bool isTLSRead(const MCInst &Inst) {
 
 void X86::X86MCLFIExpander::emitLFICall(LFICallType CallType, MCStreamer &Out,
                                         const MCSubtargetInfo &STI) {
-  Out.emitBundleLock(false);
+  Out.emitBundleLock(false, STI);
 
   MCSymbol *Symbol = Ctx.createTempSymbol();
 
@@ -797,7 +797,7 @@ void X86::X86MCLFIExpander::emitLFICall(LFICallType CallType, MCStreamer &Out,
 
   Out.emitLabel(Symbol);
 
-  Out.emitBundleUnlock();
+  Out.emitBundleUnlock(STI);
 }
 
 void X86::X86MCLFIExpander::expandSyscall(const MCInst &Inst, MCStreamer &Out,

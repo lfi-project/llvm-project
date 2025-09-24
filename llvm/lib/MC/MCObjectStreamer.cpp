@@ -395,6 +395,7 @@ void MCObjectStreamer::emitInstruction(const MCInst &Inst,
 
   MCStreamer::emitInstruction(Inst, STI);
 
+  MCSection *Sec = getCurrentSectionOnly();
   Sec->setHasInstructions(true);
 
   // Now that a machine instruction has been assembled into this section, make
