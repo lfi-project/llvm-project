@@ -380,6 +380,33 @@ void MCAssembler::addRelocDirective(RelocDirective RD) {
   relocDirectives.push_back(RD);
 }
 
+/// Write NOPs while limiting the maximum NOP size.
+static void writeControlledNops(raw_ostream &OS, const MCAssembler &Asm, uint64_t NumBytes,
+                                uint64_t FragmentOffset, uint64_t MaxNopSize,
+                                const MCSubtargetInfo *STI) {
+  uint64_t NumBytesEmitted = 0;
+  while (NumBytesEmitted < NumBytes) {
+    uint64_t NumBytesToEmit = std::min(NumBytes - NumBytesEmitted, MaxNopSize);
+
+    if (Asm.isBundlingEnabled()) {
+      unsigned BundleAlignSize = Asm.getBundleAlignSize();
+      uint64_t OffsetInBundle = (FragmentOffset + NumBytesEmitted) & (BundleAlignSize - 1);
+      uint64_t SpaceInBundle = BundleAlignSize - OffsetInBundle;
+      NumBytesToEmit = std::min(NumBytesToEmit, SpaceInBundle);
+    }
+
+    assert(NumBytesToEmit && "try to emit zero-sized NOP");
+
+    if (!Asm.getBackend().writeNopData(OS, NumBytesToEmit, STI)) {
+      report_fatal_error("unable to write NOP sequence of the remaining " +
+                         Twine(NumBytesToEmit) + " bytes");
+      return;
+    }
+
+    NumBytesEmitted += NumBytesToEmit;
+  }
+}
+
 /// Write the fragment \p F to the output file.
 static void writeFragment(raw_ostream &OS, const MCAssembler &Asm,
                           const MCFragment &F) {
@@ -511,26 +538,19 @@ static void writeFragment(raw_ostream &OS, const MCAssembler &Asm,
     if (!ControlledNopLength)
       ControlledNopLength = MaximumNopLength;
 
-    while (NumBytes) {
-      uint64_t NumBytesToEmit =
-          (uint64_t)std::min(NumBytes, ControlledNopLength);
-      assert(NumBytesToEmit && "try to emit empty NOP instruction");
-      if (!Asm.getBackend().writeNopData(OS, NumBytesToEmit,
-                                         NF.getSubtargetInfo())) {
-        report_fatal_error("unable to write nop sequence of the remaining " +
-                           Twine(NumBytesToEmit) + " bytes");
-        break;
-      }
-      NumBytes -= NumBytesToEmit;
-    }
+    writeControlledNops(OS, Asm, (uint64_t)NumBytes, Asm.getFragmentOffset(NF), (uint64_t)ControlledNopLength, NF.getSubtargetInfo());
     break;
   }
 
   case MCFragment::FT_BoundaryAlign: {
     const MCBoundaryAlignFragment &BF = cast<MCBoundaryAlignFragment>(F);
-    if (!Asm.getBackend().writeNopData(OS, FragmentSize, BF.getSubtargetInfo()))
-      report_fatal_error("unable to write nop sequence of " +
-                         Twine(FragmentSize) + " bytes");
+    if (!Asm.isBundlingEnabled()) {
+      if (!Asm.getBackend().writeNopData(OS, FragmentSize, BF.getSubtargetInfo()))
+        report_fatal_error("unable to write nop sequence of " +
+                           Twine(FragmentSize) + " bytes");
+    } else {
+      writeControlledNops(OS, Asm, FragmentSize, Asm.getFragmentOffset(BF), FragmentSize, BF.getSubtargetInfo());
+    }
     break;
   }
 
