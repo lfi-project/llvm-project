@@ -213,6 +213,9 @@ void AArch64::AArch64MCLFIExpander::expandStackModification(
     return Out.emitInstruction(Inst, STI);
   }
 
+  if (hasFeature(FeatureBitset({AArch64::FeatureLFIJumps}), STI))
+    return Out.emitInstruction(Inst, STI);
+
   MCInst ModInst;
   MCRegister Scratch = getScratch();
   assert(Inst.getOperand(0).isReg() &&
