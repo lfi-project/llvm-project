@@ -52,6 +52,14 @@ static bool hasSegue(const MCSubtargetInfo &STI) {
   return !hasFeature(FeatureBitset({X86::FeatureLFINoSegue}), STI);
 }
 
+static bool hasLFIStores(const MCSubtargetInfo &STI) {
+  return hasFeature(FeatureBitset({X86::FeatureLFIStores}), STI);
+}
+
+static bool hasLFIJumps(const MCSubtargetInfo &STI) {
+  return hasFeature(FeatureBitset({X86::FeatureLFIJumps}), STI);
+}
+
 static MCRegister getReg64(MCRegister Reg) {
   switch (Reg) {
   default:
@@ -358,14 +366,17 @@ void X86::X86MCLFIExpander::expandStringOperation(const MCInst &Inst,
   case X86::MOVSW:
   case X86::MOVSL:
   case X86::MOVSQ:
-    fixupStringOpReg(Inst.getOperand(1), Out, STI);
-    fixupStringOpReg(Inst.getOperand(0), Out, STI);
+    if (!hasLFIJumps(STI) && !hasLFIStores(STI))
+      fixupStringOpReg(Inst.getOperand(1), Out, STI);
+    if (!hasLFIJumps(STI))
+      fixupStringOpReg(Inst.getOperand(0), Out, STI);
     break;
   case X86::STOSB:
   case X86::STOSW:
   case X86::STOSL:
   case X86::STOSQ:
-    fixupStringOpReg(Inst.getOperand(0), Out, STI);
+    if (!hasLFIJumps(STI))
+      fixupStringOpReg(Inst.getOperand(0), Out, STI);
     break;
   }
   emitInstruction(Inst, Out, STI, EmitPrefixes);
@@ -445,6 +456,11 @@ void X86::X86MCLFIExpander::emitSandboxMemOp(MCInst &Inst, int MemIdx,
                                              MCRegister ScratchReg,
                                              MCStreamer &Out,
                                              const MCSubtargetInfo &STI) {
+  if (hasLFIJumps(STI))
+    return;
+  if (hasLFIStores(STI) && !mayStore(Inst))
+    return;
+
   MCOperand &Base = Inst.getOperand(MemIdx);
   MCOperand &Scale = Inst.getOperand(MemIdx + 1);
   MCOperand &Index = Inst.getOperand(MemIdx + 2);
@@ -628,6 +644,9 @@ static void emitStackFixup(MCRegister StackReg, MCStreamer &Out,
 void X86::X86MCLFIExpander::expandExplicitStackManipulation(
     MCRegister StackReg, const MCInst &Inst, MCStreamer &Out,
     const MCSubtargetInfo &STI, bool EmitPrefixes) {
+  if (hasLFIJumps(STI))
+    return emitInstruction(Inst, Out, STI, EmitPrefixes);
+
   if (Inst.getOpcode() == X86::POP64r) {
     // Transform
     // pop   %rsp
