@@ -489,9 +489,6 @@ static void writeFragment(raw_ostream &OS, const MCAssembler &Asm,
     ++stats::EmittedNopsFragments;
     const MCNopsFragment &NF = cast<MCNopsFragment>(F);
 
-    uint64_t Offset = Asm.getFragmentOffset(NF);
-    uint64_t NumBytesEmitted = 0;
-
     int64_t NumBytes = NF.getNumBytes();
     int64_t ControlledNopLength = NF.getControlledNopLength();
     int64_t MaximumNopLength =
@@ -517,11 +514,6 @@ static void writeFragment(raw_ostream &OS, const MCAssembler &Asm,
     while (NumBytes) {
       uint64_t NumBytesToEmit =
           (uint64_t)std::min(NumBytes, ControlledNopLength);
-      if (Asm.isBundlingEnabled()) {
-        unsigned int BundleAlignSize = Asm.getBundleAlignSize();
-        uint64_t OffsetInBundle = (Offset + NumBytesEmitted) & (BundleAlignSize - 1);
-        NumBytesToEmit = (uint64_t)std::min(NumBytesToEmit, Asm.getBundleAlignSize() - OffsetInBundle);
-      }
       assert(NumBytesToEmit && "try to emit empty NOP instruction");
       if (!Asm.getBackend().writeNopData(OS, NumBytesToEmit,
                                          NF.getSubtargetInfo())) {
@@ -530,7 +522,6 @@ static void writeFragment(raw_ostream &OS, const MCAssembler &Asm,
         break;
       }
       NumBytes -= NumBytesToEmit;
-      NumBytesEmitted += NumBytesToEmit;
     }
     break;
   }
