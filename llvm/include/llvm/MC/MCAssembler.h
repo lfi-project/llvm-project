@@ -121,6 +121,9 @@ private:
   void relaxDwarfCallFrameFragment(MCFragment &F);
   void relaxSFrameFragment(MCFragment &DF);
 
+  /// Compute the padding size to boundary-align its connected fragments.
+  uint64_t computeBoundaryAlignSize(const MCBoundaryAlignFragment &BF);
+
 public:
   /// Construct a new assembler instance.
   //
