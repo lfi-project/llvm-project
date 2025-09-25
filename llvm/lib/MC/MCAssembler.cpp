@@ -867,11 +867,9 @@ static bool needPadding(uint64_t StartAddr, uint64_t Size,
          isAgainstBoundary(StartAddr, Size, BoundaryAlignment);
 }
 
-void MCAssembler::relaxBoundaryAlign(MCBoundaryAlignFragment &BF) {
-  // BoundaryAlignFragment that doesn't need to align any fragment should not be
-  // relaxed.
+uint64_t MCAssembler::computeBoundaryAlignSize(const MCBoundaryAlignFragment &BF) {
   if (!BF.getLastFragment())
-    return;
+    return 0;
 
   uint64_t AlignedOffset = getFragmentOffset(BF);
   uint64_t AlignedSize = 0;
@@ -896,6 +894,16 @@ void MCAssembler::relaxBoundaryAlign(MCBoundaryAlignFragment &BF) {
                            ? offsetToAlignment(AlignedOffset, BoundaryAlignment)
                            : 0U;
   }
+  return NewSize;
+}
+
+void MCAssembler::relaxBoundaryAlign(MCBoundaryAlignFragment &BF) {
+  // BoundaryAlignFragment that doesn't need to align any fragment should not be
+  // relaxed.
+  if (!BF.getLastFragment())
+    return;
+
+  uint64_t NewSize = computeBoundaryAlignSize(BF);
   if (NewSize == BF.getSize())
     return;
   BF.setSize(NewSize);
@@ -998,6 +1006,16 @@ void MCAssembler::layoutSection(MCSection &Sec) {
   uint64_t Offset = 0;
   for (MCFragment &F : Sec) {
     F.Offset = Offset;
+
+    // Bundling increases the number of MCBoundaryAlignFragment,
+    // lazy-relaxing BA becomes exponentially inefficient.
+    // This if statment eagerly decides BA size.
+    if (isBundlingEnabled() && F.getKind() == MCFragment::FT_BoundaryAlign) {
+        auto &BF = cast<MCBoundaryAlignFragment>(F);
+        uint64_t NewSize = computeBoundaryAlignSize(BF);
+        BF.setSize(NewSize);
+    }
+
     if (F.getKind() == MCFragment::FT_Align) {
       Offset += F.getFixedSize();
       unsigned Size = offsetToAlignment(Offset, F.getAlignment());
