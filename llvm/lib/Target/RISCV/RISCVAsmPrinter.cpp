@@ -574,8 +574,8 @@ void RISCVAsmPrinter::emitStartOfAsmFile(Module &M) {
   if (TM.getTargetTriple().isOSBinFormatELF())
     emitAttributes(SubtargetInfo);
 
-  if (TT.isLFI())
-    initializeLFIMCStreamer(*OutStreamer.get(), OutContext, TT);
+  if (TM.getTargetTriple().isLFI())
+    initializeLFIMCStreamer(*OutStreamer.get(), OutContext, TM.getTargetTriple());
   
 }
 

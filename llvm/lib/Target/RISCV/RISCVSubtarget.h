@@ -181,6 +181,9 @@ public:
            hasShortForwardBranchOpt();
   }
 
+
+  bool isLFI() const { return getTargetTriple().isRISCV64LFI(); }
+
   bool is64Bit() const { return IsRV64; }
   MVT getXLenVT() const {
     return is64Bit() ? MVT::i64 : MVT::i32;

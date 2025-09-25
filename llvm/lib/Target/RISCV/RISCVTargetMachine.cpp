@@ -562,6 +562,8 @@ void RISCVPassConfig::addPreEmitPass() {
     addPass(createMachineCopyPropagationPass(true));
   addPass(&BranchRelaxationPassID);
   addPass(createRISCVMakeCompressibleOptPass());
+   if (Triple(TM->getTargetTriple()).isLFI())
+    addPass(createRISCVLFIRewritePass());
 }
 
 void RISCVPassConfig::addPreEmitPass2() {
@@ -612,7 +614,11 @@ void RISCVPassConfig::addPreRegAlloc() {
 
   if (TM->getOptLevel() != CodeGenOptLevel::None && EnableMachinePipeliner)
     addPass(&MachinePipelinerID);
+
+  
 }
+
+
 
 void RISCVPassConfig::addFastRegAlloc() {
   addPass(&InitUndefID);

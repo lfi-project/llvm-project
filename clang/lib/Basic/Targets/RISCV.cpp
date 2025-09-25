@@ -192,6 +192,10 @@ void RISCVTargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__riscv_muldiv");
   }
 
+  if (getTriple().isRISCV64LFI()) {
+    Builder.defineMacro("__LFI__");
+  }
+
   if (ISAInfo->hasExtension("a")) {
     Builder.defineMacro("__riscv_atomic");
     Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
