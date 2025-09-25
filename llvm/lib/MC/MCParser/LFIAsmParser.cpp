@@ -40,6 +40,10 @@ public:
     addDirectiveHandler<&LFIAsmParser::ParseUnscratch>(".scratch_clear");
     addDirectiveHandler<&LFIAsmParser::ParseExpandDisable>(".no_expand");
     addDirectiveHandler<&LFIAsmParser::ParseExpandEnable>(".expand");
+    addDirectiveHandler<&LFIAsmParser::ParseGuard>(".guard");
+    addDirectiveHandler<&LFIAsmParser::ParseGuardEnd>(".guard_end");
+    addDirectiveHandler<&LFIAsmParser::ParseBBStart>(".bb_start");
+    addDirectiveHandler<&LFIAsmParser::ParseBBEnd>(".bb_end");
   }
 
   /// ::= {.scratch} reg
@@ -98,6 +102,78 @@ public:
 
     Expander->enable();
 
+    return false;
+  }
+
+  /// ::= {.bb_start}
+  bool ParseBBStart(StringRef Directive, SMLoc Loc) {
+    getParser().checkForValidSection();
+    if (getLexer().isNot(AsmToken::EndOfStatement))
+      return TokError("unexpected token in '.bb_start' directive");
+    Lex();
+
+    Expander->startBB(getStreamer(), getParser().getTargetParser().getSTI());
+
+    return false;
+  }
+
+  /// ::= {.bb_end}
+  bool ParseBBEnd(StringRef Directive, SMLoc Loc) {
+    getParser().checkForValidSection();
+    if (getLexer().isNot(AsmToken::EndOfStatement))
+      return TokError("unexpected token in '.bb_end' directive");
+    Lex();
+
+    Expander->endBB(getStreamer(), getParser().getTargetParser().getSTI());
+
+    return false;
+  }
+
+  /// ::= {.guard} reg reg
+  bool ParseGuard(StringRef Directive, SMLoc Loc) {
+    getParser().checkForValidSection();
+    MCRegister GuardRegNo, RegNo;
+    const char *kInvalidOptionError =
+        "expected register name after '.guard' directive";
+
+    if (getLexer().isNot(AsmToken::EndOfStatement)) {
+      if (getParser().getTargetParser().parseRegister(GuardRegNo, Loc, Loc))
+        return Error(Loc, kInvalidOptionError);
+      if (getParser().getTargetParser().parseRegister(RegNo, Loc, Loc))
+        return Error(Loc, kInvalidOptionError);
+
+      else if (getLexer().isNot(AsmToken::EndOfStatement))
+        return Error(Loc, kInvalidOptionError);
+    } else {
+      return Error(Loc, kInvalidOptionError);
+    }
+    Lex();
+
+    if (Expander->guard(GuardRegNo, RegNo))
+      return Error(Loc, "Invalid registers for .guard");
+    return false;
+  }
+
+  /// ::= {.guard_end} reg
+  bool ParseGuardEnd(StringRef Directive, SMLoc Loc) {
+    getParser().checkForValidSection();
+    MCRegister RegNo;
+    const char *kInvalidOptionError =
+        "expected register name after '.guard_end' directive";
+
+    if (getLexer().isNot(AsmToken::EndOfStatement)) {
+      if (getParser().getTargetParser().parseRegister(RegNo, Loc, Loc))
+        return Error(Loc, kInvalidOptionError);
+
+      else if (getLexer().isNot(AsmToken::EndOfStatement))
+        return Error(Loc, kInvalidOptionError);
+    } else {
+      return Error(Loc, kInvalidOptionError);
+    }
+    Lex();
+
+    if (Expander->guardEnd(RegNo))
+      return Error(Loc, "Invalid register for .guard_end");
     return false;
   }
 };

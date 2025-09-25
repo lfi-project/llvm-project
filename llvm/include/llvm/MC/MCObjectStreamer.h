@@ -109,6 +109,8 @@ public:
   /// \name MCStreamer Interface
   /// @{
 
+  void emitBBStart() override;
+  void emitBBEnd() override;
   void emitLabel(MCSymbol *Symbol, SMLoc Loc = SMLoc()) override;
   virtual void emitLabelAtPos(MCSymbol *Symbol, SMLoc Loc, MCDataFragment &F,
                               uint64_t Offset);

@@ -104,6 +104,8 @@ public:
 
   // Allow a target to add behavior to the EmitLabel of MCStreamer.
   virtual void emitLabel(MCSymbol *Symbol);
+  virtual void emitBBStart();
+  virtual void emitBBEnd();
   // Allow a target to add behavior to the emitAssignment of MCStreamer.
   virtual void emitAssignment(MCSymbol *Symbol, const MCExpr *Value);
 
@@ -463,6 +465,9 @@ public:
   // FIXME: These emission are non-const because we mutate the symbol to
   // add the section we're emitting it to later.
   virtual void emitLabel(MCSymbol *Symbol, SMLoc Loc = SMLoc());
+
+  virtual void emitBBStart();
+  virtual void emitBBEnd();
 
   virtual void emitEHSymAttributes(const MCSymbol *Symbol, MCSymbol *EHSymbol);
 
