@@ -244,6 +244,16 @@ void MCObjectStreamer::emitCFIEndProcImpl(MCDwarfFrameInfo &Frame) {
   emitLabel(Frame.End);
 }
 
+void MCObjectStreamer::emitBBStart() {
+  if (LFIExpander && LFIExpander->isEnabled())
+    LFIExpander->startBB(*this, *getContext().getSubtargetInfo());
+}
+
+void MCObjectStreamer::emitBBEnd() {
+  if (LFIExpander && LFIExpander->isEnabled())
+    LFIExpander->endBB(*this, *getContext().getSubtargetInfo());
+}
+
 void MCObjectStreamer::emitLabel(MCSymbol *Symbol, SMLoc Loc) {
   MCStreamer::emitLabel(Symbol, Loc);
   // If Symbol is a non-redefiniable variable, emitLabel has reported an error.

@@ -182,6 +182,8 @@ public:
     return Ptr;
   }
 
+  void emitBBStart() override;
+  void emitBBEnd() override;
   void emitLabel(MCSymbol *Symbol, SMLoc Loc = SMLoc()) override;
 
   void emitSubsectionsViaSymbols() override;
@@ -559,6 +561,16 @@ void MCAsmStreamer::emitELFSymverDirective(const MCSymbol *OriginalSym,
   if (!KeepOriginalSym && !Name.contains("@@@"))
     OS << ", remove";
   EmitEOL();
+}
+
+void MCAsmStreamer::emitBBStart() {
+  if (LFIExpander && LFIExpander->isEnabled())
+    LFIExpander->startBB(*this, *getContext().getSubtargetInfo());
+}
+
+void MCAsmStreamer::emitBBEnd() {
+  if (LFIExpander && LFIExpander->isEnabled())
+    LFIExpander->endBB(*this, *getContext().getSubtargetInfo());
 }
 
 void MCAsmStreamer::emitLabel(MCSymbol *Symbol, SMLoc Loc) {
