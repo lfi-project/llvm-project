@@ -43,6 +43,10 @@ static bool isAbsoluteReg(MCRegister Reg) {
 }
 
 static bool isDirectCall(const MCInst &Inst) {
+  // have a case JALR x1, add op at the end to disticnt parent class
+  // Psuedocall is a seperate case and true 
+  // what should the sandboxing be-- research question 
+  // if i see x26 replace with x9
   switch (Inst.getOpcode()) {
   case RISCV::PseudoCALL:
   case RISCV::JAL:
@@ -76,7 +80,6 @@ static bool isReturn(const MCInst &Inst) {
   case RISCV::PseudoRET:
   case RISCV::JALR:
     if (Inst.getOpcode() == RISCV::JALR) {
-      // jalr x0, x1, 0 is a return
       return Inst.getOperand(0).getReg() == RISCV::X0 &&
              Inst.getOperand(1).getReg() == RISCV::X1 &&
              Inst.getOperand(2).getImm() == 0;
@@ -105,11 +108,9 @@ static bool isLoadStore(const MCInst &Inst) {
 }
 
 static bool explicitlyModifiesRegister(const MCInst &Inst, MCRegister Reg) {
-  // Check if instruction explicitly modifies the given register
   for (unsigned i = 0; i < Inst.getNumOperands(); ++i) {
     const MCOperand &Op = Inst.getOperand(i);
     if (Op.isReg() && Op.getReg() == Reg) {
-      // For RISC-V, operand 0 is typically the destination
       if (i == 0) return true;
     }
   }
@@ -117,14 +118,12 @@ static bool explicitlyModifiesRegister(const MCInst &Inst, MCRegister Reg) {
 }
 
 bool RISCV::RISCVMCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
-  // Don't allow LFI reserved registers as scratch registers
   return Reg != LFIBaseReg && Reg != RISCV::X2;
 }
 
 void RISCV::RISCVMCLFIExpander::expandDirectCall(const MCInst &Inst,
                                                   MCStreamer &Out,
                                                   const MCSubtargetInfo &STI) {
-  // Direct calls don't need sandboxing, just emit and align
   Out.emitInstruction(Inst, STI);
   Out.emitCodeAlignment(Align(BundleSize), &STI);
 }
@@ -132,8 +131,7 @@ void RISCV::RISCVMCLFIExpander::expandDirectCall(const MCInst &Inst,
 void RISCV::RISCVMCLFIExpander::emitSandboxBranchReg(MCRegister Reg,
                                                       MCStreamer &Out,
                                                       const MCSubtargetInfo &STI) {
-  // Clear upper bits of register and add to base
-  // andi rd, rs, -BundleSize (align to bundle boundary)
+  
   MCInst AndInst;
   AndInst.setOpcode(RISCV::ANDI);
   AndInst.addOperand(MCOperand::createReg(Reg));
@@ -143,7 +141,7 @@ void RISCV::RISCVMCLFIExpander::emitSandboxBranchReg(MCRegister Reg,
 
   // add rd, rs, base_reg
   MCInst Add;
-  Add.setOpcode(RISCV::ADD);
+  Add.setOpcode(RISCV::ADD_UW);
   Add.addOperand(MCOperand::createReg(Reg));
   Add.addOperand(MCOperand::createReg(Reg));
   Add.addOperand(MCOperand::createReg(LFIBaseReg));
@@ -153,8 +151,6 @@ void RISCV::RISCVMCLFIExpander::emitSandboxBranchReg(MCRegister Reg,
 void RISCV::RISCVMCLFIExpander::emitIndirectJumpReg(MCRegister Reg,
                                                      MCStreamer &Out,
                                                      const MCSubtargetInfo &STI) {
-  Out.emitBundleLock(false);
-  emitSandboxBranchReg(Reg, Out, STI);
   
   // jalr x0, reg, 0 (indirect jump)
   MCInst Jmp;
@@ -163,23 +159,18 @@ void RISCV::RISCVMCLFIExpander::emitIndirectJumpReg(MCRegister Reg,
   Jmp.addOperand(MCOperand::createReg(Reg));
   Jmp.addOperand(MCOperand::createImm(0));
   Out.emitInstruction(Jmp, STI);
-  Out.emitBundleUnlock();
 }
 
 void RISCV::RISCVMCLFIExpander::emitIndirectCallReg(MCRegister Reg,
                                                      MCStreamer &Out,
                                                      const MCSubtargetInfo &STI) {
-  Out.emitBundleLock(false);
-  emitSandboxBranchReg(Reg, Out, STI);
-  
-  // jalr x1, reg, 0 (indirect call)
+
   MCInst Call;
   Call.setOpcode(RISCV::JALR);
   Call.addOperand(MCOperand::createReg(RISCV::X1));
   Call.addOperand(MCOperand::createReg(Reg));
   Call.addOperand(MCOperand::createImm(0));
   Out.emitInstruction(Call, STI);
-  Out.emitBundleUnlock();
   Out.emitCodeAlignment(Align(BundleSize), &STI);
 }
 
@@ -188,11 +179,11 @@ void RISCV::RISCVMCLFIExpander::expandIndirectBranch(const MCInst &Inst,
                                                       const MCSubtargetInfo &STI) {
   MCRegister Target;
   
-  // For RISC-V, indirect branches are typically JALR instructions
+  
   if (Inst.getOpcode() == RISCV::JALR) {
-    Target = Inst.getOperand(1).getReg(); // Source register
+    Target = Inst.getOperand(1).getReg(); 
   } else {
-    // Handle other indirect branch types if needed
+
     Target = Inst.getOperand(0).getReg();
   }
   
@@ -205,8 +196,12 @@ void RISCV::RISCVMCLFIExpander::expandIndirectBranch(const MCInst &Inst,
 void RISCV::RISCVMCLFIExpander::expandReturn(const MCInst &Inst, 
                                               MCStreamer &Out,
                                               const MCSubtargetInfo &STI) {
-  // For returns, we need to sandbox the return address before jumping
-  emitIndirectJumpReg(RISCV::X1, Out, STI);
+  MCInst Jmp;
+  Jmp.setOpcode(RISCV::JALR);
+  Jmp.addOperand(MCOperand::createReg(RISCV::X0));   
+  Jmp.addOperand(MCOperand::createReg(RISCV::X1));   
+  Jmp.addOperand(MCOperand::createImm(0));           
+  Out.emitInstruction(Jmp, STI);
 }
 
 void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst, 
@@ -215,20 +210,15 @@ void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
                                                  bool EmitPrefixes) {
   MCInst SandboxedInst(Inst);
   
-  // Get the base register (operand 1 for RISC-V load/store)
   MCOperand &Base = SandboxedInst.getOperand(1);
   
-  // If base register is already absolute (sandboxed), no need to modify
   if (Base.isReg() && isAbsoluteReg(Base.getReg())) {
     emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
     return;
   }
   
-  // Need to sandbox the memory access
   Out.emitBundleLock(false);
-  
-  // Clear upper bits and add base register
-  // andi scratch, base, mask
+
   MCInst ClearBits;
  
   MCInst AddUW;
@@ -239,7 +229,6 @@ void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
   Out.emitInstruction(AddUW, STI);
 
   
-  // Rewrite the memory op
   Base.setReg(LFIAddrReg);
   
   emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
@@ -247,8 +236,6 @@ void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
 }
 
 void RISCV::RISCVMCLFIExpander::emitPrefixes(MCStreamer &Out, const MCSubtargetInfo &STI) {
-  // RISC-V doesn't have prefixes, so this is a no-op
-  // But we need to clear any stored prefixes
   Prefixes.clear();
 }
 
@@ -256,8 +243,6 @@ void RISCV::RISCVMCLFIExpander::expandStringOperation(const MCInst &Inst,
                                                        MCStreamer &Out,
                                                        const MCSubtargetInfo &STI,
                                                        bool EmitPrefixes) {
-  // RISC-V doesn't have string operations like x86
-  // Just emit the instruction as-is (shouldn't normally be called)
   emitInstruction(Inst, Out, STI, EmitPrefixes);
 }
 
@@ -266,16 +251,12 @@ void RISCV::RISCVMCLFIExpander::expandExplicitStackManipulation(MCRegister Stack
                                                                  MCStreamer &Out,
                                                                  const MCSubtargetInfo &STI,
                                                                  bool EmitPrefixes) {
-  // For stack manipulation, we need to sandbox the stack pointer
-  // This is more complex and depends on your LFI stack policy
   expandLoadStore(Inst, Out, STI, EmitPrefixes);
 }
 
 void RISCV::RISCVMCLFIExpander::expandStackRegPush(const MCInst &Inst,
                                                     MCStreamer &Out,
                                                     const MCSubtargetInfo &STI) {
-  // Handle stack register pushes - RISC-V doesn't have explicit push/pop
-  // This might not be used for RISC-V
   emitInstruction(Inst, Out, STI, false);
 }
 
@@ -310,7 +291,6 @@ bool RISCV::RISCVMCLFIExpander::emitSandboxMemOps(MCInst &Inst,
   if (!isLoadStore(Inst)) return false;
   
   if (!EmitInstructions) {
-    // Just check if we would emit instructions
     MCOperand &Base = Inst.getOperand(1);
     return Base.isReg() && !isAbsoluteReg(Base.getReg());
   }
@@ -330,7 +310,6 @@ void RISCV::RISCVMCLFIExpander::emitInstruction(const MCInst &Inst,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI,
                                                  bool EmitPrefixes) {
-  // RISC-V doesn't have prefixes, so just emit the instruction
   Out.emitInstruction(Inst, STI);
 }
 
@@ -362,8 +341,6 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out
     MCInst New = replaceReg(Inst, LFIAddrReg, LFIBaseReg);
     return doExpandInst(New, Out, STI, EmitPrefixes);
   } else if (isSyscall(Inst)) {
-    // Handle syscalls - for RISC-V ECALL instructions
-    // just emit the original syscall
     emitInstruction(Inst, Out, STI, EmitPrefixes);
   } else if (isDirectCall(Inst)) {
     expandDirectCall(Inst, Out, STI);
@@ -374,10 +351,8 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out
   } else if (isLoadStore(Inst)) {
     expandLoadStore(Inst, Out, STI, EmitPrefixes);
   } else if (explicitlyModifiesRegister(Inst, RISCV::X2)) {
-    // Stack pointer modifications need special handling
     expandLoadStore(Inst, Out, STI, EmitPrefixes);
   } else {
-    // Default case: emit instruction as-is
     emitInstruction(Inst, Out, STI, EmitPrefixes);
   }
 }
