@@ -33,9 +33,10 @@ static cl::opt<bool> RISCVLFIErrorReserved(
     "riscv-lfi-error-reserved", cl::Hidden, cl::init(false),
     cl::desc("Produce errors for uses of LFI reserved registers"));
 
-static const int BundleSize = 16;
-static const MCRegister LFIBaseReg = RISCV::X18;
-static const MCRegister LFIScratchReg = RISCV::X27;
+static const int BundleSize = 8;
+static const MCRegister LFIBaseReg = RISCV::X27;
+static const MCRegister LFIAddrReg = RISCV::X9;
+//static const MCRegister LFIScratchReg = RISCV::X27;
 
 static bool isAbsoluteReg(MCRegister Reg) {
   return (Reg == LFIBaseReg || Reg == RISCV::X2); // X2 is stack pointer
@@ -64,7 +65,7 @@ static bool isCall(const MCInst &Inst) {
   switch (Inst.getOpcode()) {
   case RISCV::PseudoCALL:
   case RISCV::JALR:
-    return Inst.getOperand(0).getReg() == RISCV::X1; // Return address in X1
+    return Inst.getOperand(0).getReg() == RISCV::X1;
   default:
     return false;
   }
@@ -117,7 +118,7 @@ static bool explicitlyModifiesRegister(const MCInst &Inst, MCRegister Reg) {
 
 bool RISCV::RISCVMCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
   // Don't allow LFI reserved registers as scratch registers
-  return Reg != LFIBaseReg && Reg != LFIScratchReg && Reg != RISCV::X2;
+  return Reg != LFIBaseReg && Reg != RISCV::X2;
 }
 
 void RISCV::RISCVMCLFIExpander::expandDirectCall(const MCInst &Inst,
@@ -218,7 +219,7 @@ void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
   MCOperand &Base = SandboxedInst.getOperand(1);
   
   // If base register is already absolute (sandboxed), no need to modify
-  if (isAbsoluteReg(Base.getReg())) {
+  if (Base.isReg() && isAbsoluteReg(Base.getReg())) {
     emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
     return;
   }
@@ -229,22 +230,17 @@ void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
   // Clear upper bits and add base register
   // andi scratch, base, mask
   MCInst ClearBits;
-  ClearBits.setOpcode(RISCV::ANDI);
-  ClearBits.addOperand(MCOperand::createReg(LFIScratchReg));
-  ClearBits.addOperand(MCOperand::createReg(Base.getReg()));
-  ClearBits.addOperand(MCOperand::createImm(0xFFFFFFFF)); // 32-bit mask for now
-  Out.emitInstruction(ClearBits, STI);
+ 
+  MCInst AddUW;
+  AddUW.setOpcode(RISCV::ADD_UW);
+  AddUW.addOperand(MCOperand::createReg(LFIAddrReg));        
+  AddUW.addOperand(MCOperand::createReg(Base.getReg()));    
+  AddUW.addOperand(MCOperand::createReg(LFIBaseReg));        
+  Out.emitInstruction(AddUW, STI);
+
   
-  // add scratch, scratch, base_reg
-  MCInst AddBase;
-  AddBase.setOpcode(RISCV::ADD);
-  AddBase.addOperand(MCOperand::createReg(LFIScratchReg));
-  AddBase.addOperand(MCOperand::createReg(LFIScratchReg));
-  AddBase.addOperand(MCOperand::createReg(LFIBaseReg));
-  Out.emitInstruction(AddBase, STI);
-  
-  // Use scratch register as new base
-  Base.setReg(LFIScratchReg);
+  // Rewrite the memory op
+  Base.setReg(LFIAddrReg);
   
   emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
   Out.emitBundleUnlock();
@@ -283,38 +279,26 @@ void RISCV::RISCVMCLFIExpander::expandStackRegPush(const MCInst &Inst,
   emitInstruction(Inst, Out, STI, false);
 }
 
+
+
 void RISCV::RISCVMCLFIExpander::emitSandboxMemOp(MCInst &Inst, int MemIdx,
                                                   MCRegister ScratchReg,
                                                   MCStreamer &Out,
                                                   const MCSubtargetInfo &STI) {
-  // For RISC-V, MemIdx typically points to the base register operand
-  // RISC-V memory operands are: [base + offset]
-  if (MemIdx >= static_cast<int>(Inst.getNumOperands())) return;
-  
+  if (MemIdx >= (int)Inst.getNumOperands()) return;
   MCOperand &Base = Inst.getOperand(MemIdx);
   if (!Base.isReg()) return;
-  
-  // If already an absolute register, no sandboxing needed
   if (isAbsoluteReg(Base.getReg())) return;
+
   
-  // Clear upper bits and add base register
-  MCInst ClearBits;
-  ClearBits.setOpcode(RISCV::ANDI);
-  ClearBits.addOperand(MCOperand::createReg(ScratchReg));
-  ClearBits.addOperand(MCOperand::createReg(Base.getReg()));
-  ClearBits.addOperand(MCOperand::createImm(0xFFFFFFFF)); // 32-bit mask
-  Out.emitInstruction(ClearBits, STI);
-  
-  // Add sandbox base
-  MCInst AddBase;
-  AddBase.setOpcode(RISCV::ADD);
-  AddBase.addOperand(MCOperand::createReg(ScratchReg));
-  AddBase.addOperand(MCOperand::createReg(ScratchReg));
-  AddBase.addOperand(MCOperand::createReg(LFIBaseReg));
-  Out.emitInstruction(AddBase, STI);
-  
-  // Replace base register with scratch register
-  Base.setReg(ScratchReg);
+  MCInst AddUW;
+  AddUW.setOpcode(RISCV::ADD_UW);
+  AddUW.addOperand(MCOperand::createReg(LFIAddrReg));
+  AddUW.addOperand(MCOperand::createReg(Base.getReg()));
+  AddUW.addOperand(MCOperand::createReg(LFIBaseReg));
+  Out.emitInstruction(AddUW, STI);
+
+  Base.setReg(LFIAddrReg);
 }
 
 bool RISCV::RISCVMCLFIExpander::emitSandboxMemOps(MCInst &Inst,
@@ -375,11 +359,11 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out
           Inst.getLoc(), "illegal modification of reserved LFI register");
     Out.getContext().reportWarning(
         Inst.getLoc(), "deleting modification of reserved LFI register");
-    MCInst New = replaceReg(Inst, LFIScratchReg, LFIBaseReg);
+    MCInst New = replaceReg(Inst, LFIAddrReg, LFIBaseReg);
     return doExpandInst(New, Out, STI, EmitPrefixes);
   } else if (isSyscall(Inst)) {
     // Handle syscalls - for RISC-V ECALL instructions
-    // For now, just emit the original syscall
+    // just emit the original syscall
     emitInstruction(Inst, Out, STI, EmitPrefixes);
   } else if (isDirectCall(Inst)) {
     expandDirectCall(Inst, Out, STI);
