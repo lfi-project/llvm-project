@@ -52,7 +52,7 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
   TheTarget->createMCLFIExpander(
       Streamer,
       std::unique_ptr<MCRegisterInfo>(
-          TheTarget->createMCRegInfo(TheTriple.getTriple())),
+          TheTarget->createMCRegInfo(TheTriple)),
       std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo()));
 
   if (BundleAlign != Align(1))
