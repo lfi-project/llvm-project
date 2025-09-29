@@ -792,16 +792,16 @@ void X86::X86MCLFIExpander::emitLFICall(LFICallType CallType, MCStreamer &Out,
   Lea.addOperand(MCOperand::createReg(0));
   Out.emitInstruction(Lea, STI);
 
-  unsigned Offset;
+  int Offset;
   switch (CallType) {
   case LFISyscall:
-    Offset = 0;
+    Offset = -8;
     break;
   case LFITLSRead:
-    Offset = 8;
+    Offset = -16;
     break;
   case LFITLSWrite:
-    Offset = 16;
+    Offset = -24;
     break;
   }
 
