@@ -1022,6 +1022,8 @@ void MCAssembler::layoutSection(MCSection &Sec) {
     // This if statment eagerly decides BA size.
     if (isBundlingEnabled() && F.getKind() == MCFragment::FT_BoundaryAlign) {
         auto &BF = cast<MCBoundaryAlignFragment>(F);
+        if (!BF.getLastFragment())
+          continue;
         uint64_t NewSize = computeBoundaryAlignSize(BF);
         BF.setSize(NewSize);
     }

@@ -336,6 +336,12 @@ void MCELFStreamer::emitBundleLock(bool AlignToEnd, const MCSubtargetInfo &STI) 
 
   Sec.setBundleLockState(AlignToEnd ? MCSection::BundleLockedAlignToEnd
                                     : MCSection::BundleLocked);
+  // ignore nested locks
+  if (Sec.BundleLockNestingDepth > 1) {
+    if (BundleBA && AlignToEnd != BundleBA->isAlignToEnd())
+      BundleBA->setAlignToEnd(true);
+    return;
+  }
 
   // MCFragment *CF = getCurrentFragment();
 
@@ -362,6 +368,11 @@ void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
     report_fatal_error("Fragment can't be larger than a bundle size");
 
   Sec.setBundleLockState(MCSection::NotBundleLocked);
+
+  // ignore nested unlocks
+  if (Sec.BundleLockNestingDepth > 0) {
+    return;
+  }
 
   MCFragment *CF = getCurrentFragment();
   BundleBA->setLastFragment(CF);
