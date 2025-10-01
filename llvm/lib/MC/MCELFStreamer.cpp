@@ -334,11 +334,14 @@ void MCELFStreamer::emitBundleLock(bool AlignToEnd, const MCSubtargetInfo &STI) 
   if (!Asm.isBundlingEnabled())
     report_fatal_error(".bundle_lock forbidden when bundling is disabled");
 
-  Sec.setBundleLockState(AlignToEnd ? MCSection::BundleLockedAlignToEnd
-                                    : MCSection::BundleLocked);
-  // ignore nested locks
+  Sec.enterBundleLock();
+
+  // early exit for nested locks
   if (Sec.BundleLockNestingDepth > 1) {
-    if (BundleBA && AlignToEnd != BundleBA->isAlignToEnd())
+    assert(BundleBA);
+    // If any of the directives is an align_to_end directive, the whole nested
+    // group is align_to_end. So don't downgrade from align_to_end to just locked.
+    if (AlignToEnd != BundleBA->isAlignToEnd())
       BundleBA->setAlignToEnd(true);
     return;
   }
@@ -367,9 +370,9 @@ void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
   else if (getCurrentFragment()->getSize() > getAssembler().getBundleAlignSize())
     report_fatal_error("Fragment can't be larger than a bundle size");
 
-  Sec.setBundleLockState(MCSection::NotBundleLocked);
+  Sec.exitBundleLock();
 
-  // ignore nested unlocks
+  // delay BundleBA until the outermost bundle lock.
   if (Sec.BundleLockNestingDepth > 0) {
     return;
   }
