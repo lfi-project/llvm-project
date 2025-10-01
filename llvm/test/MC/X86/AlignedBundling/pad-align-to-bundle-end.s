@@ -33,3 +33,33 @@ foo:
 # CHECK:      20: nop
 # CHECK-NEXT: 26: callq
 # CHECK-NEXT: 2b: callq
+
+  .p2align 4
+lock_to_next_bundle:
+  .rept 14
+  inc %eax
+  .endr
+  .bundle_lock align_to_end
+  inc %eax
+  inc %eax
+  inc %eax
+  .bundle_unlock
+# This bundle group must be adjusted to the next boundary,
+# but nop optimization must not break the bundle too.
+# CHECK:      30: inc
+# CHECK:      4a: inc
+# CHECK-NEXT: 4c: nop
+# CHECK-NEXT: 50: nop
+# CHECK-NEXT: 5a: inc
+
+lock_just_fit:
+  .rept 14
+  inc %eax
+  .endr
+  .bundle_lock align_to_end
+  inc %eax
+  inc %eax
+  .bundle_unlock
+# CHECK:      60: inc
+# CHECK:      7e: inc
+
