@@ -358,6 +358,8 @@ void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
     report_fatal_error(".bundle_unlock forbidden when bundling is disabled");
   else if (!isBundleLocked())
     report_fatal_error(".bundle_unlock without matching lock");
+  else if (getCurrentFragment()->getSize() > getAssembler().getBundleAlignSize())
+    report_fatal_error("Fragment can't be larger than a bundle size");
 
   Sec.setBundleLockState(MCSection::NotBundleLocked);
 
