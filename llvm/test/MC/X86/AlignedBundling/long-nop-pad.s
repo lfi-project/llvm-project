@@ -3,7 +3,7 @@
 # RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu -mcpu=pentiumpro -mc-relax-all %s -o - \
 # RUN:   | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
 
-# Test that long nops are generated for padding where possible.
+# Test that long nops are generated for padding where possible while each respects the bundle align boundary.
 
   .text
 foo:
@@ -29,3 +29,15 @@ foo:
 # CHECK-NEXT:   34:  nop
 # CHECK-NEXT:   3e:  nop
 # CHECK-NEXT:   3f: pushq
+
+  .p2align 5
+just_nops:
+  .nops 64
+# CHECK:        40:  nop
+# CHECK-NEXT:   4a:  nop
+# CHECK-NEXT:   54:  nop
+# CHECK-NEXT:   5e:  nop
+# CHECK-NEXT:   60:  nop
+# CHECK-NEXT:   6a:  nop
+# CHECK-NEXT:   74:  nop
+# CHECK-NEXT:   7e:  nop
