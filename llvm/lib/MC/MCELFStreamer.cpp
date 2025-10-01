@@ -334,10 +334,6 @@ void MCELFStreamer::emitBundleLock(bool AlignToEnd, const MCSubtargetInfo &STI) 
   if (!Asm.isBundlingEnabled())
     report_fatal_error(".bundle_lock forbidden when bundling is disabled");
 
-  // WARN: nested bundle?
-  // if (!isBundleLocked())
-  //   Sec.setBundleGroupBeforeFirstInst(true);
-
   Sec.setBundleLockState(AlignToEnd ? MCSection::BundleLockedAlignToEnd
                                     : MCSection::BundleLocked);
 
@@ -362,8 +358,6 @@ void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
     report_fatal_error(".bundle_unlock forbidden when bundling is disabled");
   else if (!isBundleLocked())
     report_fatal_error(".bundle_unlock without matching lock");
-  // else if (Sec.isBundleGroupBeforeFirstInst())
-  //   report_fatal_error("Empty bundle-locked group is forbidden");
 
   Sec.setBundleLockState(MCSection::NotBundleLocked);
 

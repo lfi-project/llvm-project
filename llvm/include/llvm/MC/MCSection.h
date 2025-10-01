@@ -648,13 +648,6 @@ public:
   void setBundleLockState(BundleLockStateType NewState);
   bool isBundleLocked() const { return BundleLockState != NotBundleLocked; }
 
-  bool isBundleGroupBeforeFirstInst() const {
-    return BundleGroupBeforeFirstInst;
-  }
-  void setBundleGroupBeforeFirstInst(bool IsFirst) {
-    BundleGroupBeforeFirstInst = IsFirst;
-  }
-
   MCFragment &getDummyFragment() { return DummyFragment; }
 
   FragList *curFragList() const { return CurFragList; }
