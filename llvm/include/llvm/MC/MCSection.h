@@ -628,25 +628,12 @@ public:
   void setFirstLinkerRelaxable(unsigned Order) { FirstLinkerRelaxable = Order; }
 
   // LFI Bundling
-  enum BundleLockStateType {
-    NotBundleLocked,
-    BundleLocked,
-    BundleLockedAlignToEnd,
-  };
-  
-  /// Keeping track of bundle-locked state.
-  BundleLockStateType BundleLockState = NotBundleLocked;
-
   /// Current nesting depth of bundle_lock directives.
   unsigned BundleLockNestingDepth = 0;
 
-  /// We've seen a bundle_lock directive but not its first instruction
-  /// yet.
-  bool BundleGroupBeforeFirstInst : 1;
-
-  BundleLockStateType getBundleLockState() const { return BundleLockState; }
-  void setBundleLockState(BundleLockStateType NewState);
-  bool isBundleLocked() const { return BundleLockState != NotBundleLocked; }
+  void enterBundleLock();
+  void exitBundleLock();
+  bool isBundleLocked() const { return BundleLockNestingDepth > 0; }
 
   MCFragment &getDummyFragment() { return DummyFragment; }
 

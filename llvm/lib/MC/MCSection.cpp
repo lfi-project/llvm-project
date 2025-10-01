@@ -32,23 +32,16 @@ MCSymbol *MCSection::getEndSymbol(MCContext &Ctx) {
 
 bool MCSection::hasEnded() const { return End && End->isInSection(); }
 
-void MCSection::setBundleLockState(BundleLockStateType NewState) {
-  if (NewState == NotBundleLocked) {
-    if (BundleLockNestingDepth == 0) {
-      report_fatal_error("Mismatched bundle_lock/unlock directives");
-    }
-    if (--BundleLockNestingDepth == 0) {
-      BundleLockState = NotBundleLocked;
-    }
-    return;
-  }
-
-  // If any of the directives is an align_to_end directive, the whole nested
-  // group is align_to_end. So don't downgrade from align_to_end to just locked.
-  if (BundleLockState != BundleLockedAlignToEnd) {
-    BundleLockState = NewState;
-  }
+void MCSection::enterBundleLock() {
   ++BundleLockNestingDepth;
+}
+
+void MCSection::exitBundleLock() {
+  if (BundleLockNestingDepth == 0) {
+    report_fatal_error("Mismatched bundle_lock/unlock directives");
+  }
+  --BundleLockNestingDepth;
+  return;
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
