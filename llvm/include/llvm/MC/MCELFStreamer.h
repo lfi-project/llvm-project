@@ -69,7 +69,7 @@ public:
   void emitCGProfileEntry(const MCSymbolRefExpr *From,
                           const MCSymbolRefExpr *To, uint64_t Count) override;
 
-  // LFI Bundling (potentially at LFIExpander)
+  // LFI Bundling
   void emitBundleAlignMode(Align Alignment) override;
   void emitBundleLock(bool AlignToEnd, const MCSubtargetInfo &STI) override;
   void emitBundleUnlock(const MCSubtargetInfo &STI) override;

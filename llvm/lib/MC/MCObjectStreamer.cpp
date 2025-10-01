@@ -408,6 +408,7 @@ void MCObjectStreamer::emitInstruction(const MCInst &Inst,
   }
 
   // Otherwise, relax and emit it as data if RelaxAll is specified.
+  // Also, any instruction inside a bundle lock gets relaxed early.
   if (Assembler.getRelaxAll() ||
       (Assembler.isBundlingEnabled() && Sec->isBundleLocked())) {
     MCInst Relaxed = Inst;
