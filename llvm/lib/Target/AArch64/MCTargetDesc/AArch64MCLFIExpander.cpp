@@ -425,19 +425,19 @@ void AArch64::AArch64MCLFIExpander::emitLFICall(LFICallType CallType,
                                                 const MCSubtargetInfo &STI) {
   MCRegister Scratch = getScratch();
   emitMov(Scratch, AArch64::LR, Out, STI);
-  int Offset;
+  unsigned Offset;
   switch (CallType) {
   case LFISyscall:
-    Offset = -8;
+    Offset = 0;
     break;
   case LFITLSRead:
-    Offset = -16;
+    Offset = 1;
     break;
   case LFITLSWrite:
-    Offset = -24;
+    Offset = 2;
     break;
   }
-  emit(AArch64::LDURXi, AArch64::LR, LFIBaseReg, Offset, Out, STI);
+  emit(AArch64::LDRXui, AArch64::LR, LFIBaseReg, Offset, Out, STI);
   emit(AArch64::BLR, AArch64::LR, Out, STI);
   emitAddMask(AArch64::LR, Scratch, Out, STI);
 }
