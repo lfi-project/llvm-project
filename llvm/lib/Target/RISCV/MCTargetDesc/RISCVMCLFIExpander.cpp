@@ -1,19 +1,15 @@
-//===- RISCVMCLFIExpander.cpp - RISC-V LFI Expander ----------------------===//
+//===- RISCVMCLFIExpander.h - RISCV LFI Expander -------------------*- C++-*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-//===----------------------------------------------------------------------===//
+// This file was written by the Native Client authors.
 //
-// This file implements the RISCVMCLFIExpander class, the RISC-V specific
-// subclass of MCLFIExpander.
 //
-// This file was written by the Native Client authors, modified for LFI.
-//
-//===----------------------------------------------------------------------===//
 #include "RISCVMCLFIExpander.h"
 #include "RISCVMCTargetDesc.h"
+
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
@@ -26,80 +22,55 @@
 #include "llvm/Support/Alignment.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+
 using namespace llvm;
+
 #define DEBUG_TYPE "lfi"
+
 
 static cl::opt<bool> RISCVLFIErrorReserved(
     "riscv-lfi-error-reserved", cl::Hidden, cl::init(false),
     cl::desc("Produce errors for uses of LFI reserved registers"));
 
+
 static const int BundleSize = 8;
-static const MCRegister LFIBaseReg = RISCV::X27;
-static const MCRegister LFIAddrReg = RISCV::X9;
-//static const MCRegister LFIScratchReg = RISCV::X27;
+
+static const MCRegister LFIBaseReg   = RISCV::X27; // s11
+static const MCRegister LFIAddrReg   = RISCV::X9;  // s1
+static const MCRegister LFICtrlReg   = RISCV::X25; // s9
+static const MCRegister LFITmpReg    = RISCV::X26; // s10
+static const MCRegister LFIReturnReg = RISCV::X1;  // ra
+static const MCRegister LFIStackReg  = RISCV::X2;  // sp
+static const MCRegister LFIThreadReg = RISCV::X4;  // tp
+
+// andi mask for 8-byte bundle alignment (imm12 = -8)
+static const int64_t BundleMaskImm = -BundleSize;
+
+
+static inline MCOperand R(MCRegister Reg) { return MCOperand::createReg(Reg); }
+static inline MCOperand I64(int64_t Imm)  { return MCOperand::createImm(Imm); }
 
 static bool isAbsoluteReg(MCRegister Reg) {
-  return (Reg == LFIBaseReg || Reg == RISCV::X2); // X2 is stack pointer
+  // Allowed as base without sandboxing for address formation:
+  //   - LFI base (s11)
+  //   - stack pointer (sp)
+  return (Reg == LFIBaseReg || Reg == LFIStackReg);
 }
 
-static bool isDirectCall(const MCInst &Inst) {
-  // have a case JALR x1, add op at the end to disticnt parent class
-  // Psuedocall is a seperate case and true 
-  // what should the sandboxing be-- research question 
-  // if i see x26 replace with x9
-  switch (Inst.getOpcode()) {
-  case RISCV::PseudoCALL:
-  case RISCV::JAL:
-    return true;
-  default:
-    return false;
-  }
-}
-
-static bool isIndirectBranch(const MCInst &Inst) {
-  switch (Inst.getOpcode()) {
-  case RISCV::JALR:
-    return true;
-  default:
-    return false;
-  }
-}
-
-static bool isCall(const MCInst &Inst) {
-  switch (Inst.getOpcode()) {
-  case RISCV::PseudoCALL:
-  case RISCV::JALR:
-    return Inst.getOperand(0).getReg() == RISCV::X1;
-  default:
-    return false;
-  }
-}
-
-static bool isReturn(const MCInst &Inst) {
-  switch (Inst.getOpcode()) {
-  case RISCV::PseudoRET:
-  case RISCV::JALR:
-    if (Inst.getOpcode() == RISCV::JALR) {
-      return Inst.getOperand(0).getReg() == RISCV::X0 &&
-             Inst.getOperand(1).getReg() == RISCV::X1 &&
-             Inst.getOperand(2).getImm() == 0;
-    }
-    return true;
-  default:
-    return false;
-  }
-}
-
-static bool isSyscall(const MCInst &Inst) {
-  return Inst.getOpcode() == RISCV::ECALL;
-}
-
-static bool isLoadStore(const MCInst &Inst) {
-  switch (Inst.getOpcode()) {
+static bool isLoad(const MCInst &I) {
+  switch (I.getOpcode()) {
   case RISCV::LB: case RISCV::LBU: case RISCV::LH: case RISCV::LHU:
   case RISCV::LW: case RISCV::LWU: case RISCV::LD:
-  case RISCV::SB: case RISCV::SH: case RISCV::SW: case RISCV::SD:
   case RISCV::FLH: case RISCV::FLW: case RISCV::FLD:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool isStore(const MCInst &I) {
+  switch (I.getOpcode()) {
+  case RISCV::SB: case RISCV::SH: case RISCV::SW: case RISCV::SD:
   case RISCV::FSH: case RISCV::FSW: case RISCV::FSD:
     return true;
   default:
@@ -107,209 +78,370 @@ static bool isLoadStore(const MCInst &Inst) {
   }
 }
 
+static bool isLoadStore(const MCInst &I) { return isLoad(I) || isStore(I); }
+
 static bool explicitlyModifiesRegister(const MCInst &Inst, MCRegister Reg) {
-  for (unsigned i = 0; i < Inst.getNumOperands(); ++i) {
-    const MCOperand &Op = Inst.getOperand(i);
-    if (Op.isReg() && Op.getReg() == Reg) {
-      if (i == 0) return true;
-    }
-  }
+  if (Inst.getNumOperands() == 0) return false;
+  const MCOperand &Op0 = Inst.getOperand(0);
+  return Op0.isReg() && Op0.getReg() == Reg;
+}
+
+static bool isJAL(const MCInst &I)  { return I.getOpcode() == RISCV::JAL; }
+static bool isJALR(const MCInst &I) { return I.getOpcode() == RISCV::JALR; }
+static bool isSyscall(const MCInst &I) { return I.getOpcode() == RISCV::ECALL; }
+
+static bool isCall(const MCInst &I) {
+  // Writes ra (x1)
+  if (isJAL(I))
+    return I.getNumOperands() >= 1 && I.getOperand(0).isReg() &&
+           I.getOperand(0).getReg() == LFIReturnReg;
+  if (isJALR(I))
+    return I.getNumOperands() >= 1 && I.getOperand(0).isReg() &&
+           I.getOperand(0).getReg() == LFIReturnReg;
   return false;
 }
 
-bool RISCV::RISCVMCLFIExpander::isValidScratchRegister(MCRegister Reg) const {
-  return Reg != LFIBaseReg && Reg != RISCV::X2;
+static bool isIndirectBranch(const MCInst &I) {
+  // jalr not writing ra is an indirect jump
+  return isJALR(I) && !isCall(I);
+}
+
+static bool isReturn(const MCInst &I) {
+  if (I.getOpcode() == RISCV::PseudoRET) return true;
+  if (!isJALR(I)) return false;
+  // ret == jalr x0, ra, 0
+  return I.getNumOperands() >= 3 &&
+         I.getOperand(0).isReg() && I.getOperand(0).getReg() == RISCV::X0 &&
+         I.getOperand(1).isReg() && I.getOperand(1).getReg() == LFIReturnReg &&
+         I.getOperand(2).isImm() && I.getOperand(2).getImm() == 0;
+}
+
+static bool isADDI(const MCInst &I) { return I.getOpcode() == RISCV::ADDI; }
+static bool isADD (const MCInst &I) { return I.getOpcode() == RISCV::ADD;  }
+static bool isSUB (const MCInst &I) { return I.getOpcode() == RISCV::SUB;  }
+
+static bool isMV(const MCInst &I) {
+  return isADDI(I) && I.getNumOperands() == 3 &&
+         I.getOperand(2).isImm() && I.getOperand(2).getImm() == 0;
+}
+
+static bool isLdRaFromSp(const MCInst &I) {
+  // ld ra, 0(sp) → special RA mask sequence
+  if (I.getOpcode() != RISCV::LD || I.getNumOperands() < 3) return false;
+  return I.getOperand(0).isReg() && I.getOperand(0).getReg() == LFIReturnReg &&
+         I.getOperand(1).isReg() && I.getOperand(1).getReg() == LFIStackReg &&
+         I.getOperand(2).isImm() && I.getOperand(2).getImm() == 0;
+}
+
+static bool isMvRaX(const MCInst &I) {
+  if (!isMV(I)) return false;
+  return I.getOperand(0).isReg() && I.getOperand(0).getReg() == LFIReturnReg;
+}
+
+static bool isStackAddi(const MCInst &I) {
+  // addi sp, sp, imm
+  return isADDI(I) &&
+         I.getOperand(0).isReg() && I.getOperand(0).getReg() == LFIStackReg &&
+         I.getOperand(1).isReg() && I.getOperand(1).getReg() == LFIStackReg;
+}
+
+static bool isAddSpSpX(const MCInst &I) {
+  // add sp, sp, xN
+  return isADD(I) &&
+         I.getOperand(0).isReg() && I.getOperand(0).getReg() == LFIStackReg &&
+         I.getOperand(1).isReg() && I.getOperand(1).getReg() == LFIStackReg;
+}
+
+static bool isSubSpSpX(const MCInst &I) {
+  // sub sp, sp, xN
+  return isSUB(I) &&
+         I.getOperand(0).isReg() && I.getOperand(0).getReg() == LFIStackReg &&
+         I.getOperand(1).isReg() && I.getOperand(1).getReg() == LFIStackReg;
+}
+
+static bool isMvSpX(const MCInst &I) {
+  if (!isMV(I)) return false;
+  return I.getOperand(0).isReg() && I.getOperand(0).getReg() == LFIStackReg;
+}
+
+// TLS patterns:
+static bool isMvTpX(const MCInst &I) {
+  if (!isMV(I)) return false;
+  return I.getOperand(0).isReg() && I.getOperand(0).getReg() == LFIThreadReg;
+}
+static bool isMvXTp(const MCInst &I) {
+  if (!isMV(I)) return false;
+  return I.getOperand(1).isReg() && I.getOperand(1).getReg() == LFIThreadReg;
+}
+static bool isAddA0A0Tp(const MCInst &I) {
+  return isADD(I) &&
+         I.getOperand(0).isReg() && I.getOperand(0).getReg() == RISCV::X10 && // a0
+         I.getOperand(1).isReg() && I.getOperand(1).getReg() == RISCV::X10 &&
+         I.getOperand(2).isReg() && I.getOperand(2).getReg() == LFIThreadReg;
+}
+
+
+static inline void emit(MCStreamer &Out, const MCSubtargetInfo &STI,
+                        unsigned Opc, ArrayRef<MCOperand> Ops) {
+  MCInst T; T.setOpcode(Opc);
+  for (const auto &Op : Ops) T.addOperand(Op);
+  Out.emitInstruction(T, STI);
+}
+
+
+bool RISCV::RISCVMCLFIExpander::isValidScratchRegister(MCRegister /*Reg*/) const {
+  return false;
 }
 
 void RISCV::RISCVMCLFIExpander::expandDirectCall(const MCInst &Inst,
-                                                  MCStreamer &Out,
-                                                  const MCSubtargetInfo &STI) {
-  Out.emitInstruction(Inst, STI);
-  Out.emitCodeAlignment(Align(BundleSize), &STI);
+                                                 MCStreamer &Out,
+                                                 const MCSubtargetInfo &STI) {
+  // jal rd,label
+  bool WritesRA =
+      Inst.getNumOperands() >= 1 && Inst.getOperand(0).isReg() &&
+      Inst.getOperand(0).getReg() == LFIReturnReg;
+  if (WritesRA) {
+    Out.emitBundleLock(true);
+    Out.emitInstruction(Inst, STI);
+    Out.emitBundleUnlock();
+    Out.emitCodeAlignment(Align(BundleSize), &STI);
+  } else {
+    Out.emitInstruction(Inst, STI);
+  }
 }
 
 void RISCV::RISCVMCLFIExpander::emitSandboxBranchReg(MCRegister Reg,
-                                                      MCStreamer &Out,
-                                                      const MCSubtargetInfo &STI) {
-  
-  MCInst AndInst;
-  AndInst.setOpcode(RISCV::ANDI);
-  AndInst.addOperand(MCOperand::createReg(Reg));
-  AndInst.addOperand(MCOperand::createReg(Reg));
-  AndInst.addOperand(MCOperand::createImm(-BundleSize));
-  Out.emitInstruction(AndInst, STI);
-
-  // add rd, rs, base_reg
-  MCInst Add;
-  Add.setOpcode(RISCV::ADD_UW);
-  Add.addOperand(MCOperand::createReg(Reg));
-  Add.addOperand(MCOperand::createReg(Reg));
-  Add.addOperand(MCOperand::createReg(LFIBaseReg));
-  Out.emitInstruction(Add, STI);
+                                                     MCStreamer &Out,
+                                                     const MCSubtargetInfo &STI) {
+  // add.uw s1, Reg, s11 ; andi s9, s1, ~7
+  emit(Out, STI, RISCV::ADD_UW, { R(LFIAddrReg), R(Reg), R(LFIBaseReg) });
+  emit(Out, STI, RISCV::ANDI,   { R(LFICtrlReg), R(LFIAddrReg), I64(BundleMaskImm) });
 }
 
 void RISCV::RISCVMCLFIExpander::emitIndirectJumpReg(MCRegister Reg,
-                                                     MCStreamer &Out,
-                                                     const MCSubtargetInfo &STI) {
-  
-  // jalr x0, reg, 0 (indirect jump)
-  MCInst Jmp;
-  Jmp.setOpcode(RISCV::JALR);
-  Jmp.addOperand(MCOperand::createReg(RISCV::X0));
-  Jmp.addOperand(MCOperand::createReg(Reg));
-  Jmp.addOperand(MCOperand::createImm(0));
-  Out.emitInstruction(Jmp, STI);
+                                                    MCStreamer &Out,
+                                                    const MCSubtargetInfo &STI) {
+  Out.emitBundleLock(false);
+  emitSandboxBranchReg(Reg, Out, STI);
+  emit(Out, STI, RISCV::JALR, { R(RISCV::X0), R(LFICtrlReg), I64(0) });
+  Out.emitBundleUnlock();
 }
 
 void RISCV::RISCVMCLFIExpander::emitIndirectCallReg(MCRegister Reg,
-                                                     MCStreamer &Out,
-                                                     const MCSubtargetInfo &STI) {
-
-  MCInst Call;
-  Call.setOpcode(RISCV::JALR);
-  Call.addOperand(MCOperand::createReg(RISCV::X1));
-  Call.addOperand(MCOperand::createReg(Reg));
-  Call.addOperand(MCOperand::createImm(0));
-  Out.emitInstruction(Call, STI);
+                                                    MCStreamer &Out,
+                                                    const MCSubtargetInfo &STI) {
+  Out.emitBundleLock(true); 
+  emitSandboxBranchReg(Reg, Out, STI);
+  emit(Out, STI, RISCV::JALR, { R(LFIReturnReg), R(LFICtrlReg), I64(0) });
+  Out.emitBundleUnlock();
   Out.emitCodeAlignment(Align(BundleSize), &STI);
 }
 
 void RISCV::RISCVMCLFIExpander::expandIndirectBranch(const MCInst &Inst,
-                                                      MCStreamer &Out,
-                                                      const MCSubtargetInfo &STI) {
-  MCRegister Target;
-  
-  
-  if (Inst.getOpcode() == RISCV::JALR) {
-    Target = Inst.getOperand(1).getReg(); 
+                                                     MCStreamer &Out,
+                                                     const MCSubtargetInfo &STI) {
+  // jalr rd, rs1, imm
+  MCRegister RS1 = Inst.getOperand(1).getReg();
+  int64_t Off    = Inst.getOperand(2).getImm();
+  bool AsCall    = isCall(Inst);
+
+  if (AsCall) {
+    Out.emitBundleLock(true);
+    emitSandboxBranchReg(RS1, Out, STI);
+    emit(Out, STI, RISCV::JALR, { R(LFIReturnReg), R(LFICtrlReg), I64(Off) });
+    Out.emitBundleUnlock();
+    Out.emitCodeAlignment(Align(BundleSize), &STI);
   } else {
-
-    Target = Inst.getOperand(0).getReg();
+    Out.emitBundleLock(false);
+    emitSandboxBranchReg(RS1, Out, STI);
+    emit(Out, STI, RISCV::JALR, { R(RISCV::X0), R(LFICtrlReg), I64(Off) });
+    Out.emitBundleUnlock();
   }
-  
-  if (isCall(Inst))
-    emitIndirectCallReg(Target, Out, STI);
-  else
-    emitIndirectJumpReg(Target, Out, STI);
 }
 
-void RISCV::RISCVMCLFIExpander::expandReturn(const MCInst &Inst, 
-                                              MCStreamer &Out,
-                                              const MCSubtargetInfo &STI) {
-  MCInst Jmp;
-  Jmp.setOpcode(RISCV::JALR);
-  Jmp.addOperand(MCOperand::createReg(RISCV::X0));   
-  Jmp.addOperand(MCOperand::createReg(RISCV::X1));   
-  Jmp.addOperand(MCOperand::createImm(0));           
-  Out.emitInstruction(Jmp, STI);
+static bool isValidReturnRegister(const MCRegister &Reg) {
+  (void)Reg;
+  return true;
 }
 
-void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst, 
-                                                 MCStreamer &Out,
-                                                 const MCSubtargetInfo &STI,
-                                                 bool EmitPrefixes) {
-  MCInst SandboxedInst(Inst);
+void RISCV::RISCVMCLFIExpander::expandReturn(const MCInst &Inst,
+                                             MCStreamer &Out,
+                                             const MCSubtargetInfo &STI) {
   
-  MCOperand &Base = SandboxedInst.getOperand(1);
-  
-  if (Base.isReg() && isAbsoluteReg(Base.getReg())) {
-    emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
-    return;
+  (void)Inst; (void)STI;
+  Out.emitInstruction(Inst, STI);
+}
+
+// Expands memory ops: add.uw s1, base, s11 ; use I(s1)
+void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
+                                                MCStreamer &Out,
+                                                const MCSubtargetInfo &STI,
+                                                bool EmitPrefixes) {
+  (void)EmitPrefixes;
+  MCInst S(Inst);
+
+
+  MCOperand &Base = S.getOperand(1);
+  if (Base.isReg() && !isAbsoluteReg(Base.getReg())) {
+    Out.emitBundleLock(false);
+    emit(Out, STI, RISCV::ADD_UW, { R(LFIAddrReg), R(Base.getReg()), R(LFIBaseReg) });
+    Base.setReg(LFIAddrReg);
+    Out.emitInstruction(S, STI);
+    Out.emitBundleUnlock();
+  } else {
+    Out.emitInstruction(S, STI);
   }
-  
-  Out.emitBundleLock(false);
-
-  MCInst ClearBits;
- 
-  MCInst AddUW;
-  AddUW.setOpcode(RISCV::ADD_UW);
-  AddUW.addOperand(MCOperand::createReg(LFIAddrReg));        
-  AddUW.addOperand(MCOperand::createReg(Base.getReg()));    
-  AddUW.addOperand(MCOperand::createReg(LFIBaseReg));        
-  Out.emitInstruction(AddUW, STI);
-
-  
-  Base.setReg(LFIAddrReg);
-  
-  emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
-  Out.emitBundleUnlock();
 }
 
-void RISCV::RISCVMCLFIExpander::emitPrefixes(MCStreamer &Out, const MCSubtargetInfo &STI) {
-  Prefixes.clear();
-}
 
 void RISCV::RISCVMCLFIExpander::expandStringOperation(const MCInst &Inst,
-                                                       MCStreamer &Out,
-                                                       const MCSubtargetInfo &STI,
-                                                       bool EmitPrefixes) {
-  emitInstruction(Inst, Out, STI, EmitPrefixes);
+                                                      MCStreamer &Out,
+                                                      const MCSubtargetInfo &STI,
+                                                      bool EmitPrefixes) {
+  (void)EmitPrefixes;
+  Out.emitInstruction(Inst, STI);
 }
 
-void RISCV::RISCVMCLFIExpander::expandExplicitStackManipulation(MCRegister StackReg,
-                                                                 const MCInst &Inst,
-                                                                 MCStreamer &Out,
-                                                                 const MCSubtargetInfo &STI,
-                                                                 bool EmitPrefixes) {
-  expandLoadStore(Inst, Out, STI, EmitPrefixes);
+// Stack manipulation (sp) via s10 then add.uw sp, s10, s11
+static void emitStackFixupFromTmp(MCStreamer &Out, const MCSubtargetInfo &STI) {
+  emit(Out, STI, RISCV::ADD_UW, { R(LFIStackReg), R(LFITmpReg), R(LFIBaseReg) });
 }
 
-void RISCV::RISCVMCLFIExpander::expandStackRegPush(const MCInst &Inst,
-                                                    MCStreamer &Out,
-                                                    const MCSubtargetInfo &STI) {
-  emitInstruction(Inst, Out, STI, false);
+void RISCV::RISCVMCLFIExpander::expandExplicitStackManipulation(
+    MCRegister StackReg, const MCInst &Inst, MCStreamer &Out,
+    const MCSubtargetInfo &STI, bool EmitPrefixes) {
+  (void)EmitPrefixes;
+  assert(StackReg == LFIStackReg && "only sp is supported");
+
+  if (isStackAddi(Inst)) {
+    // addi s10, sp, imm ; add.uw sp, s10, s11
+    emit(Out, STI, RISCV::ADDI,  { R(LFITmpReg),  R(LFIStackReg), Inst.getOperand(2) });
+    emitStackFixupFromTmp(Out, STI);
+    return;
+  }
+
+  if (isAddSpSpX(Inst)) {
+    // add s10, sp, xN ; add.uw sp, s10, s11
+    emit(Out, STI, RISCV::ADD,   { R(LFITmpReg),  R(LFIStackReg), Inst.getOperand(2) });
+    emitStackFixupFromTmp(Out, STI);
+    return;
+  }
+
+  if (isSubSpSpX(Inst)) {
+    // sub s10, sp, xN ; add.uw sp, s10, s11
+    emit(Out, STI, RISCV::SUB,   { R(LFITmpReg),  R(LFIStackReg), Inst.getOperand(2) });
+    emitStackFixupFromTmp(Out, STI);
+    return;
+  }
+
+  if (isMvSpX(Inst)) {
+    // mv s10, xN ; add.uw sp, s10, s11
+    MCRegister XN = Inst.getOperand(1).getReg();
+    emit(Out, STI, RISCV::ADDI,   { R(LFITmpReg),   R(XN), I64 (0) });
+    emitStackFixupFromTmp(Out, STI);
+    return;
+  }
+
+  // Fallback
+  Out.emitInstruction(Inst, STI);
 }
 
-
-
-void RISCV::RISCVMCLFIExpander::emitSandboxMemOp(MCInst &Inst, int MemIdx,
-                                                  MCRegister ScratchReg,
+//  ld ra,(sp)  -> ld s10,(sp) ; add.uw s1,s10,s11 ; andi ra,s1,~7
+//  mv ra,xN    -> mv s10,xN  ; add.uw s1,s10,s11 ; andi ra,s1,~7
+void RISCV::RISCVMCLFIExpander::expandRetAddrMods(const MCInst &Inst,
                                                   MCStreamer &Out,
                                                   const MCSubtargetInfo &STI) {
-  if (MemIdx >= (int)Inst.getNumOperands()) return;
-  MCOperand &Base = Inst.getOperand(MemIdx);
-  if (!Base.isReg()) return;
-  if (isAbsoluteReg(Base.getReg())) return;
+  if (isLdRaFromSp(Inst)) {
+    emit(Out, STI, RISCV::LD,    { R(LFITmpReg), R(LFIStackReg), I64(0) });
+    emit(Out, STI, RISCV::ADD_UW,{ R(LFIAddrReg), R(LFITmpReg),  R(LFIBaseReg) });
+    emit(Out, STI, RISCV::ANDI,  { R(LFIReturnReg), R(LFIAddrReg), I64(BundleMaskImm) });
+    return;
+  }
 
-  
-  MCInst AddUW;
-  AddUW.setOpcode(RISCV::ADD_UW);
-  AddUW.addOperand(MCOperand::createReg(LFIAddrReg));
-  AddUW.addOperand(MCOperand::createReg(Base.getReg()));
-  AddUW.addOperand(MCOperand::createReg(LFIBaseReg));
-  Out.emitInstruction(AddUW, STI);
+  if (isMvRaX(Inst)) {
+    MCRegister XN = Inst.getOperand(1).getReg();
+    emit(Out, STI, RISCV::ADDI,   { R(LFITmpReg),   R(XN), I64(0) });
+    emit(Out, STI, RISCV::ADD_UW,   { R(LFIAddrReg),  R(LFITmpReg), R(LFIBaseReg) });
+    emit(Out, STI, RISCV::ANDI,     { R(LFIReturnReg), R(LFIAddrReg), I64(BundleMaskImm) });
+    return;
+  }
 
-  Base.setReg(LFIAddrReg);
+  Out.emitInstruction(Inst, STI);
 }
 
-bool RISCV::RISCVMCLFIExpander::emitSandboxMemOps(MCInst &Inst,
-                                                   MCRegister ScratchReg,
-                                                   MCStreamer &Out,
-                                                   const MCSubtargetInfo &STI,
-                                                   bool EmitInstructions) {
-  // For RISC-V load/store instructions, the base register is typically operand 1
-  if (!isLoadStore(Inst)) return false;
-  
-  if (!EmitInstructions) {
-    MCOperand &Base = Inst.getOperand(1);
-    return Base.isReg() && !isAbsoluteReg(Base.getReg());
-  }
-  
-  // Actually emit the sandboxing instructions
-  bool emittedInstructions = false;
-  MCOperand &Base = Inst.getOperand(1);
-  if (Base.isReg() && !isAbsoluteReg(Base.getReg())) {
-    emitSandboxMemOp(Inst, 1, ScratchReg, Out, STI);
-    emittedInstructions = true;
-  }
-  
-  return emittedInstructions;
+// Syscalls:
+//  ecall ->
+//    mv   s10, ra
+//    ld   ra, (s11)
+//    jalr ra
+//    add.uw s1, s10, s11
+//    andi ra, s1, ~7
+void RISCV::RISCVMCLFIExpander::expandSyscall(const MCInst &Inst,
+                                              MCStreamer &Out,
+                                              const MCSubtargetInfo &STI) {
+  (void)Inst;
+  emit(Out, STI, RISCV::ADDI,     { R(LFITmpReg),   R(LFIReturnReg), I64(0) });
+  emit(Out, STI, RISCV::LD,       { R(LFIReturnReg), R(LFIBaseReg), I64(0) });
+  emit(Out, STI, RISCV::JALR,     { R(LFIReturnReg), R(LFIReturnReg), I64(0) });
+  emit(Out, STI, RISCV::ADD_UW,   { R(LFIAddrReg),  R(LFITmpReg),   R(LFIBaseReg) });
+  emit(Out, STI, RISCV::ANDI,     { R(LFIReturnReg), R(LFIAddrReg), I64(BundleMaskImm) });
 }
 
-void RISCV::RISCVMCLFIExpander::emitInstruction(const MCInst &Inst, 
-                                                 MCStreamer &Out,
-                                                 const MCSubtargetInfo &STI,
-                                                 bool EmitPrefixes) {
+
+void RISCV::RISCVMCLFIExpander::expandTLSShim(const MCInst &Inst,
+                                              MCStreamer &Out,
+                                              const MCSubtargetInfo &STI) {
+  if (isMvTpX(Inst)) {
+    MCRegister XN = Inst.getOperand(1).getReg();
+    emit(Out, STI, RISCV::ADDI,     { R(LFITmpReg), R(LFIReturnReg), I64(0) });     // mv s10,ra             // mv s10,ra
+    emit(Out, STI, RISCV::XOR,      { R(RISCV::X10), R(RISCV::X10), R(XN) });        // xor a0,a0,xN
+    emit(Out, STI, RISCV::XOR,      { R(XN),         R(RISCV::X10), R(XN) });        // xor xN,a0,xN
+    emit(Out, STI, RISCV::XOR,      { R(RISCV::X10), R(RISCV::X10), R(XN) });        // xor a0,a0,xN
+    emit(Out, STI, RISCV::LD,       { R(LFIReturnReg), R(LFIBaseReg), I64(16) });    // ld ra,16(s11)
+    emit(Out, STI, RISCV::JALR,     { R(LFIReturnReg), R(LFIReturnReg), I64(0) });   // jalr ra
+    emit(Out, STI, RISCV::XOR,      { R(RISCV::X10), R(RISCV::X10), R(XN) });
+    emit(Out, STI, RISCV::XOR,      { R(XN),         R(RISCV::X10), R(XN) });
+    emit(Out, STI, RISCV::XOR,      { R(RISCV::X10), R(RISCV::X10), R(XN) });
+    emit(Out, STI, RISCV::ADD_UW,   { R(LFIAddrReg), R(LFITmpReg), R(LFIBaseReg) });
+    emit(Out, STI, RISCV::ANDI,     { R(LFIReturnReg), R(LFIAddrReg), I64(BundleMaskImm) });
+    return;
+  }
+
+  if (isMvXTp(Inst)) {
+    MCRegister XN = Inst.getOperand(0).getReg();
+    emit(Out, STI, RISCV::ADDI,     { R(XN),        R(RISCV::X10),  I64(0) });      // mv xN,a0
+    emit(Out, STI, RISCV::ADDI,     { R(LFITmpReg), R(LFIReturnReg), I64(0) });     // mv s10,ra
+    emit(Out, STI, RISCV::LD,       { R(LFIReturnReg), R(LFIBaseReg), I64(8) });    // ld ra,8(s11)
+    emit(Out, STI, RISCV::JALR,     { R(LFIReturnReg), R(LFIReturnReg), I64(0) });  // jalr ra
+    emit(Out, STI, RISCV::XOR,      { R(RISCV::X10), R(RISCV::X10), R(XN) });
+    emit(Out, STI, RISCV::XOR,      { R(XN),         R(RISCV::X10), R(XN) });
+    emit(Out, STI, RISCV::XOR,      { R(RISCV::X10), R(RISCV::X10), R(XN) });
+    emit(Out, STI, RISCV::ADD_UW,   { R(LFIAddrReg), R(LFITmpReg), R(LFIBaseReg) });
+    emit(Out, STI, RISCV::ANDI,     { R(LFIReturnReg), R(LFIAddrReg), I64(BundleMaskImm) });
+    return;
+  }
+
+  if (isAddA0A0Tp(Inst)) {
+    emit(Out, STI, RISCV::SD,       { R(RISCV::X11), R(LFIStackReg), I64(-8) });    // sd a1,-8(sp)
+    emit(Out, STI, RISCV::ADDI,     { R(RISCV::X11), R(RISCV::X10),  I64(0) });     // mv a1,a0
+    emit(Out, STI, RISCV::ADDI,     { R(LFITmpReg),  R(LFIReturnReg), I64(0) });    // mv s10,ra
+    emit(Out, STI, RISCV::LD,       { R(LFIReturnReg), R(LFIBaseReg), I64(8) });    // ld ra,8(s11)
+    emit(Out, STI, RISCV::JALR,     { R(LFIReturnReg), R(LFIReturnReg), I64(0) });  // jalr ra
+    emit(Out, STI, RISCV::ADD_UW,   { R(LFIAddrReg), R(LFITmpReg), R(LFIBaseReg) });
+    emit(Out, STI, RISCV::ANDI,     { R(LFIReturnReg), R(LFIAddrReg), I64(BundleMaskImm) });
+    emit(Out, STI, RISCV::ADD,      { R(RISCV::X10), R(RISCV::X11), R(RISCV::X10) });// add a0,a1,a0
+    emit(Out, STI, RISCV::LD,       { R(RISCV::X11), R(LFIStackReg), I64(-8) });    // ld a1,-8(sp)
+    return;
+  }
+
+  Out.emitInstruction(Inst, STI);
+}
+
+void RISCV::RISCVMCLFIExpander::emitInstruction(const MCInst &Inst,
+                                                MCStreamer &Out,
+                                                const MCSubtargetInfo &STI,
+                                                bool EmitPrefixes) {
+  (void)EmitPrefixes;
   Out.emitInstruction(Inst, STI);
 }
 
@@ -319,51 +451,68 @@ static MCInst replaceReg(const MCInst &Inst, MCRegister Dest, MCRegister Src) {
   New.setLoc(Inst.getLoc());
   for (unsigned I = 0; I < Inst.getNumOperands(); ++I) {
     const MCOperand &Op = Inst.getOperand(I);
-    if (Op.isReg() && Op.getReg() == Src) {
+    if (Op.isReg() && Op.getReg() == Src)
       New.addOperand(MCOperand::createReg(Dest));
-    } else {
+    else
       New.addOperand(Op);
-    }
   }
   return New;
 }
 
 void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
-                                              const MCSubtargetInfo &STI,
-                                              bool EmitPrefixes) {
-  // Check for modifications to reserved registers
+                                             const MCSubtargetInfo &STI,
+                                             bool EmitPrefixes) {
+  (void)EmitPrefixes;
+
+  // Reserved base s11 protection
   if (explicitlyModifiesRegister(Inst, LFIBaseReg)) {
     if (RISCVLFIErrorReserved)
       return Out.getContext().reportError(
-          Inst.getLoc(), "illegal modification of reserved LFI register");
+          Inst.getLoc(), "illegal modification of reserved LFI register (s11)");
     Out.getContext().reportWarning(
-        Inst.getLoc(), "deleting modification of reserved LFI register");
-    MCInst New = replaceReg(Inst, LFIAddrReg, LFIBaseReg);
-    return doExpandInst(New, Out, STI, EmitPrefixes);
-  } else if (isSyscall(Inst)) {
-    emitInstruction(Inst, Out, STI, EmitPrefixes);
-  } else if (isDirectCall(Inst)) {
-    expandDirectCall(Inst, Out, STI);
-  } else if (isIndirectBranch(Inst) || isCall(Inst)) {
-    expandIndirectBranch(Inst, Out, STI);
-  } else if (isReturn(Inst)) {
-    expandReturn(Inst, Out, STI);
-  } else if (isLoadStore(Inst)) {
-    expandLoadStore(Inst, Out, STI, EmitPrefixes);
-  } else if (explicitlyModifiesRegister(Inst, RISCV::X2)) {
-    expandLoadStore(Inst, Out, STI, EmitPrefixes);
-  } else {
-    emitInstruction(Inst, Out, STI, EmitPrefixes);
+        Inst.getLoc(), "deleting modification of reserved LFI register (s11)");
+    return;
   }
+
+  // Syscall
+  if (isSyscall(Inst)) return expandSyscall(Inst, Out, STI);
+
+  if (isMvTpX(Inst) || isMvXTp(Inst) || isAddA0A0Tp(Inst))
+    return expandTLSShim(Inst, Out, STI);
+
+  if (isLdRaFromSp(Inst) || isMvRaX(Inst))
+    return expandRetAddrMods(Inst, Out, STI);
+
+  // Direct calls (jal / pseudo call)
+  if (isJAL(Inst)) return expandDirectCall(Inst, Out, STI);
+
+  // Indirect branches/calls (jalr)
+  if (isIndirectBranch(Inst) || isCall(Inst))
+    return expandIndirectBranch(Inst, Out, STI);
+
+  // Return
+  if (isReturn(Inst)) return expandReturn(Inst, Out, STI);
+
+  // Stack manipulation (sp)
+  if (isStackAddi(Inst) || isAddSpSpX(Inst) || isSubSpSpX(Inst) || isMvSpX(Inst))
+    return expandExplicitStackManipulation(LFIStackReg, Inst, Out, STI, false);
+
+  // Loads / stores
+  if (isLoadStore(Inst))
+    return expandLoadStore(Inst, Out, STI, false);
+
+  // Default passthrough
+  Out.emitInstruction(Inst, STI);
 }
 
 bool RISCV::RISCVMCLFIExpander::expandInst(const MCInst &Inst, MCStreamer &Out,
-                                            const MCSubtargetInfo &STI) {
-  if (Guard)
-    return false;
+                                           const MCSubtargetInfo &STI) {
+  if (Guard) return false;
   Guard = true;
+
   doExpandInst(Inst, Out, STI, true);
   invalidateScratchRegs(Inst);
+
   Guard = false;
   return true;
 }

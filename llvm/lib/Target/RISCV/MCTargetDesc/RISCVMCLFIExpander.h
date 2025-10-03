@@ -1,4 +1,4 @@
-//===- RISCVMCLFIExpander.h - RISCV LFI Expander -------------------*- C++ -*-===//
+//===- RISCVMCLFIExpander.h - RISCV LFI Expander -------------------*- C++-*-===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -86,6 +86,18 @@ private:
                            const MCSubtargetInfo &STI);
   void emitIndirectCallReg(MCRegister Reg, MCStreamer &Out,
                            const MCSubtargetInfo &STI);
+
+                           
+  void expandRetAddrMods(const MCInst &Inst, MCStreamer &Out,
+                         const MCSubtargetInfo &STI);
+
+  // ecall → sandboxed trampoline sequence (save/restore ra via s10, etc.)
+  void expandSyscall(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI);
+
+  // TLS/thread-pointer shims (mv tp,xN / mv xN,tp / add a0,a0,tp)
+  void expandTLSShim(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI);
 };
 }
 }
