@@ -639,6 +639,8 @@ endif()
 
 set(amdgcn_SOURCES ${GENERIC_SOURCES})
 
+set(x86_64_lfi_SOURCES ${x86_64_SOURCES})
+
 set(armv4t_SOURCES ${arm_min_SOURCES})
 set(armv5te_SOURCES ${arm_min_SOURCES})
 set(armv6_SOURCES ${arm_min_SOURCES})
@@ -649,6 +651,7 @@ set(armv7k_SOURCES ${arm_SOURCES})
 set(arm64_SOURCES ${aarch64_SOURCES})
 set(arm64e_SOURCES ${aarch64_SOURCES})
 set(arm64_32_SOURCES ${aarch64_SOURCES})
+set(aarch64_lfi_SOURCES ${aarch64_SOURCES})
 
 # macho_embedded archs
 set(armv6m_SOURCES ${thumb1_SOURCES})

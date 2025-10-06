@@ -38,6 +38,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
+#include "llvm/MC/MCLFI.h"
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
@@ -928,6 +929,9 @@ void X86AsmPrinter::emitStartOfAsmFile(Module &M) {
   bool is16 = TT.getEnvironment() == Triple::CODE16;
   if (M.getModuleInlineAsm().empty() && is16)
     OutStreamer->emitAssemblerFlag(MCAF_Code16);
+
+  if (TT.isLFI())
+    initializeLFIMCStreamer(*OutStreamer.get(), OutContext, TT);
 }
 
 static void

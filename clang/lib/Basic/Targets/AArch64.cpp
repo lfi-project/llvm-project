@@ -413,6 +413,10 @@ void AArch64TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__aarch64__");
   }
 
+  if (getTriple().isAArch64LFI()) {
+    Builder.defineMacro("__LFI__");
+  }
+
   // Inline assembly supports AArch64 flag outputs.
   Builder.defineMacro("__GCC_ASM_FLAG_OUTPUTS__");
 

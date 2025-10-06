@@ -106,7 +106,9 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
   movq   88(%rdi), %r11
   movq   96(%rdi), %r12
   movq  104(%rdi), %r13
+#ifndef __LFI__
   movq  112(%rdi), %r14
+#endif
   movq  120(%rdi), %r15
   # skip rflags
   # skip cs
@@ -655,8 +657,13 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_arm64_jumpto)
   ldp    x20,x21, [x0, #0x0A0]
   ldp    x22,x23, [x0, #0x0B0]
   ldp    x24,x25, [x0, #0x0C0]
+#ifdef __LFI__
+  ldp    x26,xzr, [x0, #0x0D0]
+  ldp    xzr,x29, [x0, #0x0E0]
+#else
   ldp    x26,x27, [x0, #0x0D0]
   ldp    x28,x29, [x0, #0x0E0]
+#endif
   ldr    x30,     [x0, #0x100]  // restore pc into lr
 #if defined(__ARM_FP) && __ARM_FP != 0
   ldp    d0, d1,  [x0, #0x110]

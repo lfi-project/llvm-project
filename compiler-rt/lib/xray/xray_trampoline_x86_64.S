@@ -91,7 +91,9 @@
 	movq  32(%rsp), %r11
 	movq  24(%rsp), %r12
 	movq  16(%rsp), %r13
+#ifndef __LFI__
 	movq  8(%rsp), %r14
+#endif
 	movq  0(%rsp), %r15
 	addq	$240, %rsp
 	CFI_ADJUST_CFA_OFFSET(-240)

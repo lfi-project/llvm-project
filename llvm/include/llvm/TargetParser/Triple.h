@@ -148,6 +148,8 @@ public:
     AArch64SubArch_arm64e,
     AArch64SubArch_arm64ec,
 
+    AArch64SubArch_lfi,
+
     KalimbaSubArch_v3,
     KalimbaSubArch_v4,
     KalimbaSubArch_v5,
@@ -164,6 +166,8 @@ public:
     SPIRVSubArch_v14,
     SPIRVSubArch_v15,
     SPIRVSubArch_v16,
+
+    X8664SubArch_lfi,
 
     // DXIL sub-arch corresponds to its version.
     DXILSubArch_v1_0,
@@ -674,6 +678,21 @@ public:
   bool isWindowsArm64EC() const {
     return getArch() == Triple::aarch64 &&
            getSubArch() == Triple::AArch64SubArch_arm64ec;
+  }
+
+  bool isLFI() const {
+    return isAArch64LFI() || isX8664LFI();
+  }
+
+  /// Checks if we're targeting the AArch64 LFI subarch.
+  bool isAArch64LFI() const {
+    return getArch() == Triple::aarch64 &&
+           getSubArch() == Triple::AArch64SubArch_lfi;
+  }
+
+  bool isX8664LFI() const {
+    return getArch() == Triple::x86_64 &&
+           getSubArch() == Triple::X8664SubArch_lfi;
   }
 
   bool isWindowsCoreCLREnvironment() const {

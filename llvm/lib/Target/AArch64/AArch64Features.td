@@ -948,3 +948,16 @@ def FeatureHardenSlsNoComdat : SubtargetFeature<"harden-sls-nocomdat",
 // Only intended to be used by disassemblers.
 def FeatureAll
     : SubtargetFeature<"all", "IsAll", "true", "Enable all instructions">;
+
+//===----------------------------------------------------------------------===//
+// LFI
+//===----------------------------------------------------------------------===//
+
+def FeatureLFIStores : SubtargetFeature<"lfi-stores", "LFIStores", "true",
+                                        "Isolate only store+jump instructions">;
+
+def FeatureLFIJumps : SubtargetFeature<"lfi-jumps", "LFIJumps", "true",
+                                       "Isolate only jump instructions">;
+
+def FeatureLFITLSReg : SubtargetFeature<"lfi-tls-reg", "LFITLSReg", "true",
+                                        "Reserve a register for thread-local LFI data">;

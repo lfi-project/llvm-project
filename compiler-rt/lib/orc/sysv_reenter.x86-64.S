@@ -61,7 +61,9 @@ __orc_rt_sysv_reenter:
         movq            %rax,   8(%rbp)
         fxrstor64       (%rsp)
         movq            -112(%rbp),     %r15
+#ifndef __LFI__
         movq            -104(%rbp),     %r14
+#endif
         movq            -96(%rbp),      %r13
         movq            -88(%rbp),      %r12
         movq            -80(%rbp),      %r11

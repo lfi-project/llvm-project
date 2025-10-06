@@ -382,7 +382,9 @@ InternalLongjmp(__hw_register_buf env, int retval) {
       "ldp	x21, x22, [%0, #2<<3];"
       "ldp	x23, x24, [%0, #4<<3];"
       "ldp	x25, x26, [%0, #6<<3];"
+#ifndef __LFI__
       "ldp	x27, x28, [%0, #8<<3];"
+#endif
       "ldp	x29, x30, [%0, #10<<3];"
       "ldp	 d8,  d9, [%0, #14<<3];"
       "ldp	d10, d11, [%0, #16<<3];"
@@ -407,7 +409,9 @@ InternalLongjmp(__hw_register_buf env, int retval) {
       "mov (1*8)(%0),%%rbp;"
       "mov (2*8)(%0),%%r12;"
       "mov (3*8)(%0),%%r13;"
+#ifndef __LFI__
       "mov (4*8)(%0),%%r14;"
+#endif
       "mov (5*8)(%0),%%r15;"
       "mov (6*8)(%0),%%rsp;"
       "mov (7*8)(%0),%%rdx;"
