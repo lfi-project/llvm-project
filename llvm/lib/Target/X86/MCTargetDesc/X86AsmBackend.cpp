@@ -494,8 +494,7 @@ void X86AsmBackend::emitInstructionEndBundle(MCObjectStreamer &OS) {
     assert(CF->getSize() != 0 && "A bundle-Locked fragment must contain at least one instruction");
     return;
   }
-  if (!PendingBA)
-    return;
+  assert(PendingBA && "MCBoundaryAlignFragment is expected for every instruction if it is not bundle-locked");
 
   // Tie the aligned instructions into a pending BoundaryAlign.
   PendingBA->setLastFragment(CF);
