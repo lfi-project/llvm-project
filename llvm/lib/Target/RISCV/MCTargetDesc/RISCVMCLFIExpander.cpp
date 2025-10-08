@@ -101,9 +101,9 @@ static bool isCall(const MCInst &I) {
   return false;
 }
 
-static bool isIndirectBranch(const MCInst &I) {
+static bool isRVIndirectBranch(const MCInst &I) {
   // jalr not writing ra is an indirect jump
-  return isJALR(I) && !isCall(I);
+  return isJALR(I);
 }
 
 static bool isReturn(const MCInst &I) {
@@ -204,7 +204,6 @@ void RISCV::RISCVMCLFIExpander::expandDirectCall(const MCInst &Inst,
     Out.emitBundleLock(true);
     Out.emitInstruction(Inst, STI);
     Out.emitBundleUnlock();
-    Out.emitCodeAlignment(Align(BundleSize), &STI);
   } else {
     Out.emitInstruction(Inst, STI);
   }
@@ -237,27 +236,32 @@ void RISCV::RISCVMCLFIExpander::emitIndirectCallReg(MCRegister Reg,
   Out.emitCodeAlignment(Align(BundleSize), &STI);
 }
 
-void RISCV::RISCVMCLFIExpander::expandIndirectBranch(const MCInst &Inst,
-                                                     MCStreamer &Out,
-                                                     const MCSubtargetInfo &STI) {
-  // jalr rd, rs1, imm
-  MCRegister RS1 = Inst.getOperand(1).getReg();
-  int64_t Off    = Inst.getOperand(2).getImm();
-  bool AsCall    = isCall(Inst);
+// void RISCV::RISCVMCLFIExpander::expandIndirectBranch(const MCInst &Inst,
+//                                                      MCStreamer &Out,
+//                                                      const MCSubtargetInfo &STI) {
+//   // jalr rd, rs1, imm
+//   MCRegister RD  = Inst.getOperand(0).getReg();
+//   MCRegister RS1 = Inst.getOperand(1).getReg();
+//   int64_t Off    = (Inst.getNumOperands() >= 3 && Inst.getOperand(2).isImm())
+//                      ? Inst.getOperand(2).getImm() : 0;
+//   bool AsCall    = isCall(Inst);
 
-  if (AsCall) {
-    Out.emitBundleLock(true);
-    emitSandboxBranchReg(RS1, Out, STI);
-    emit(Out, STI, RISCV::JALR, { R(LFIReturnReg), R(LFICtrlReg), I64(Off) });
-    Out.emitBundleUnlock();
-    Out.emitCodeAlignment(Align(BundleSize), &STI);
-  } else {
-    Out.emitBundleLock(false);
-    emitSandboxBranchReg(RS1, Out, STI);
-    emit(Out, STI, RISCV::JALR, { R(RISCV::X0), R(LFICtrlReg), I64(Off) });
-    Out.emitBundleUnlock();
-  }
-}
+//   if (AsCall) {
+//     Out.emitBundleLock(true);
+//     emitSandboxBranchReg(RS1, Out, STI);
+//     emit(Out, STI, RISCV::JALR, { R(RD), R(LFICtrlReg), I64(Off) });
+//     Out.emitBundleUnlock();
+//     if (RD == LFIReturnReg)
+//       Out.emitCodeAlignment(Align(BundleSize), &STI);
+//   } else {
+//     Out.emitBundleLock(false);
+//     emitSandboxBranchReg(RS1, Out, STI);
+//     emit(Out, STI, RISCV::JALR, { R(RISCV::X0), R(LFICtrlReg), I64(Off) });
+//     Out.emitBundleUnlock();
+//   }
+// }
+
+
 
 static bool isValidReturnRegister(const MCRegister &Reg) {
   (void)Reg;
@@ -442,7 +446,10 @@ void RISCV::RISCVMCLFIExpander::emitInstruction(const MCInst &Inst,
                                                 const MCSubtargetInfo &STI,
                                                 bool EmitPrefixes) {
   (void)EmitPrefixes;
-  Out.emitInstruction(Inst, STI);
+  if (!expandInst(Inst, Out, STI)) {
+   
+    doExpandInst(Inst, Out, STI, false);
+  }
 }
 
 static MCInst replaceReg(const MCInst &Inst, MCRegister Dest, MCRegister Src) {
@@ -487,7 +494,7 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out
   if (isJAL(Inst)) return expandDirectCall(Inst, Out, STI);
 
   // Indirect branches/calls (jalr)
-  if (isIndirectBranch(Inst) || isCall(Inst))
+  if (isRVIndirectBranch(Inst) || isCall(Inst))
     return expandIndirectBranch(Inst, Out, STI);
 
   // Return
@@ -505,14 +512,71 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out
   Out.emitInstruction(Inst, STI);
 }
 
-bool RISCV::RISCVMCLFIExpander::expandInst(const MCInst &Inst, MCStreamer &Out,
+bool RISCV::RISCVMCLFIExpander::expandInst(const MCInst &Inst,
+                                           MCStreamer &Out,
                                            const MCSubtargetInfo &STI) {
-  if (Guard) return false;
-  Guard = true;
 
-  doExpandInst(Inst, Out, STI, true);
-  invalidateScratchRegs(Inst);
+    if (Guard)
+      return false;
+    Guard = true;
+    doExpandInst(Inst, Out, STI, true);
 
-  Guard = false;
-  return true;
+    Guard = false;
+    return true;                                      
+}
+
+
+
+void RISCV::RISCVMCLFIExpander::expandIndirectBranch(const MCInst &Inst,
+                                           MCStreamer &Out,
+                                           const MCSubtargetInfo &STI) {
+
+
+  // if (Inst.getOpcode() == RISCV::JALR &&
+  //     Inst.getNumOperands() >= 3 &&
+  //     Inst.getOperand(0).isReg() &&
+  //     Inst.getOperand(1).isReg() &&
+  //     Inst.getOperand(2).isImm()) {
+
+    printf("expandindirect\n");
+
+    const unsigned Rd  = Inst.getOperand(0).getReg();
+    const unsigned Rs1 = Inst.getOperand(1).getReg();
+    const int64_t  Imm = Inst.getOperand(2).getImm();
+   
+    // add.uw s1, xM, s11
+    {
+      MCInst M; M.setOpcode(RISCV::ADD_UW);
+      M.addOperand(R(LFIAddrReg));
+      M.addOperand(R(Rs1));
+      M.addOperand(R(LFIBaseReg));
+      Out.emitInstruction(M, STI);
+    }
+    // andi s9, s1, -8
+    {
+      MCInst M; M.setOpcode(RISCV::ANDI);
+      M.addOperand(R(LFICtrlReg));
+      M.addOperand(R(LFIAddrReg));
+      M.addOperand(I64(-8));
+      Out.emitInstruction(M, STI);
+    }
+    // jalr rd, s9, imm   (prints as jalr rd, imm(s9))
+    {
+       if (Rd == RISCV::X1){
+        Out.emitBundleLock(true);
+      }
+      MCInst M; M.setOpcode(RISCV::JALR);
+      M.addOperand(R(Rd));
+      M.addOperand(R(LFICtrlReg));
+      M.addOperand(I64(Imm));
+      Out.emitInstruction(M, STI);
+    }
+
+    if (Rd == RISCV::X1){
+      Out.emitBundleUnlock();
+    }
+
+
+  //}
+
 }
