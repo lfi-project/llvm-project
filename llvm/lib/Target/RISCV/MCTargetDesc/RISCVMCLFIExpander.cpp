@@ -62,6 +62,16 @@ static bool isLoad(const MCInst &I) {
   case RISCV::LB: case RISCV::LBU: case RISCV::LH: case RISCV::LHU:
   case RISCV::LW: case RISCV::LWU: case RISCV::LD:
   case RISCV::FLH: case RISCV::FLW: case RISCV::FLD:
+  case RISCV::C_LBU:
+  case RISCV::C_LD:
+  case RISCV::C_LDSP:
+  case RISCV::C_LH:
+  case RISCV::C_LHU:
+  case RISCV::C_LH_INX:
+  case RISCV::C_LW:
+  case RISCV::C_LWSP:
+  case RISCV::C_LWSP_INX:
+  case RISCV::C_LW_INX:
     return true;
   default:
     return false;
@@ -72,6 +82,9 @@ static bool isStore(const MCInst &I) {
   switch (I.getOpcode()) {
   case RISCV::SB: case RISCV::SH: case RISCV::SW: case RISCV::SD:
   case RISCV::FSH: case RISCV::FSW: case RISCV::FSD:
+  case RISCV:: C_SB: case RISCV:: C_SD: case RISCV:: C_SDSP:
+  case RISCV:: C_SH: case RISCV:: C_SH_INX: case RISCV:: C_SW:
+  case RISCV:: C_SWSP: case RISCV:: C_SWSP_INX: case RISCV:: C_SW_INX:
     return true;
   default:
     return false;
@@ -235,33 +248,6 @@ void RISCV::RISCVMCLFIExpander::emitIndirectCallReg(MCRegister Reg,
   Out.emitBundleUnlock();
   Out.emitCodeAlignment(Align(BundleSize), &STI);
 }
-
-// void RISCV::RISCVMCLFIExpander::expandIndirectBranch(const MCInst &Inst,
-//                                                      MCStreamer &Out,
-//                                                      const MCSubtargetInfo &STI) {
-//   // jalr rd, rs1, imm
-//   MCRegister RD  = Inst.getOperand(0).getReg();
-//   MCRegister RS1 = Inst.getOperand(1).getReg();
-//   int64_t Off    = (Inst.getNumOperands() >= 3 && Inst.getOperand(2).isImm())
-//                      ? Inst.getOperand(2).getImm() : 0;
-//   bool AsCall    = isCall(Inst);
-
-//   if (AsCall) {
-//     Out.emitBundleLock(true);
-//     emitSandboxBranchReg(RS1, Out, STI);
-//     emit(Out, STI, RISCV::JALR, { R(RD), R(LFICtrlReg), I64(Off) });
-//     Out.emitBundleUnlock();
-//     if (RD == LFIReturnReg)
-//       Out.emitCodeAlignment(Align(BundleSize), &STI);
-//   } else {
-//     Out.emitBundleLock(false);
-//     emitSandboxBranchReg(RS1, Out, STI);
-//     emit(Out, STI, RISCV::JALR, { R(RISCV::X0), R(LFICtrlReg), I64(Off) });
-//     Out.emitBundleUnlock();
-//   }
-// }
-
-
 
 static bool isValidReturnRegister(const MCRegister &Reg) {
   (void)Reg;
