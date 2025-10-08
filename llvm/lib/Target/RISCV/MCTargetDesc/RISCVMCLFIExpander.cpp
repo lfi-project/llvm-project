@@ -287,11 +287,10 @@ void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
 
   MCOperand &Base = S.getOperand(1);
   if (Base.isReg() && !isAbsoluteReg(Base.getReg())) {
-    Out.emitBundleLock(false);
     emit(Out, STI, RISCV::ADD_UW, { R(LFIAddrReg), R(Base.getReg()), R(LFIBaseReg) });
     Base.setReg(LFIAddrReg);
     Out.emitInstruction(S, STI);
-    Out.emitBundleUnlock();
+    
   } else {
     Out.emitInstruction(S, STI);
   }
