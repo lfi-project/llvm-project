@@ -102,6 +102,10 @@ static bool explicitlyModifiesRegister(const MCInst &Inst, MCRegister Reg) {
 static bool isJAL(const MCInst &I)  { return I.getOpcode() == RISCV::JAL; }
 static bool isJALR(const MCInst &I) { return I.getOpcode() == RISCV::JALR; }
 static bool isSyscall(const MCInst &I) { return I.getOpcode() == RISCV::ECALL; }
+static bool isC_JAL(const MCInst &I) { return I.getOpcode() == RISCV::C_JAL; }
+static bool isC_JALR(const MCInst &I) { return I.getOpcode() == RISCV::C_JALR; }
+static bool isCompressedJR(const MCInst &I) {
+return I.getOpcode() == RISCV::C_JR; }
 
 static bool isCall(const MCInst &I) {
   // Writes ra (x1)
@@ -116,12 +120,19 @@ static bool isCall(const MCInst &I) {
 
 static bool isRVIndirectBranch(const MCInst &I) {
   // jalr not writing ra is an indirect jump
-  return isJALR(I);
+  switch (I.getOpcode()) {
+    case RISCV::JALR:
+    case RISCV::C_JR:    
+    case RISCV::C_JALR: 
+      return true;
+    default:
+      return false;
+  }
 }
 
 static bool isReturn(const MCInst &I) {
   if (I.getOpcode() == RISCV::PseudoRET) return true;
-  if (!isJALR(I)) return false;
+  if (!isJALR(I) || !isC_JALR(I)) return false;
   // ret == jalr x0, ra, 0
   return I.getNumOperands() >= 3 &&
          I.getOperand(0).isReg() && I.getOperand(0).getReg() == RISCV::X0 &&
@@ -456,6 +467,11 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out
                                              bool EmitPrefixes) {
   (void)EmitPrefixes;
 
+  if (isC_JAL(Inst) || isC_JALR(Inst)) {
+    compressedBranch(Inst, Out, STI);
+    return;
+  }
+
   // Reserved base s11 protection
   if (explicitlyModifiesRegister(Inst, LFIBaseReg)) {
     if (RISCVLFIErrorReserved)
@@ -479,7 +495,7 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out
   if (isJAL(Inst)) return expandDirectCall(Inst, Out, STI);
 
   // Indirect branches/calls (jalr)
-  if (isRVIndirectBranch(Inst) || isCall(Inst))
+  if (isCompressedJR(Inst) || isRVIndirectBranch(Inst) || isCall(Inst))
     return expandIndirectBranch(Inst, Out, STI);
 
   // Return
@@ -510,6 +526,49 @@ bool RISCV::RISCVMCLFIExpander::expandInst(const MCInst &Inst,
     return true;                                      
 }
 
+void RISCV::RISCVMCLFIExpander::compressedBranch(const MCInst &Inst,
+                                                  MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI) {
+  const unsigned Opc = Inst.getOpcode();
+
+  if (Opc == RISCV::C_JAL) {
+    MCInst J;
+    J.setOpcode(RISCV::JAL);
+    // rd = ra
+    J.addOperand(R(LFIReturnReg));
+
+    // Copy the single target operand (imm/expr) from C.JAL to JAL.
+    // C.JAL typically carries one immediate/expr operand (the target).
+    for (unsigned i = 0; i < Inst.getNumOperands(); ++i) {
+      const MCOperand &Op = Inst.getOperand(i);
+      if (Op.isImm() || Op.isExpr())
+        J.addOperand(Op);
+      // C.JAL has no rd/rs operands; ignore anything else defensively.
+    }
+
+    Out.emitBundleLock(true);   // align_to_end behavior
+    Out.emitInstruction(J, STI);
+    Out.emitBundleUnlock();
+    return;
+  }
+
+  if (Opc == RISCV::C_JALR) {
+    assert(Inst.getNumOperands() >= 1 && Inst.getOperand(0).isReg() &&
+           "C.JALR expects a single register operand");
+    const unsigned Rs1 = Inst.getOperand(0).getReg();
+
+    emit(Out, STI, RISCV::ADD_UW, { R(LFIAddrReg), R(Rs1), R(LFIBaseReg) });
+    emit(Out, STI, RISCV::ANDI,   { R(LFICtrlReg), R(LFIAddrReg), I64(BundleMaskImm) });
+
+    Out.emitBundleLock(true); // align_to_end for calls
+    emit(Out, STI, RISCV::JALR,   { R(LFIReturnReg), R(LFICtrlReg), I64(0) });
+    Out.emitBundleUnlock();
+    return;
+  }
+
+  // Fallback (shouldn't normally reach here for compressed jumps we handle)
+  Out.emitInstruction(Inst, STI);
+}
 
 
 void RISCV::RISCVMCLFIExpander::expandIndirectBranch(const MCInst &Inst,
@@ -517,51 +576,32 @@ void RISCV::RISCVMCLFIExpander::expandIndirectBranch(const MCInst &Inst,
                                            const MCSubtargetInfo &STI) {
 
 
-  // if (Inst.getOpcode() == RISCV::JALR &&
-  //     Inst.getNumOperands() >= 3 &&
-  //     Inst.getOperand(0).isReg() &&
-  //     Inst.getOperand(1).isReg() &&
-  //     Inst.getOperand(2).isImm()) {
+ unsigned Rd, Rs1; int64_t Imm;
 
-    printf("expandindirect\n");
+  switch (Inst.getOpcode()) {
+    case RISCV::C_JR:
+      // jr rs1  ==> jalr x0, rs1, 0
+      Rd  = RISCV::X0;
+      Rs1 = Inst.getOperand(0).getReg();
+      Imm = 0;
+      break;
+    case RISCV::C_JALR:
+      // c.jalr rs1  ==> jalr x1, rs1, 0
+      Rd  = RISCV::X1;
+      Rs1 = Inst.getOperand(0).getReg();
+      Imm = 0;
+      break;
+    default: // JALR rd, rs1, imm
+      Rd  = Inst.getOperand(0).getReg();
+      Rs1 = Inst.getOperand(1).getReg();
+      Imm = Inst.getOperand(2).getImm();
+      break;
+  }
 
-    const unsigned Rd  = Inst.getOperand(0).getReg();
-    const unsigned Rs1 = Inst.getOperand(1).getReg();
-    const int64_t  Imm = Inst.getOperand(2).getImm();
-   
-    // add.uw s1, xM, s11
-    {
-      MCInst M; M.setOpcode(RISCV::ADD_UW);
-      M.addOperand(R(LFIAddrReg));
-      M.addOperand(R(Rs1));
-      M.addOperand(R(LFIBaseReg));
-      Out.emitInstruction(M, STI);
-    }
-    // andi s9, s1, -8
-    {
-      MCInst M; M.setOpcode(RISCV::ANDI);
-      M.addOperand(R(LFICtrlReg));
-      M.addOperand(R(LFIAddrReg));
-      M.addOperand(I64(-8));
-      Out.emitInstruction(M, STI);
-    }
-    // jalr rd, s9, imm   (prints as jalr rd, imm(s9))
-    {
-       if (Rd == RISCV::X1){
-        Out.emitBundleLock(true);
-      }
-      MCInst M; M.setOpcode(RISCV::JALR);
-      M.addOperand(R(Rd));
-      M.addOperand(R(LFICtrlReg));
-      M.addOperand(I64(Imm));
-      Out.emitInstruction(M, STI);
-    }
-
-    if (Rd == RISCV::X1){
-      Out.emitBundleUnlock();
-    }
-
-
-  //}
-
+  // add.uw s1, Rs1, s11 ; andi s9, s1, -8 ; jalr Rd, s9, Imm
+  if (Rd == RISCV::X1) Out.emitBundleLock(true);
+  emit(Out, STI, RISCV::ADD_UW, { R(LFIAddrReg), R(Rs1), R(LFIBaseReg) });
+  emit(Out, STI, RISCV::ANDI,   { R(LFICtrlReg), R(LFIAddrReg), I64(BundleMaskImm) });
+  emit(Out, STI, RISCV::JALR,   { R(Rd), R(LFICtrlReg), I64(Imm) });
+  if (Rd == RISCV::X1) Out.emitBundleUnlock();
 }

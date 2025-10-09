@@ -250,7 +250,9 @@ public:
     default:
       return false;
     case RISCV::JAL:
+    case RISCV::C_JAL:
     case RISCV::JALR:
+    case RISCV::C_JALR:
       return Inst.getOperand(0).getReg() != RISCV::X0;
     }
   }
@@ -262,6 +264,7 @@ public:
     switch (Inst.getOpcode()) {
     default:
       return false;
+    case RISCV::C_JALR:
     case RISCV::JALR:
       return Inst.getOperand(0).getReg() == RISCV::X0 &&
              maybeReturnAddress(Inst.getOperand(1).getReg());
@@ -292,6 +295,7 @@ public:
     default:
       return false;
     case RISCV::JALR:
+    case RISCV::C_JALR:
       return Inst.getOperand(0).getReg() == RISCV::X0 &&
              !maybeReturnAddress(Inst.getOperand(1).getReg());
     case RISCV::C_JR:
@@ -310,8 +314,10 @@ private:
     default:
       return false;
     case RISCV::JAL:
+    case RISCV::C_JAL:
       return Inst.getOperand(0).getReg() == RISCV::X0;
     case RISCV::JALR:
+    case RISCV::C_JALR:
       return Inst.getOperand(0).getReg() == RISCV::X0 &&
              !maybeReturnAddress(Inst.getOperand(1).getReg());
     case RISCV::C_JR:

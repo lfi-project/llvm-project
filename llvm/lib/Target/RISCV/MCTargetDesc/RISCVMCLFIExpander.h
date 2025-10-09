@@ -98,6 +98,9 @@ private:
   // TLS/thread-pointer shims (mv tp,xN / mv xN,tp / add a0,a0,tp)
   void expandTLSShim(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
+  
+  void compressedBranch(const MCInst &Inst, MCStreamer &Out,
+                        const MCSubtargetInfo &STI);
 };
 }
 }

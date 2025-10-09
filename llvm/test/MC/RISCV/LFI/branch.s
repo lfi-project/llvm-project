@@ -1,4 +1,4 @@
-# RUN: llvm-mc -filetype asm -triple riscv64_lfi %s | FileCheck %s
+# RUN: llvm-mc -filetype asm -triple riscv64_lfi -mattr=+c %s | FileCheck %s
 
 # ---------------------------------------------------------------------------
 # jalr xN, xM, <offset>  ==>  add.uw s1, xM, s11 ; andi s9, s1, -8 ; jalr xN, s9, <offset>
@@ -55,7 +55,12 @@ jal ra, L_ret
 # CHECK-NEXT: jal    L_ret
 # CHECK-NEXT: .bundle_unlock
 
-
+c.jalr s3
+# CHECK:      add.uw s1, s3, s11
+# CHECK-NEXT: andi   s9, s1, -8
+# CHECK-NEXT: .bundle_lock align_to_end
+# CHECK-NEXT: jalr   s9
+# CHECK-NEXT: .bundle_unlock
 
 # Targets
 L_nonra:
