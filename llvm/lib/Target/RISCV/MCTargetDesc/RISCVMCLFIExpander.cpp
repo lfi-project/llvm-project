@@ -548,7 +548,7 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst,
     return expandDirectCall(Inst, Out, STI);
 
   // Indirect branches/calls (jalr)
-  if (isCompressedJR(Inst) || isRVIndirectBranch(Inst) || isCall(Inst))
+  if (isCompressedJR(Inst) || isRVIndirectBranch(Inst))
     return expandIndirectBranch(Inst, Out, STI);
 
   // Return
@@ -652,11 +652,11 @@ void RISCV::RISCVMCLFIExpander::expandIndirectBranch(
   }
 
   // add.uw s1, Rs1, s11 ; andi s9, s1, -8 ; jalr Rd, s9, Imm
-  if (Rd == RISCV::X1)
-    Out.emitBundleLock(true);
   emit(Out, STI, RISCV::ADD_UW, {R(LFIAddrReg), R(Rs1), R(LFIBaseReg)});
   emit(Out, STI, RISCV::ANDI,
        {R(LFICtrlReg), R(LFIAddrReg), I64(BundleMaskImm)});
+  if (Rd == RISCV::X1)
+    Out.emitBundleLock(true);
   emit(Out, STI, RISCV::JALR, {R(Rd), R(LFICtrlReg), I64(Imm)});
   if (Rd == RISCV::X1)
     Out.emitBundleUnlock();

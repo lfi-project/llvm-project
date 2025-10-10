@@ -30,6 +30,13 @@ jalr ra, s3, 0
 # CHECK-NEXT: jalr   s9
 # CHECK-NEXT: .bundle_unlock
 
+jalr t5
+# CHECK:      add.uw s1, t5, s11
+# CHECK-NEXT: andi   s9, s1, -8
+# CHECK-NEXT: .bundle_lock align_to_end
+# CHECK-NEXT: jalr   s9
+# CHECK-NEXT: .bundle_unlock
+
 # ---------------------------------------------------------------------------
 # jr xM  (pseudoinst for jalr x0, xM, 0)
 # ---------------------------------------------------------------------------

@@ -47,5 +47,5 @@ sh t1, 8(sp)
 c.sd a0, (a1)
 
 # CHECK:      add.uw  s1, a1, s11
-# CHECK_NEXT: sd      a0, 0(s1)
+# CHECK-NEXT: sd      a0, 0(s1)
 
