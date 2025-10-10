@@ -69,6 +69,9 @@ c.jalr s3
 # CHECK-NEXT: jalr   s9
 # CHECK-NEXT: .bundle_unlock
 
+ret
+# CHECK: ret
+
 # Targets
 L_nonra:
   nop

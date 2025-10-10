@@ -140,6 +140,14 @@ static bool isCall(const MCInst &I) {
   return false;
 }
 
+static bool isRVReturn(const MCInst &I) {
+  if (I.getOpcode() == RISCV::JALR && I.getOperand(0).getReg() == RISCV::X0 && I.getOperand(1).getReg() == RISCV::X1 && I.getOperand(2).getImm() == 0)
+    return true;
+  if (I.getOpcode() == RISCV::C_JR && I.getOperand(0).getReg() == RISCV::X1)
+    return true;
+  return false;
+}
+
 static bool isRVIndirectBranch(const MCInst &I) {
   // jalr not writing ra is an indirect jump
   switch (I.getOpcode()) {
@@ -547,13 +555,13 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst,
   if (isJAL(Inst))
     return expandDirectCall(Inst, Out, STI);
 
+  // Return
+  if (isRVReturn(Inst))
+    return expandReturn(Inst, Out, STI);
+
   // Indirect branches/calls (jalr)
   if (isCompressedJR(Inst) || isRVIndirectBranch(Inst))
     return expandIndirectBranch(Inst, Out, STI);
-
-  // Return
-  if (isReturn(Inst))
-    return expandReturn(Inst, Out, STI);
 
   // Stack manipulation (sp)
   if (isStackAddi(Inst) || isAddSpSpX(Inst) || isSubSpSpX(Inst) ||
