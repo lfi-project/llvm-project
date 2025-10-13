@@ -113,6 +113,14 @@ BitVector RISCVRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
       markSuperRegs(Reserved, Reg);
   }
 
+  if (Subtarget.isLFI()) {
+    markSuperRegs(Reserved, RISCV::X27_H); // s11
+    markSuperRegs(Reserved, RISCV::X26_H); // s10
+    markSuperRegs(Reserved, RISCV::X25_H); // s9
+    markSuperRegs(Reserved, RISCV::X9_H);  // s1
+    markSuperRegs(Reserved, RISCV::X1_H);  // ra
+  }
+
   // Use markSuperRegs to ensure any register aliases are also reserved
   markSuperRegs(Reserved, RISCV::X2_H); // sp
   markSuperRegs(Reserved, RISCV::X3_H); // gp
