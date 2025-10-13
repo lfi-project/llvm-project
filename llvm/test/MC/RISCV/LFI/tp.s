@@ -1,4 +1,4 @@
-# RUN: llvm-mc -filetype asm -triple riscv64_lfi %s | FileCheck %s
+# RUN: llvm-mc -filetype asm -triple riscv64_lfi -mattr=+c %s | FileCheck %s
 
 mv tp, t0
 
@@ -26,14 +26,28 @@ mv t0, tp
 # CHECK-NEXT: add.uw  s1, s10, s11
 # CHECK-NEXT: andi    ra, s1, -8
 
-add a0, a0, tp
+c.mv a0, tp
 
-# CHECK:      sd      a1, -8(sp)
-# CHECK-NEXT: mv      a1, a0
+# CHECK:      mv      a0, a0
 # CHECK-NEXT: mv      s10, ra
 # CHECK-NEXT: ld      ra, 8(s11)
 # CHECK-NEXT: jalr    ra
+# CHECK-NEXT: xor     a0, a0, a0
+# CHECK-NEXT: xor     a0, a0, a0
+# CHECK-NEXT: xor     a0, a0, a0
 # CHECK-NEXT: add.uw  s1, s10, s11
 # CHECK-NEXT: andi    ra, s1, -8
-# CHECK-NEXT: add     a0, a1, a0
-# CHECK-NEXT: ld      a1, -8(sp)
+
+mv tp, a0
+
+# CHECK:      mv      s10, ra
+# CHECK-NEXT: xor     a0, a0, a0
+# CHECK-NEXT: xor     a0, a0, a0
+# CHECK-NEXT: xor     a0, a0, a0
+# CHECK-NEXT: ld      ra, 16(s11)
+# CHECK-NEXT: jalr    ra
+# CHECK-NEXT: xor     a0, a0, a0
+# CHECK-NEXT: xor     a0, a0, a0
+# CHECK-NEXT: xor     a0, a0, a0
+# CHECK-NEXT: add.uw  s1, s10, s11
+# CHECK-NEXT: andi    ra, s1, -8

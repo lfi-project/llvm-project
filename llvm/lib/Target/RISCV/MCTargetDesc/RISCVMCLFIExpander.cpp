@@ -129,15 +129,8 @@ static bool isCompressedJR(const MCInst &I) {
   return I.getOpcode() == RISCV::C_JR;
 }
 
-static bool isCall(const MCInst &I) {
-  // Writes ra (x1)
-  if (isJAL(I))
-    return I.getNumOperands() >= 1 && I.getOperand(0).isReg() &&
-           I.getOperand(0).getReg() == LFIReturnReg;
-  if (isJALR(I))
-    return I.getNumOperands() >= 1 && I.getOperand(0).isReg() &&
-           I.getOperand(0).getReg() == LFIReturnReg;
-  return false;
+static bool isRVCall(const MCInst &I) {
+  return I.getOpcode() == RISCV::PseudoCALL;
 }
 
 static bool isRVReturn(const MCInst &I) {
@@ -225,11 +218,15 @@ static bool isMvSpX(const MCInst &I) {
 
 // TLS patterns:
 static bool isMvTpX(const MCInst &I) {
+  if (I.getOpcode() == RISCV::C_MV && I.getOperand(0).getReg() == LFIThreadReg)
+    return true;
   if (!isMV(I))
     return false;
   return I.getOperand(0).isReg() && I.getOperand(0).getReg() == LFIThreadReg;
 }
 static bool isMvXTp(const MCInst &I) {
+  if (I.getOpcode() == RISCV::C_MV && I.getOperand(1).getReg() == LFIThreadReg)
+    return true;
   if (!isMV(I))
     return false;
   return I.getOperand(1).isReg() && I.getOperand(1).getReg() == LFIThreadReg;
@@ -309,6 +306,47 @@ void RISCV::RISCVMCLFIExpander::expandReturn(const MCInst &Inst,
   Out.emitInstruction(Inst, STI);
 }
 
+static bool isCRegister(MCRegister Reg) {
+  switch (Reg) {
+  case RISCV::X8:
+  case RISCV::X9:
+  case RISCV::X10:
+  case RISCV::X11:
+  case RISCV::X12:
+  case RISCV::X13:
+  case RISCV::X14:
+  case RISCV::X15:
+    return true;
+  }
+  return false;
+}
+
+static bool isCImm(int64_t Imm) {
+  return Imm % 8 == 0 && Imm >= 0 && Imm <= 248;
+}
+
+static unsigned toCOpcode(unsigned Opc) {
+  switch (Opc) {
+  case RISCV::LBU:
+    return RISCV::C_LBU;
+  case RISCV::LD:
+    return RISCV::C_LD;
+  case RISCV::LH:
+    return RISCV::C_LHU;
+  case RISCV::LW:
+    return RISCV::C_LW;
+  case RISCV::SB:
+    return RISCV::C_SB;
+  case RISCV::SD:
+    return RISCV::C_SD;
+  case RISCV::SH:
+    return RISCV::C_SH;
+  case RISCV::SW:
+    return RISCV::C_SW;
+  }
+  return RISCV::INSTRUCTION_LIST_END;
+}
+
 // Expands memory ops: add.uw s1, base, s11 ; use I(s1)
 void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
                                                 MCStreamer &Out,
@@ -317,16 +355,19 @@ void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
   (void)EmitPrefixes;
   MCInst S(Inst);
 
+  MCOperand &Target = S.getOperand(0);
   MCOperand &Base = S.getOperand(1);
+  MCOperand &Offset = S.getOperand(2);
   if (Base.isReg() && !isAbsoluteReg(Base.getReg())) {
     emit(Out, STI, RISCV::ADD_UW,
          {R(LFIAddrReg), R(Base.getReg()), R(LFIBaseReg)});
     Base.setReg(LFIAddrReg);
-    Out.emitInstruction(S, STI);
-
-  } else {
-    Out.emitInstruction(S, STI);
+    if (Target.isReg() && isCRegister(Target.getReg()) &&
+        Offset.isImm() && isCImm(Offset.getImm()) &&
+        toCOpcode(S.getOpcode()) != RISCV::INSTRUCTION_LIST_END)
+      S.setOpcode(toCOpcode(S.getOpcode()));
   }
+  Out.emitInstruction(S, STI);
 }
 
 void RISCV::RISCVMCLFIExpander::expandStringOperation(
@@ -571,6 +612,13 @@ void RISCV::RISCVMCLFIExpander::doExpandInst(const MCInst &Inst,
   // Loads / stores
   if (isLoadStore(Inst))
     return expandLoadStore(Inst, Out, STI, false);
+
+  if (isRVCall(Inst)) {
+    Out.emitBundleLock(true);
+    Out.emitInstruction(Inst, STI);
+    Out.emitBundleUnlock();
+    return;
+  }
 
   // Default passthrough
   Out.emitInstruction(Inst, STI);
