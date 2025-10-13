@@ -1,4 +1,4 @@
-set(ARM64 aarch64)
+set(ARM64 aarch64 aarch64_lfi)
 set(ARM32 arm armhf)
 set(HEXAGON hexagon)
 set(X86 i386)

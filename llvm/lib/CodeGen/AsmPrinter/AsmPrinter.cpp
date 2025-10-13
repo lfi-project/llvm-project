@@ -4372,9 +4372,12 @@ void AsmPrinter::emitBasicBlockStart(const MachineBasicBlock &MBB) {
     for (auto &Handler : EHHandlers)
       Handler->beginBasicBlockSection(MBB);
   }
+
+  OutStreamer->emitBBStart();
 }
 
 void AsmPrinter::emitBasicBlockEnd(const MachineBasicBlock &MBB) {
+  OutStreamer->emitBBEnd();
   // Check if CFI information needs to be updated for this MBB with basic block
   // sections.
   if (MBB.isEndSection()) {

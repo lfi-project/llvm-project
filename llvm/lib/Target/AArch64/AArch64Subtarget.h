@@ -288,6 +288,9 @@ public:
   bool isTargetAndroid() const { return TargetTriple.isAndroid(); }
   bool isTargetFuchsia() const { return TargetTriple.isOSFuchsia(); }
   bool isWindowsArm64EC() const { return TargetTriple.isWindowsArm64EC(); }
+  bool isAArch64LFI() const { return TargetTriple.isAArch64LFI(); }
+  bool isLFIStores() const { return LFIStores; }
+  bool isLFIJumps() const { return LFIJumps; }
 
   bool isTargetCOFF() const { return TargetTriple.isOSBinFormatCOFF(); }
   bool isTargetELF() const { return TargetTriple.isOSBinFormatELF(); }
