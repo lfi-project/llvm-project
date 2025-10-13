@@ -688,6 +688,17 @@ static inline std::optional<MemInstInfo> getLoadInfo(const MCInst &Inst) {
     IsPrePost = false;
     break;
 
+  // LDAPR(B|H|W|X)
+  case AArch64::LDAPRB:
+  case AArch64::LDAPRH:
+  case AArch64::LDAPRW:
+  case AArch64::LDAPRX:
+    DestRegIdx = 0;
+    BaseRegIdx = 1;
+    OffsetIdx = -1;
+    IsPrePost = false;
+    break;
+
   // LD(A|X)P(W|X)
   case AArch64::LDXPW:
   case AArch64::LDXPX:
