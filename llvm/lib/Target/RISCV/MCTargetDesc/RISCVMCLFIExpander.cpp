@@ -47,7 +47,8 @@ static const MCRegister LFIStackReg = RISCV::X2;  // sp
 static const MCRegister LFIThreadReg = RISCV::X4; // tp
 
 // andi mask for 8-byte bundle alignment (imm12 = -8)
-static const int64_t BundleMaskImm = -BundleSize;
+// static const int64_t BundleMaskImm = -BundleSize;
+static const int64_t BundleMaskImm = 0xffffffffffffffff;
 
 static inline MCOperand R(MCRegister Reg) { return MCOperand::createReg(Reg); }
 static inline MCOperand I64(int64_t Imm) { return MCOperand::createImm(Imm); }
@@ -327,20 +328,12 @@ static bool isCImm(int64_t Imm) {
 
 static unsigned toCOpcode(unsigned Opc) {
   switch (Opc) {
-  case RISCV::LBU:
-    return RISCV::C_LBU;
   case RISCV::LD:
     return RISCV::C_LD;
-  case RISCV::LH:
-    return RISCV::C_LHU;
   case RISCV::LW:
     return RISCV::C_LW;
-  case RISCV::SB:
-    return RISCV::C_SB;
   case RISCV::SD:
     return RISCV::C_SD;
-  case RISCV::SH:
-    return RISCV::C_SH;
   case RISCV::SW:
     return RISCV::C_SW;
   }
