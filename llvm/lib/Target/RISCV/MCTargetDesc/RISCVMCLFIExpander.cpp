@@ -473,18 +473,22 @@ void RISCV::RISCVMCLFIExpander::expandTLSShim(const MCInst &Inst,
     emit(Out, STI, RISCV::ADDI,
          {R(LFITmpReg), R(LFIReturnReg),
           I64(0)}); // mv s10,ra             // mv s10,ra
-    emit(Out, STI, RISCV::XOR,
-         {R(RISCV::X10), R(RISCV::X10), R(XN)});               // xor a0,a0,xN
-    emit(Out, STI, RISCV::XOR, {R(XN), R(RISCV::X10), R(XN)}); // xor xN,a0,xN
-    emit(Out, STI, RISCV::XOR,
-         {R(RISCV::X10), R(RISCV::X10), R(XN)}); // xor a0,a0,xN
+    if (XN != RISCV::X10) {
+      emit(Out, STI, RISCV::XOR,
+           {R(RISCV::X10), R(RISCV::X10), R(XN)});               // xor a0,a0,xN
+      emit(Out, STI, RISCV::XOR, {R(XN), R(RISCV::X10), R(XN)}); // xor xN,a0,xN
+      emit(Out, STI, RISCV::XOR,
+           {R(RISCV::X10), R(RISCV::X10), R(XN)}); // xor a0,a0,xN
+    }
     emit(Out, STI, RISCV::LD,
          {R(LFIReturnReg), R(LFIBaseReg), I64(16)}); // ld ra,16(s11)
     emit(Out, STI, RISCV::JALR,
          {R(LFIReturnReg), R(LFIReturnReg), I64(0)}); // jalr ra
-    emit(Out, STI, RISCV::XOR, {R(RISCV::X10), R(RISCV::X10), R(XN)});
-    emit(Out, STI, RISCV::XOR, {R(XN), R(RISCV::X10), R(XN)});
-    emit(Out, STI, RISCV::XOR, {R(RISCV::X10), R(RISCV::X10), R(XN)});
+    if (XN != RISCV::X10) {
+      emit(Out, STI, RISCV::XOR, {R(RISCV::X10), R(RISCV::X10), R(XN)});
+      emit(Out, STI, RISCV::XOR, {R(XN), R(RISCV::X10), R(XN)});
+      emit(Out, STI, RISCV::XOR, {R(RISCV::X10), R(RISCV::X10), R(XN)});
+    }
     emit(Out, STI, RISCV::ADD_UW, {R(LFIAddrReg), R(LFITmpReg), R(LFIBaseReg)});
     emit(Out, STI, RISCV::ANDI,
          {R(LFIReturnReg), R(LFIAddrReg), I64(BundleMaskImm)});
@@ -500,9 +504,11 @@ void RISCV::RISCVMCLFIExpander::expandTLSShim(const MCInst &Inst,
          {R(LFIReturnReg), R(LFIBaseReg), I64(8)}); // ld ra,8(s11)
     emit(Out, STI, RISCV::JALR,
          {R(LFIReturnReg), R(LFIReturnReg), I64(0)}); // jalr ra
-    emit(Out, STI, RISCV::XOR, {R(RISCV::X10), R(RISCV::X10), R(XN)});
-    emit(Out, STI, RISCV::XOR, {R(XN), R(RISCV::X10), R(XN)});
-    emit(Out, STI, RISCV::XOR, {R(RISCV::X10), R(RISCV::X10), R(XN)});
+    if (XN != RISCV::X10) {
+      emit(Out, STI, RISCV::XOR, {R(RISCV::X10), R(RISCV::X10), R(XN)});
+      emit(Out, STI, RISCV::XOR, {R(XN), R(RISCV::X10), R(XN)});
+      emit(Out, STI, RISCV::XOR, {R(RISCV::X10), R(RISCV::X10), R(XN)});
+    }
     emit(Out, STI, RISCV::ADD_UW, {R(LFIAddrReg), R(LFITmpReg), R(LFIBaseReg)});
     emit(Out, STI, RISCV::ANDI,
          {R(LFIReturnReg), R(LFIAddrReg), I64(BundleMaskImm)});
