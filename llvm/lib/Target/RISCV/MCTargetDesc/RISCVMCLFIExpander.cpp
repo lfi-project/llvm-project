@@ -322,8 +322,12 @@ static bool isCRegister(MCRegister Reg) {
   return false;
 }
 
-static bool isCImm(int64_t Imm) {
-  return Imm % 8 == 0 && Imm >= 0 && Imm <= 248;
+static bool isCImm(unsigned Opc, int64_t Imm) {
+  if (Opc == RISCV::C_LD || Opc == RISCV::C_SD)
+    return Imm % 8 == 0 && Imm >= 0 && Imm <= 248;
+  if (Opc == RISCV::C_LW || Opc == RISCV::C_SW)
+    return Imm % 4 == 0 && Imm >= 0 && Imm <= 124;
+  return false;
 }
 
 static unsigned toCOpcode(unsigned Opc) {
@@ -356,7 +360,7 @@ void RISCV::RISCVMCLFIExpander::expandLoadStore(const MCInst &Inst,
          {R(LFIAddrReg), R(Base.getReg()), R(LFIBaseReg)});
     Base.setReg(LFIAddrReg);
     if (Target.isReg() && isCRegister(Target.getReg()) &&
-        Offset.isImm() && isCImm(Offset.getImm()) &&
+        Offset.isImm() && isCImm(S.getOpcode(), Offset.getImm()) &&
         toCOpcode(S.getOpcode()) != RISCV::INSTRUCTION_LIST_END)
       S.setOpcode(toCOpcode(S.getOpcode()));
   }
