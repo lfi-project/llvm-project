@@ -744,30 +744,30 @@ static void relaxCall(Ctx &ctx, const InputSection &sec, size_t i, uint64_t loc,
 // Relax local-exec TLS when hi20 is zero.
 static void relaxTlsLe(Ctx &ctx, const InputSection &sec, size_t i,
                        uint64_t loc, Relocation &r, uint32_t &remove) {
-  uint64_t val = r.sym->getVA(ctx, r.addend);
-  if (hi20(val) != 0)
-    return;
-  uint32_t insn = read32le(sec.content().data() + r.offset);
-  switch (r.type) {
-  case R_RISCV_TPREL_HI20:
-  case R_RISCV_TPREL_ADD:
-    // Remove lui rd, %tprel_hi(x) and add rd, rd, tp, %tprel_add(x).
-    sec.relaxAux->relocTypes[i] = R_RISCV_RELAX;
-    remove = 4;
-    break;
-  case R_RISCV_TPREL_LO12_I:
-    // addi rd, rd, %tprel_lo(x) => addi rd, tp, st_value(x)
-    sec.relaxAux->relocTypes[i] = R_RISCV_32;
-    insn = (insn & ~(31 << 15)) | (X_TP << 15);
-    sec.relaxAux->writes.push_back(setLO12_I(insn, val));
-    break;
-  case R_RISCV_TPREL_LO12_S:
-    // sw rs, %tprel_lo(x)(rd) => sw rs, st_value(x)(rd)
-    sec.relaxAux->relocTypes[i] = R_RISCV_32;
-    insn = (insn & ~(31 << 15)) | (X_TP << 15);
-    sec.relaxAux->writes.push_back(setLO12_S(insn, val));
-    break;
-  }
+  // uint64_t val = r.sym->getVA(ctx, r.addend);
+  // if (hi20(val) != 0)
+  //   return;
+  // uint32_t insn = read32le(sec.content().data() + r.offset);
+  // switch (r.type) {
+  // case R_RISCV_TPREL_HI20:
+  // case R_RISCV_TPREL_ADD:
+  //   // Remove lui rd, %tprel_hi(x) and add rd, rd, tp, %tprel_add(x).
+  //   sec.relaxAux->relocTypes[i] = R_RISCV_RELAX;
+  //   remove = 4;
+  //   break;
+  // case R_RISCV_TPREL_LO12_I:
+  //   // addi rd, rd, %tprel_lo(x) => addi rd, tp, st_value(x)
+  //   sec.relaxAux->relocTypes[i] = R_RISCV_32;
+  //   insn = (insn & ~(31 << 15)) | (X_TP << 15);
+  //   sec.relaxAux->writes.push_back(setLO12_I(insn, val));
+  //   break;
+  // case R_RISCV_TPREL_LO12_S:
+  //   // sw rs, %tprel_lo(x)(rd) => sw rs, st_value(x)(rd)
+  //   sec.relaxAux->relocTypes[i] = R_RISCV_32;
+  //   insn = (insn & ~(31 << 15)) | (X_TP << 15);
+  //   sec.relaxAux->writes.push_back(setLO12_S(insn, val));
+  //   break;
+  // }
 }
 
 static void relaxHi20Lo12(Ctx &ctx, const InputSection &sec, size_t i,
