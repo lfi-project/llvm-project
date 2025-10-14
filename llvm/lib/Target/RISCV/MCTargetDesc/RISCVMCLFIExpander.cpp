@@ -168,6 +168,7 @@ static bool isReturn(const MCInst &I) {
 
 static bool isADDI(const MCInst &I) { return I.getOpcode() == RISCV::ADDI; }
 static bool isADD(const MCInst &I) { return I.getOpcode() == RISCV::ADD; }
+static bool isPseudoAddTPRel(const MCInst &I) { return I.getOpcode() == RISCV::PseudoAddTPRel; }
 static bool isSUB(const MCInst &I) { return I.getOpcode() == RISCV::SUB; }
 
 static bool isMV(const MCInst &I) {
@@ -233,7 +234,7 @@ static bool isMvXTp(const MCInst &I) {
   return I.getOperand(1).isReg() && I.getOperand(1).getReg() == LFIThreadReg;
 }
 static bool isAddA0A0Tp(const MCInst &I) {
-  return isADD(I) && I.getOperand(0).isReg() &&
+  return (isADD(I) || isPseudoAddTPRel(I)) && I.getOperand(0).isReg() &&
          I.getOperand(0).getReg() == RISCV::X10 && // a0
          I.getOperand(1).isReg() && I.getOperand(1).getReg() == RISCV::X10 &&
          I.getOperand(2).isReg() && I.getOperand(2).getReg() == LFIThreadReg;
