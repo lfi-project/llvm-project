@@ -6,7 +6,7 @@ set(SAFESTACK_SOURCES
 
 include_directories(..)
 
-set(SAFESTACK_CFLAGS ${SANITIZER_COMMON_CFLAGS})
+set(SAFESTACK_CFLAGS ${SANITIZER_COMMON_CFLAGS} ${SAFESTACK_LFI_CFLAGS})
 
 foreach(arch ${SAFESTACK_SUPPORTED_ARCH})
   add_compiler_rt_runtime(clang_rt.safestack
