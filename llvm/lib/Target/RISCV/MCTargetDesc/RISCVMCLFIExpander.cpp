@@ -166,7 +166,7 @@ static bool isReturn(const MCInst &I) {
          I.getOperand(2).getImm() == 0;
 }
 
-static bool isADDI(const MCInst &I) { return I.getOpcode() == RISCV::ADDI; }
+static bool isADDI(const MCInst &I) { return I.getOpcode() == RISCV::ADDI || I.getOpcode() == RISCV::C_ADDI; }
 static bool isADD(const MCInst &I) { return I.getOpcode() == RISCV::ADD; }
 static bool isPseudoAddTPRel(const MCInst &I) { return I.getOpcode() == RISCV::PseudoAddTPRel; }
 static bool isSUB(const MCInst &I) { return I.getOpcode() == RISCV::SUB; }
