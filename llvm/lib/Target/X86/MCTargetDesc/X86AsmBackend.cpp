@@ -458,6 +458,9 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
     S.MCObjectStreamer::emitInstruction(Inst, STI);
     return;
   }
+  if (S.getLFIExpander() && S.getLFIExpander()->isEnabled() &&
+      S.getLFIExpander()->expandInst(Inst, S, STI))
+    return;
 
   auto &Backend = static_cast<X86AsmBackend &>(S.getAssembler().getBackend());
   Backend.emitInstructionBegin(S, Inst, STI);
@@ -494,8 +497,7 @@ void X86AsmBackend::emitInstructionEndBundle(MCObjectStreamer &OS) {
     assert(CF->getSize() != 0 && "A bundle-Locked fragment must contain at least one instruction");
     return;
   }
-  if (!PendingBA)
-    return;
+  assert(PendingBA && "MCBoundaryAlignFragment is expected for every instruction if it is not bundle-locked");
 
   // Tie the aligned instructions into a pending BoundaryAlign.
   PendingBA->setLastFragment(CF);

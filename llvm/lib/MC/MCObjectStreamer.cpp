@@ -390,8 +390,6 @@ bool MCObjectStreamer::mayHaveInstructions(MCSection &Sec) const {
 
 void MCObjectStreamer::emitInstruction(const MCInst &Inst,
                                        const MCSubtargetInfo &STI) {
-  if (LFIExpander && LFIExpander->isEnabled() && LFIExpander->expandInst(Inst, *this, STI))
-    return;
 
   MCStreamer::emitInstruction(Inst, STI);
 

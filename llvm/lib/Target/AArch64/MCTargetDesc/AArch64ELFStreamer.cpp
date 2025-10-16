@@ -353,6 +353,10 @@ public:
   void emitInstruction(const MCInst &Inst,
                        const MCSubtargetInfo &STI) override {
     emitA64MappingSymbol();
+    if (getLFIExpander() && getLFIExpander()->isEnabled() &&
+        getLFIExpander()->expandInst(Inst, *this, STI))
+      return;
+
     MCELFStreamer::emitInstruction(Inst, STI);
   }
 
