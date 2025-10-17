@@ -42,8 +42,8 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
   Subtarget = &MF.getSubtarget<X86Subtarget>();
   assert(Subtarget->isLFI() && "Unexpected target in LFIRewritePass!");
 
-  // MF.setAlignment(llvm::Align(32));
-  //
+  MF.setAlignment(llvm::Align(32));
+
   // for (MachineBasicBlock &MBB : MF) {
   //   // TODO: consider only setting this if MBB.hasAddressTaken() is true.
   //   MBB.setAlignment(llvm::Align(32));
