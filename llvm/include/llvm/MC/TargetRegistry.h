@@ -46,6 +46,7 @@ class MCDisassembler;
 class MCInstPrinter;
 class MCInstrAnalysis;
 class MCInstrInfo;
+class MCLFIExpander;
 class MCObjectWriter;
 class MCRegisterInfo;
 class MCRelocationInfo;
@@ -237,6 +238,10 @@ public:
       mca::InstrumentManager *(*)(const MCSubtargetInfo &STI,
                                   const MCInstrInfo &MCII);
 
+  using MCLFIExpanderCtorTy = MCLFIExpander *(*)(
+      MCStreamer &S, std::unique_ptr<MCRegisterInfo> &&RegInfo,
+      std::unique_ptr<MCInstrInfo> &&InstInfo);
+
 private:
   /// Next - The next registered target in the linked list, maintained by the
   /// TargetRegistry.
@@ -350,6 +355,10 @@ private:
   /// InstrumentManagerCtorFn - Construction function for this target's
   /// InstrumentManager, if registered (default = nullptr).
   InstrumentManagerCtorTy InstrumentManagerCtorFn = nullptr;
+
+  // MCLFIExpanderCtorFn - Construction function for this target's
+  // MCLFIExpander, if registered (default = nullptr).
+  MCLFIExpanderCtorTy MCLFIExpanderCtorFn = nullptr;
 
 public:
   Target() = default;
@@ -590,6 +599,13 @@ public:
     if (NullTargetStreamerCtorFn)
       return NullTargetStreamerCtorFn(S);
     return nullptr;
+  }
+
+  void createMCLFIExpander(MCStreamer &S,
+      std::unique_ptr<MCRegisterInfo> &&RegInfo,
+      std::unique_ptr<MCInstrInfo> &&InstInfo) const {
+    if (MCLFIExpanderCtorFn)
+      MCLFIExpanderCtorFn(S, std::move(RegInfo), std::move(InstInfo));
   }
 
   // TODO(boomanaiden154): Remove this function after LLVM 22 branches.
@@ -1062,6 +1078,11 @@ struct TargetRegistry {
   static void RegisterInstrumentManager(Target &T,
                                         Target::InstrumentManagerCtorTy Fn) {
     T.InstrumentManagerCtorFn = Fn;
+  }
+
+  static void RegisterMCLFIExpander(Target &T,
+                                    Target::MCLFIExpanderCtorTy Fn) {
+    T.MCLFIExpanderCtorFn = Fn;
   }
 
   /// @}
