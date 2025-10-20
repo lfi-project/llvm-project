@@ -411,7 +411,9 @@ AArch64RegisterInfo::explainReservedReg(const MachineFunction &MF,
   if (hasBasePointer(MF) && MCRegisterInfo::regsOverlap(PhysReg, AArch64::X19))
     return std::string("X19 is used as the frame base pointer register.");
 
-  if (MF.getSubtarget<AArch64Subtarget>().isWindowsArm64EC()) {
+  const AArch64Subtarget &ST = MF.getSubtarget<AArch64Subtarget>();
+
+  if (ST.isWindowsArm64EC()) {
     bool warn = false;
     if (MCRegisterInfo::regsOverlap(PhysReg, AArch64::X13) ||
         MCRegisterInfo::regsOverlap(PhysReg, AArch64::X14) ||
@@ -427,6 +429,15 @@ AArch64RegisterInfo::explainReservedReg(const MachineFunction &MF,
     if (warn)
       return std::string(AArch64InstPrinter::getRegisterName(PhysReg)) +
              " is clobbered by asynchronous signals when using Arm64EC.";
+  }
+
+  if (ST.isLFI()) {
+    if (MCRegisterInfo::regsOverlap(PhysReg, AArch64::X28) ||
+        MCRegisterInfo::regsOverlap(PhysReg, AArch64::X27) ||
+        MCRegisterInfo::regsOverlap(PhysReg, AArch64::X26) ||
+        (MCRegisterInfo::regsOverlap(PhysReg, AArch64::X25) && ST.hasLFITLSReg()))
+      return std::string(AArch64InstPrinter::getRegisterName(PhysReg)) +
+        " is used as a reserved register by LFI.";
   }
 
   return {};
@@ -454,6 +465,18 @@ AArch64RegisterInfo::getStrictlyReservedRegs(const MachineFunction &MF) const {
     markSuperRegs(Reserved, AArch64::W28);
     for (unsigned i = AArch64::B16; i <= AArch64::B31; ++i)
       markSuperRegs(Reserved, i);
+  }
+
+  if (MF.getSubtarget<AArch64Subtarget>().isLFI()) {
+    markSuperRegs(Reserved, AArch64::W28);
+    markSuperRegs(Reserved, AArch64::W27);
+    markSuperRegs(Reserved, AArch64::W26);
+    if (MF.getSubtarget<AArch64Subtarget>().hasLFITLSReg())
+      markSuperRegs(Reserved, AArch64::W25);
+    if (!MF.getProperties().hasProperty(MachineFunctionProperties::Property::NoVRegs)) {
+      markSuperRegs(Reserved, AArch64::LR);
+      markSuperRegs(Reserved, AArch64::W30);
+    }
   }
 
   for (size_t i = 0; i < AArch64::GPR32commonRegClass.getNumRegs(); ++i) {
