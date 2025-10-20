@@ -127,6 +127,7 @@ MCAsmParserExtension *createCOFFMasmParser();
 MCAsmParserExtension *createGOFFAsmParser();
 MCAsmParserExtension *createXCOFFAsmParser();
 MCAsmParserExtension *createWasmAsmParser();
+MCAsmParserExtension *createLFIAsmParser(MCLFIExpander *Exp);
 
 } // end namespace llvm
 
