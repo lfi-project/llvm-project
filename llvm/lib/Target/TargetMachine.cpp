@@ -25,7 +25,6 @@
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
-#include "llvm/TargetParser/Triple.h"
 using namespace llvm;
 
 cl::opt<bool> NoKernelInfoEndLTO(
@@ -268,12 +267,7 @@ TLSModel::Model TargetMachine::getTLSModel(const GlobalValue *GV) const {
   bool IsLocal = shouldAssumeDSOLocal(GV);
 
   TLSModel::Model Model;
-  if (getTargetTriple().isLFI()) {
-    if (IsLocal)
-      Model = TLSModel::LocalExec;
-    else
-      Model = TLSModel::InitialExec;
-  } else if (IsSharedLibrary) {
+  if (IsSharedLibrary) {
     if (IsLocal)
       Model = TLSModel::LocalDynamic;
     else
