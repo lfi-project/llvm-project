@@ -267,7 +267,12 @@ TLSModel::Model TargetMachine::getTLSModel(const GlobalValue *GV) const {
   bool IsLocal = shouldAssumeDSOLocal(GV);
 
   TLSModel::Model Model;
-  if (IsSharedLibrary) {
+  if (getTargetTriple().isLFI()) {
+    if (IsLocal && !IsSharedLibrary)
+      Model = TLSModel::LocalExec;
+    else
+      Model = TLSModel::InitialExec;
+  } else if (IsSharedLibrary) {
     if (IsLocal)
       Model = TLSModel::LocalDynamic;
     else
