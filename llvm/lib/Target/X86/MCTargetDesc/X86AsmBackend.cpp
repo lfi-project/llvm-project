@@ -199,6 +199,9 @@ public:
 
   bool finishLayout(const MCAssembler &Asm) const override;
 
+  bool dividePadInBundle(const MCAssembler &Asm, ArrayRef<MCFragment *> Peephole) const;
+  bool optimizeBundleNops(const MCAssembler &Asm) const;
+
   unsigned getMaximumNopSize(const MCSubtargetInfo &STI) const override;
 
   bool writeNopData(raw_ostream &OS, uint64_t Count,
@@ -901,14 +904,82 @@ bool X86AsmBackend::padInstructionEncoding(MCFragment &RF,
   return Changed;
 }
 
+// Peephole is a list of Fragments that ends with non-zero-sized BoundaryAlignFragment.
+// Most of the time it will be every instruction within a bundle, but there can be a
+// partial bundle if it has nops in the middle(e.g., align_to_end).
+bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm, ArrayRef<MCFragment *> Peephole) const {
+  bool Changed = false;
+
+  auto *LastBF = cast<MCBoundaryAlignFragment>(Peephole.back());
+  unsigned RemainingSize = LastBF->getSize();
+  assert(RemainingSize > 0);
+
+  SmallVector<MCFragment *, 4> Relaxable;
+  for (auto *FIB : Peephole) {
+    if (FIB->getKind() == MCFragment::FT_Data) // Skip and ignore
+      continue;
+
+    if (FIB->getKind() == MCFragment::FT_Relaxable) {
+      auto &RF = cast<MCFragment>(*FIB);
+      Relaxable.push_back(&RF);
+      continue;
+    }
+  }
+
+  while (!Relaxable.empty() && RemainingSize != 0) {
+    auto &RF = *Relaxable.pop_back_val();
+    Changed |= padInstructionEncoding(RF, Asm.getEmitter(), RemainingSize);
+
+    if (mayNeedRelaxation(RF.getOpcode(), RF.getOperands(),
+          *RF.getSubtargetInfo()))
+      break;
+  }
+  Relaxable.clear();
+
+  LastBF->setSize(RemainingSize);
+
+  return Changed;
+}
+
+bool X86AsmBackend::optimizeBundleNops(const MCAssembler &Asm) const {
+  bool Changed = false;
+  for (MCSection &Sec : Asm) {
+    if (!Sec.isText())
+      continue;
+
+    SmallVector<MCFragment *, 4> Bundle;
+    for (MCSection::iterator I = Sec.begin(), IE = Sec.end(); I != IE; ++I) {
+      MCFragment &F = *I;
+
+      if (auto *BF = dyn_cast<MCBoundaryAlignFragment>(&F)) {
+        if (BF->getSize() > 0) {
+          Bundle.push_back(BF);
+          Changed |= dividePadInBundle(Asm, Bundle);
+          Bundle.clear();
+          continue;
+        }
+      }
+
+      if (Asm.getFragmentOffset(F) % Asm.getBundleAlignSize() == 0) {
+        Bundle.clear(); // start a new bundle
+      }
+      Bundle.push_back(&F);
+    }
+  }
+
+  return Changed;
+}
+
 bool X86AsmBackend::finishLayout(const MCAssembler &Asm) const {
+  if (Asm.isBundlingEnabled())
+    return optimizeBundleNops(Asm);
   // See if we can further relax some instructions to cut down on the number of
   // nop bytes required for code alignment.  The actual win is in reducing
   // instruction count, not number of bytes.  Modern X86-64 can easily end up
   // decode limited.  It is often better to reduce the number of instructions
   // (i.e. eliminate nops) even at the cost of increasing the size and
   // complexity of others.
-  if (!X86PadForAlign && !X86PadForBranchAlign && !Asm.isBundlingEnabled())
+  if (!X86PadForAlign && !X86PadForBranchAlign)
     return false;
 
   // The processed regions are delimitered by LabeledFragments. -g may have more

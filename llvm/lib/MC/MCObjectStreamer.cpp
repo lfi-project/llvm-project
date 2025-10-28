@@ -404,7 +404,8 @@ void MCObjectStreamer::emitInstruction(const MCInst &Inst,
   MCAssembler &Assembler = getAssembler();
   MCAsmBackend &Backend = Assembler.getBackend();
   if (!(Backend.mayNeedRelaxation(Inst.getOpcode(), Inst.getOperands(), STI) ||
-        Backend.allowEnhancedRelaxation())) {
+        Backend.allowEnhancedRelaxation() ||
+        Assembler.isBundlingEnabled())) {
     emitInstToData(Inst, STI);
     return;
   }
