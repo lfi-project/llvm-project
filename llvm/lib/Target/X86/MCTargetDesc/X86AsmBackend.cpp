@@ -604,7 +604,7 @@ void X86AsmBackend::emitInstructionEnd(MCObjectStreamer &OS,
   OS.newFragment();
 
   // Update the maximum alignment on the current section if necessary.
-  CF->getParent()->ensureMinAlignment(AlignBoundary);
+  CF->getParent()->ensureMinAlignment(Align(OS.getAssembler().getBundleAlignSize()));
 }
 
 std::optional<MCFixupKind> X86AsmBackend::getFixupKind(StringRef Name) const {
