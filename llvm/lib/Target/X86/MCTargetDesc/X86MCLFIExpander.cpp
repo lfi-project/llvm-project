@@ -235,6 +235,24 @@ void X86::X86MCLFIExpander::expandReturn(const MCInst &Inst, MCStreamer &Out,
   emitIndirectJumpReg(ScratchReg, Out, STI);
 }
 
+static unsigned normalizeOpcode(unsigned Op) {
+  switch (Op) {
+  case X86::ADD_FrST0:
+    return X86::ADD_FST0r;
+  case X86::DIVR_FrST0:
+    return X86::DIVR_FST0r;
+  case X86::DIV_FrST0:
+    return X86::DIV_FST0r;
+  case X86::MUL_FrST0:
+    return X86::MUL_FST0r;
+  case X86::SUBR_FrST0:
+    return X86::SUBR_FST0r;
+  case X86::SUB_FrST0:
+    return X86::SUB_FST0r;
+  }
+  return Op;
+}
+
 // Expands any operations that load to or store from memory, but do
 // not explicitly modify the stack or base pointer.
 void X86::X86MCLFIExpander::expandLoadStore(const MCInst &Inst, MCStreamer &Out,
@@ -242,9 +260,11 @@ void X86::X86MCLFIExpander::expandLoadStore(const MCInst &Inst, MCStreamer &Out,
                                             bool EmitPrefixes) {
   assert(!explicitlyModifiesRegister(Inst, X86::RSP));
 
+  unsigned Op = Inst.getOpcode();
+
   // Optimize if we are doing a mov into a register
   bool ElideScratchReg = false;
-  switch (Inst.getOpcode()) {
+  switch (Op) {
   case X86::MOV64rm:
   case X86::MOV32rm:
   case X86::MOV16rm:
@@ -256,6 +276,9 @@ void X86::X86MCLFIExpander::expandLoadStore(const MCInst &Inst, MCStreamer &Out,
   }
 
   MCInst SandboxedInst(Inst);
+
+  if (normalizeOpcode(Op) != Op)
+    SandboxedInst.setOpcode(normalizeOpcode(Op));
 
   MCRegister ScratchReg;
   if (ElideScratchReg)
