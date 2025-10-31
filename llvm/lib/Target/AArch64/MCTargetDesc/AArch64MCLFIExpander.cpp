@@ -56,6 +56,18 @@ MCRegister AArch64::AArch64MCLFIExpander::getScratch() {
   return getScratchReg(0);
 }
 
+static bool mayPrefetch(const MCInst Inst) {
+  switch (Inst.getOpcode()) {
+  case AArch64::PRFMl:
+  case AArch64::PRFMroW:
+  case AArch64::PRFMroX:
+  case AArch64::PRFMui:
+  case AArch64::PRFUMi:
+    return true;
+  }
+  return false;
+}
+
 static void emit(unsigned int Op, MCRegister Rd, MCRegister Rs, int64_t Imm,
                  MCStreamer &Out, const MCSubtargetInfo &STI) {
   MCInst Inst;
@@ -546,7 +558,7 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
   if (mayModifyLR(Inst))
     return expandLRModification(Inst, Out, STI);
 
-  if (mayLoad(Inst) || mayStore(Inst))
+  if (mayLoad(Inst) || mayStore(Inst) || mayPrefetch(Inst))
     return expandLoadStore(Inst, Out, STI);
 
   return Out.emitInstruction(Inst, STI);

@@ -566,6 +566,11 @@ static inline std::optional<MemInstInfo> getLoadInfo(const MCInst &Inst) {
   case AArch64::LDRXroW:
   case AArch64::LDRXroX:
   case AArch64::LDRXui:
+  case AArch64::PRFMl:
+  case AArch64::PRFMroW:
+  case AArch64::PRFMroX:
+  case AArch64::PRFMui:
+  case AArch64::PRFUMi:
   case AArch64::LDURBBi:
   case AArch64::LDURBi:
   case AArch64::LDURDi:

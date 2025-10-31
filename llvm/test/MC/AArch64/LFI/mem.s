@@ -179,3 +179,7 @@ stxrb w11, w10, [x8]
 ldr x0, [x0, :got_lo12:x]
 // CHECK:      add x28, x27, w0, uxtw
 // CHECK-NEXT: ldr x0, [x28, :got_lo12:x]
+
+prfm pstl1strm, [x10]
+// CHECK:      add x28, x27, w0, uxtw
+// CHECK-NEXT: prfm pstl1strm, [x28]
