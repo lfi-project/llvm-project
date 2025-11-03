@@ -128,6 +128,9 @@ class X86AsmBackend : public MCAsmBackend {
   MCBoundaryAlignFragment *PendingBA = nullptr;
   std::pair<MCFragment *, size_t> PrevInstPosition;
 
+  mutable unsigned TotalHandledBundles = 0;
+  mutable unsigned EliminatedNops = 0;
+
   uint8_t determinePaddingPrefix(const MCInst &Inst) const;
   bool isMacroFused(const MCInst &Cmp, const MCInst &Jcc) const;
   bool needAlign(const MCInst &Inst) const;
@@ -787,6 +790,13 @@ bool X86AsmBackend::fixupNeedsRelaxationAdvanced(const MCFragment &,
                                                  const MCValue &Target,
                                                  uint64_t Value,
                                                  bool Resolved) const {
+  // Prefix Padding may change the target distance and relaxation might be
+  // needed if the Value cann be contained in the Fixup field size. To prevent
+  // this, we roughly adjust the Value to estimate the worst case distance to
+  // the target.
+  if (Asm->isBundlingEnabled() && Resolved) {
+    return (!isInt<8>(Value + 32) || !isInt<8>(Value - 32)) || Target.getSpecifier();
+  }
   // If resolved, relax if the value is too big for a (signed) i8.
   //
   // Currently, `jmp local@plt` relaxes JMP even if the offset is small,
@@ -936,6 +946,10 @@ bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm, ArrayRef<MCFragmen
   }
   Relaxable.clear();
 
+  TotalHandledBundles++;
+  if(RemainingSize == 0)
+    EliminatedNops++;
+
   LastBF->setSize(RemainingSize);
 
   return Changed;
@@ -966,6 +980,8 @@ bool X86AsmBackend::optimizeBundleNops(const MCAssembler &Asm) const {
       Bundle.push_back(&F);
     }
   }
+  dbgs() << "EliminatedNops / TotalHandledBundles : " << EliminatedNops << " / "
+         << TotalHandledBundles << "\n\n";
 
   return Changed;
 }

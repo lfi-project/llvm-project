@@ -576,6 +576,23 @@ static void writeFragment(raw_ostream &OS, const MCAssembler &Asm,
          "The stream should advance by fragment size");
 }
 
+static void dumpNopStat(MCSection &Sec) {
+  if (!Sec.isText()) return;
+  unsigned NonZeroBAs = 0;
+  unsigned TotalBAs = 0;
+  for (MCFragment &F : Sec) {
+    if (auto *BF = dyn_cast<MCBoundaryAlignFragment>(&F)) {
+      if (BF->getSize() > 0) {
+        NonZeroBAs++;
+      }
+      TotalBAs++;
+    }
+  }
+  dbgs() << "Section [" << Sec.getName()
+         << "] NonZeroBAs / TotalBAs : " << NonZeroBAs << " / " << TotalBAs
+         << "\n\n";
+}
+
 void MCAssembler::writeSectionData(raw_ostream &OS,
                                    const MCSection *Sec) const {
   assert(getBackendPtr() && "Expected assembler backend");
@@ -677,6 +694,11 @@ void MCAssembler::layout() {
     if (getContext().hadError())
       return;
 
+  DEBUG_WITH_TYPE("mc-nop-stat-pre", {
+      errs() << "assembler backend - nops before prefix optimization\n--\n";
+      for (MCSection &Sec : *this)
+        dumpNopStat(Sec); });
+
   // Some targets might want to adjust fragment offsets. If so, perform another
   // layout iteration.
   if (getBackend().finishLayout(*this))
@@ -688,6 +710,11 @@ void MCAssembler::layout() {
   DEBUG_WITH_TYPE("mc-dump", {
       errs() << "assembler backend - final-layout\n--\n";
       dump(); });
+
+  DEBUG_WITH_TYPE("mc-nop-stat", {
+      errs() << "assembler backend - nops in final-layout \n--\n";
+      for (MCSection &Sec : *this)
+        dumpNopStat(Sec); });
 
   // Allow the object writer a chance to perform post-layout binding (for
   // example, to set the index fields in the symbol data).
