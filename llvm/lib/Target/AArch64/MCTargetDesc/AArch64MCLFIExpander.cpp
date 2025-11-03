@@ -89,12 +89,12 @@ static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1, MCRegister Rt2,
   Out.emitInstruction(Inst, STI);
 }
 
-static void emit(unsigned int Op, MCRegister Rd, MCRegister Rt1, MCRegister Rt2,
+static void emit(unsigned int Op, MCOperand Op1, MCRegister Rt1, MCRegister Rt2,
                  int64_t Imm1, int64_t Imm2, MCStreamer &Out,
                  const MCSubtargetInfo &STI) {
   MCInst Inst;
   Inst.setOpcode(Op);
-  Inst.addOperand(MCOperand::createReg(Rd));
+  Inst.addOperand(Op1);
   Inst.addOperand(MCOperand::createReg(Rt1));
   Inst.addOperand(MCOperand::createReg(Rt2));
   Inst.addOperand(MCOperand::createImm(Imm1));
@@ -134,7 +134,7 @@ static void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,
 }
 
 // Emit 'Op(ld/st) Dest, [LFIBaseReg, W(Target), uxtw]'
-static void emitMemMask(unsigned Op, MCRegister Dest, MCRegister Target,
+static void emitMemMask(unsigned Op, MCOperand Dest, MCRegister Target,
                         MCStreamer &Out, const MCSubtargetInfo &STI) {
   emit(Op, Dest, LFIBaseReg, getWRegFromXReg(Target), 0, 0, Out, STI);
 }
@@ -329,7 +329,7 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(
   if ((MemOp = convertUiToRoW(Op)) != AArch64::INSTRUCTION_LIST_END) {
     auto OffsetMCO = Inst.getOperand(2);
     if (OffsetMCO.isImm() && OffsetMCO.getImm() == 0)
-      return emitMemMask(MemOp, Inst.getOperand(0).getReg(),
+      return emitMemMask(MemOp, Inst.getOperand(0),
                          Inst.getOperand(1).getReg(), Out, STI);
     return expandLoadStoreBasic(Inst, MII, Out, STI);
   }
@@ -341,12 +341,12 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(
       emit(AArch64::ADDXri, Reg, Reg, Imm, 0, Out, STI);
     else
       emit(AArch64::SUBXri, Reg, Reg, -Imm, 0, Out, STI);
-    return emitMemMask(MemOp, Inst.getOperand(1).getReg(), Reg, Out, STI);
+    return emitMemMask(MemOp, Inst.getOperand(1), Reg, Out, STI);
   }
 
   if ((MemOp = convertPostToRoW(Op)) != AArch64::INSTRUCTION_LIST_END) {
     MCRegister Reg = Inst.getOperand(2).getReg();
-    emitMemMask(MemOp, Inst.getOperand(1).getReg(), Reg, Out, STI);
+    emitMemMask(MemOp, Inst.getOperand(1), Reg, Out, STI);
     int64_t Imm = Inst.getOperand(3).getImm();
     if (Imm >= 0)
       emit(AArch64::ADDXri, Reg, Reg, Imm, 0, Out, STI);
@@ -370,7 +370,7 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(
     else
       emit(AArch64::ADDXrs, Scratch, Reg1, Reg2,
            AArch64_AM::getShifterImm(AArch64_AM::LSL, Shift), Out, STI);
-    return emitMemMask(MemOp, Inst.getOperand(0).getReg(), Scratch, Out, STI);
+    return emitMemMask(MemOp, Inst.getOperand(0), Scratch, Out, STI);
   }
 
   if ((MemOp = convertRoWToRoW(Op, Shift)) != AArch64::INSTRUCTION_LIST_END) {
@@ -387,7 +387,7 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(
     else
       emit(AArch64::ADDXrx, Scratch, Reg1, Reg2,
            AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, Shift), Out, STI);
-    return emitMemMask(MemOp, Inst.getOperand(0).getReg(), Scratch, Out, STI);
+    return emitMemMask(MemOp, Inst.getOperand(0), Scratch, Out, STI);
   }
 }
 
@@ -620,6 +620,9 @@ static unsigned convertRoXToRoW(unsigned Op, unsigned &Shift) {
   case AArch64::LDRXroX:
     Shift = 3;
     return AArch64::LDRXroW;
+  case AArch64::PRFMroX:
+    Shift = 3;
+    return AArch64::PRFMroW;
   case AArch64::STRBBroX:
     return AArch64::STRBBroW;
   case AArch64::STRBroX:
@@ -692,6 +695,9 @@ static unsigned convertRoWToRoW(unsigned Op, unsigned &Shift) {
   case AArch64::LDRXroW:
     Shift = 3;
     return AArch64::LDRXroW;
+  case AArch64::PRFMroW:
+    Shift = 3;
+    return AArch64::PRFMroW;
   case AArch64::STRBBroW:
     return AArch64::STRBBroW;
   case AArch64::STRBroW:
@@ -751,6 +757,8 @@ static unsigned convertUiToRoW(unsigned Op) {
     return AArch64::LDRWroW;
   case AArch64::LDRXui:
     return AArch64::LDRXroW;
+  case AArch64::PRFMui:
+    return AArch64::PRFMroW;
   case AArch64::STRBBui:
     return AArch64::STRBBroW;
   case AArch64::STRBui:

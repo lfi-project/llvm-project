@@ -181,5 +181,8 @@ ldr x0, [x0, :got_lo12:x]
 // CHECK-NEXT: ldr x0, [x28, :got_lo12:x]
 
 prfm pstl1strm, [x10]
-// CHECK:      add x28, x27, w0, uxtw
-// CHECK-NEXT: prfm pstl1strm, [x28]
+// CHECK: prfm pstl1strm, [x27, w10, uxtw]
+
+prfm pstl1strm, [x10, x11]
+// CHECK:      add x26, x10, x11
+// CHECK-NEXT: prfm pstl1strm, [x27, w26, uxtw]
