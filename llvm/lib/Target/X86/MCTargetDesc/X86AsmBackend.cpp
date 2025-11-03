@@ -116,6 +116,10 @@ cl::opt<bool> X86PadForBranchAlign(
     "x86-pad-for-branch-align", cl::init(true), cl::Hidden,
     cl::desc("Pad previous instructions to implement branch alignment"));
 
+cl::opt<bool> X86PrefixPadForLFI(
+    "x86-prefix-pad-for-lfi", cl::init(false), cl::Hidden,
+    cl::desc("Pad using prefixes to implement instruction bundling"));
+
 class X86AsmBackend : public MCAsmBackend {
   const MCSubtargetInfo &STI;
   std::unique_ptr<const MCInstrInfo> MCII;
@@ -1013,7 +1017,7 @@ bool X86AsmBackend::optimizeBundleNops(const MCAssembler &Asm) const {
 }
 
 bool X86AsmBackend::finishLayout(const MCAssembler &Asm) const {
-  if (Asm.isBundlingEnabled())
+  if (Asm.isBundlingEnabled() && X86PrefixPadForLFI)
     return optimizeBundleNops(Asm);
   // See if we can further relax some instructions to cut down on the number of
   // nop bytes required for code alignment.  The actual win is in reducing
