@@ -920,8 +920,27 @@ bool X86AsmBackend::padInstructionEncoding(MCFragment &RF,
 bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm, ArrayRef<MCFragment *> Peephole) const {
   bool Changed = false;
 
-  auto *LastBF = cast<MCBoundaryAlignFragment>(Peephole.back());
-  unsigned RemainingSize = LastBF->getSize();
+  // Last Fragment is either FT_Align or FT_BoundaryAlign
+  auto *LastF = Peephole.back();
+  unsigned RemainingSize = Asm.computeFragmentSize(*LastF) - LastF->getFixedSize();
+
+  unsigned StartOffset = Asm.getFragmentOffset(*LastF);
+  unsigned EndOffset = StartOffset + RemainingSize;
+  auto BoundaryAlignment = Align(Asm.getBundleAlignSize());
+  bool CrossBoundary = (StartOffset >> Log2(BoundaryAlignment)) != ((EndOffset - 1) >> Log2(BoundaryAlignment));
+
+  if (CrossBoundary) {
+    // i.e., this pad is a mix of suffix fragment of one bundle + prefix of the
+    // very next bundle. It prevents overflow of the first bundle when Peephole
+    // contains more than one bundle.
+    //
+    // This design limits the possibly further-optimized code, which might be
+    // achieved by migrating some instructions to the next bundle, but doing
+    // such may cause fixup errors because instructions can shift by more than
+    // a bundle-size and labels may become unreachable. Until we come up with a
+    // better logic, we limits the optimization scope to a single bundle.
+    RemainingSize -= EndOffset % Asm.getBundleAlignSize();
+  }
   assert(RemainingSize > 0);
 
   SmallVector<MCFragment *, 4> Relaxable;
@@ -950,7 +969,13 @@ bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm, ArrayRef<MCFragmen
   if(RemainingSize == 0)
     EliminatedNops++;
 
-  LastBF->setSize(RemainingSize);
+  // FT_Align sizes will be recalculated by layoutSection(),
+  // FT_BoundaryAlign sizes are adjusted here.
+  if (auto *BF = dyn_cast<MCBoundaryAlignFragment>(LastF)) {
+    BF->setSize(CrossBoundary
+                    ? (RemainingSize + EndOffset % Asm.getBundleAlignSize())
+                    : RemainingSize);
+  }
 
   return Changed;
 }
@@ -965,9 +990,10 @@ bool X86AsmBackend::optimizeBundleNops(const MCAssembler &Asm) const {
     for (MCSection::iterator I = Sec.begin(), IE = Sec.end(); I != IE; ++I) {
       MCFragment &F = *I;
 
-      if (auto *BF = dyn_cast<MCBoundaryAlignFragment>(&F)) {
-        if (BF->getSize() > 0) {
-          Bundle.push_back(BF);
+      if (F.getKind() == MCFragment::FT_Align || F.getKind() == MCFragment::FT_BoundaryAlign) {
+        unsigned RemainingSize = Asm.computeFragmentSize(F) - F.getFixedSize();
+        if (RemainingSize > 0) {
+          Bundle.push_back(&F);
           Changed |= dividePadInBundle(Asm, Bundle);
           Bundle.clear();
           continue;
