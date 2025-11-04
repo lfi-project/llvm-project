@@ -120,6 +120,10 @@ cl::opt<bool> X86PrefixPadForLFI(
     "x86-prefix-pad-for-lfi", cl::init(false), cl::Hidden,
     cl::desc("Pad using prefixes to implement instruction bundling"));
 
+cl::opt<bool> X86DisableRelaxForPad(
+    "x86-disable-relax-for-pad", cl::init(false), cl::Hidden,
+    cl::desc("disable relaxation padding"));
+
 class X86AsmBackend : public MCAsmBackend {
   const MCSubtargetInfo &STI;
   std::unique_ptr<const MCInstrInfo> MCII;
@@ -911,7 +915,7 @@ bool X86AsmBackend::padInstructionEncoding(MCFragment &RF,
                                            MCCodeEmitter &Emitter,
                                            unsigned &RemainingSize) const {
   bool Changed = false;
-  if (RemainingSize != 0)
+  if (RemainingSize != 0 && !X86DisableRelaxForPad)
     Changed |= padInstructionViaRelaxation(RF, Emitter, RemainingSize);
   if (RemainingSize != 0)
     Changed |= padInstructionViaPrefix(RF, Emitter, RemainingSize);
