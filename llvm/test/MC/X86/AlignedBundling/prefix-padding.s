@@ -1,4 +1,4 @@
-# RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu -mcpu=pentiumpro %s -o - --x86-pad-max-prefix-size=5 \
+# RUN: llvm-mc -filetype=obj -triple x86_64-pc-linux-gnu -mcpu=pentiumpro %s -o - --x86-prefix-pad-for-lfi=1 --x86-pad-max-prefix-size=5 \
 # RUN:   | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
 
   .text
@@ -34,7 +34,7 @@ a_bundle_with_align_to_end:
   .bundle_unlock
 
   .p2align 5
-a_bundle:
+no_mid_nops:
   callq   bar
   callq   bar
   callq   bar
@@ -44,28 +44,28 @@ a_bundle:
   callq   bar
   callq   bar
   .bundle_unlock
-# CHECK:        80: call
+# CHECK:        76: call
+# CHECK-NEXT:   80: call
 # CHECK-NEXT:   85: call
 
   .p2align 5
-scattered_nops:
+ignore_pad_out_of_p2align:
   int3
   int3
-  # 14-byte nop without prefix padding.
+  # no optimization for this 14-byte nop.
   .p2align 4
   int3
   .bundle_lock
-  # locked instructions are not prefix-padded.
   int3
   .bundle_unlock
   int3
 # CHECK:        a0: int3
-# CHECK-NEXT:   a6: int3
-# CHECK-NEXT:   ac: nop
-# CHECK-NEXT:   b0: int3
-# CHECK-NEXT:   b6: int3
-# CHECK-NEXT:   b7: int3
-# CHECK-NEXT:   bd: nop
+# CHECK-NEXT:   a1: int3
+# CHECK-NEXT:   a2: nop
+# CHECK:        b0: int3
+# CHECK-NEXT:   b1: int3
+# CHECK-NEXT:   b2: int3
+# CHECK-NEXT:   b3: nop
 
   .p2align 5
 # There is no need to optimize the last bundle because following nops are not meant to be executed.
@@ -76,3 +76,5 @@ last_bundle:
   .bundle_unlock
 # CHECK:        c0: call
 # CHECK-NEXT:   c5: call
+
+# TODO: relative-pc fixup boundary overflow test

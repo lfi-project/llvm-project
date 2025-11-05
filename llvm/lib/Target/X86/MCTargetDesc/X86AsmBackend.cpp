@@ -956,6 +956,12 @@ bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm, ArrayRef<MCFragmen
     if (FIB->getKind() == MCFragment::FT_Data) // Skip and ignore
       continue;
 
+    if (FIB->getKind() == MCFragment::FT_Align) {
+      // p2align within a bundle
+      Relaxable.clear();
+      continue;
+    }
+
     if (FIB->getKind() == MCFragment::FT_Relaxable) {
       auto &RF = cast<MCFragment>(*FIB);
       Relaxable.push_back(&RF);
@@ -998,7 +1004,7 @@ bool X86AsmBackend::optimizeBundleNops(const MCAssembler &Asm) const {
     for (MCSection::iterator I = Sec.begin(), IE = Sec.end(); I != IE; ++I) {
       MCFragment &F = *I;
 
-      if (F.getKind() == MCFragment::FT_Align || F.getKind() == MCFragment::FT_BoundaryAlign) {
+      if (F.getKind() == llvm::MCFragment::FT_BoundaryAlign) {
         unsigned RemainingSize = Asm.computeFragmentSize(F) - F.getFixedSize();
         if (RemainingSize > 0) {
           Bundle.push_back(&F);
