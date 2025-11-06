@@ -472,9 +472,9 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
     S.MCObjectStreamer::emitInstruction(Inst, STI);
     return;
   }
-  if (S.getLFIExpander() && S.getLFIExpander()->isEnabled() &&
-      S.getLFIExpander()->expandInst(Inst, S, STI))
-    return;
+  // if (S.getLFIExpander() && S.getLFIExpander()->isEnabled() &&
+  //     S.getLFIExpander()->expandInst(Inst, S, STI))
+  //   return;
 
   auto &Backend = static_cast<X86AsmBackend &>(S.getAssembler().getBackend());
   Backend.emitInstructionBegin(S, Inst, STI);

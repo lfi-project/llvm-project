@@ -88,6 +88,15 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
+#include "llvm/MC/MCAsmBackend.h"
+#include "llvm/MC/MCCodeEmitter.h"
+#include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCObjectWriter.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/MC/MCParser/MCAsmParser.h"
+#include "llvm/MC/MCParser/MCTargetAsmParser.h"
+#include "llvm/Support/Process.h"
+#include "llvm/Support/YAMLTraits.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDirectives.h"
@@ -123,6 +132,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
+#include <sstream>
 #include <algorithm>
 #include <cassert>
 #include <cinttypes>
@@ -2907,15 +2917,137 @@ bool AsmPrinter::doFinalization(Module &M) {
   // after everything else has gone out.
   emitEndOfAsmFile(M);
 
+  OutStreamer->finish();
+  OutStreamer->reset();
+
+  if (ExtAsm.Out) {
+      if (doExtAsm())
+        std::exit(1); // HACK (how do I return a failure from this function?)
+  }
+
   MMI = nullptr;
   AddrLabelSymbols = nullptr;
 
-  OutStreamer->finish();
-  OutStreamer->reset();
   OwnedMLI.reset();
   OwnedMDT.reset();
 
   return false;
+}
+
+bool AsmPrinter::doExtAsm() {
+  Expected<sys::fs::TempFile> Temp =
+      sys::fs::TempFile::create("rewrite.temp-%%%%%%%.s");
+  if (!Temp) {
+    sys::fs::remove(ExtAsm.File);
+    return true;
+  }
+
+  const char* LFIRewriter = std::getenv("LFI_REWRITER");
+  const char* LFIFlags = std::getenv("LFI_FLAGS");
+  const char* LFIDebug = std::getenv("LFI_DEBUG");
+
+  if (!LFIFlags)
+      LFIFlags = "";
+
+  if (!LFIRewriter)
+      LFIRewriter = "lfi-rewrite";
+
+  auto Prog = sys::findProgramByName(std::string(LFIRewriter));
+  if (!Prog) {
+      errs() << "Could not find " << LFIRewriter;
+      sys::fs::remove(ExtAsm.File);
+      consumeError(Temp->discard());
+      return true;
+  }
+
+  std::stringstream SS;
+  SS << Prog.get() << " " << LFIFlags << " " << "-a " << TM.getTarget().getName() << " " << ExtAsm.File << " -o " << Temp->TmpName << "\n";
+  if (LFIDebug)
+    errs() << SS.str();
+  std::string Cmd = SS.str();
+
+  SmallVector<StringRef, 3> Args = {
+      "/bin/sh", "-c",  Cmd,
+  };
+
+  int RC = sys::ExecuteAndWait(Args[0], Args);
+  if (RC < -1) {
+    printf("lfi: exited abnormally\n");
+  } else if (RC < 0) {
+    printf("lfi: unable to invoke\n");
+  } else if (RC > 0) {
+    printf("lfi: returned non-zero\n");
+  }
+
+  auto EBuf = MemoryBuffer::getFileAsStream(Temp->TmpName);
+  if (!EBuf) {
+    sys::fs::remove(ExtAsm.File);
+    consumeError(Temp->discard());
+    return true;
+  }
+  auto *Buf = EBuf->get();
+  std::string Str(Buf->getBufferStart(), Buf->getBufferEnd());
+
+  std::unique_ptr<MemoryBuffer> MBuf;
+  MBuf = MemoryBuffer::getMemBuffer(Str, Temp->TmpName);
+  auto &MCOptions = TM.Options.MCOptions;
+  SourceMgr SrcMgr;
+  SrcMgr.AddNewSourceBuffer(std::move(MBuf), SMLoc());
+
+  std::unique_ptr<MCRegisterInfo> MRI(TM.getTarget().createMCRegInfo(TM.getTargetTriple()));
+  if (!MRI) {
+      errs() << "Unable to create target register info!";
+      abort();
+  }
+
+  std::unique_ptr<MCInstrInfo> MCII(TM.getTarget().createMCInstrInfo());
+
+  std::string OutputString;
+  raw_string_ostream Out(OutputString);
+  auto FOut = std::make_unique<formatted_raw_ostream>(Out);
+
+  MCContext *Ctx = new MCContext(TM.getTargetTriple(), MAI, MRI.get(), TM.getMCSubtargetInfo(), &SrcMgr, OutContext.getTargetOptions());
+  TM.getTarget().createMCObjectFileInfo(*Ctx, OutContext.getObjectFileInfo()->isPositionIndependent());
+  Ctx->setObjectFileInfo(OutContext.getObjectFileInfo());
+
+  std::unique_ptr<MCStreamer> MCStr;
+
+  // The following code can be used to output assembly instead of an object file.
+  // const unsigned OutputAsmVariant = 0;
+  // MCInstPrinter *IP = TM.getTarget().createMCInstPrinter(TM.getTargetTriple(), OutputAsmVariant,
+  //         *MAI, *MCII, *MRI);
+  // std::unique_ptr<MCCodeEmitter> CE = nullptr;
+  // std::unique_ptr<MCAsmBackend> MAB = nullptr;
+  // MCStr.reset(TM.getTarget().createAsmStreamer(Ctx, std::move(FOut), IP, std::move(CE), std::move(MAB)));
+
+  Ctx->setUseNamesOnTempLabels(false);
+
+  MCCodeEmitter *CE = TM.getTarget().createMCCodeEmitter(*MCII, *Ctx);
+  MCAsmBackend *MAB = TM.getTarget().createMCAsmBackend(*TM.getMCSubtargetInfo(), *MRI, MCOptions);
+  MCStr.reset(TM.getTarget().createMCObjectStreamer(
+              TM.getTargetTriple(), *Ctx, std::unique_ptr<MCAsmBackend>(MAB),
+              MAB->createObjectWriter(*ExtAsm.Out), std::unique_ptr<MCCodeEmitter>(CE),
+              *TM.getMCSubtargetInfo()));
+
+  std::unique_ptr<MCAsmParser> Parser(
+    createMCAsmParser(SrcMgr, *Ctx, *MCStr, *MAI));
+
+  std::unique_ptr<MCInstrInfo> MII(TM.getTarget().createMCInstrInfo());
+  assert(MII && "Failed to create instruction info");
+  std::unique_ptr<MCTargetAsmParser> TAP(TM.getTarget().createMCAsmParser(
+              *TM.getMCSubtargetInfo(), *Parser, *MII, MCOptions));
+  if (!TAP)
+      report_fatal_error("External rewriting not supported by this streamer because"
+              " we don't have an asm parser for this target\n");
+
+  Parser->setTargetParser(*TAP);
+
+  bool Failed = Parser->Run(/*NoInitialTextSection*/ false, /*NoFinalize*/ false);
+
+  sys::fs::remove(ExtAsm.File);
+  consumeError(Temp->discard());
+
+  return Failed;
 }
 
 MCSymbol *AsmPrinter::getMBBExceptionSym(const MachineBasicBlock &MBB) {
@@ -2937,10 +3069,10 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   this->MF = &MF;
   const Function &F = MF.getFunction();
 
-  if (TM.getTargetTriple().isX8664LFI())
-    for (auto &MBB : MF)
-      if (shouldEmitLabelForBasicBlock(MBB))
-        MBB.setAlignment(Align(32));
+  // if (TM.getTargetTriple().isX8664LFI())
+  //   for (auto &MBB : MF)
+  //     if (shouldEmitLabelForBasicBlock(MBB))
+  //       MBB.setAlignment(Align(32));
 
   // Record that there are split-stack functions, so we will emit a special
   // section to tell the linker.
