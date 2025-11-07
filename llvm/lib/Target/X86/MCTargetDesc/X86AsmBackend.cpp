@@ -105,7 +105,7 @@ cl::opt<bool> X86AlignBranchWithin32BBoundaries(
         "and should be used with caution."));
 
 cl::opt<unsigned> X86PadMaxPrefixSize(
-    "x86-pad-max-prefix-size", cl::init(0),
+    "x86-pad-max-prefix-size", cl::init(5),
     cl::desc("Maximum number of prefixes to use for padding"));
 
 cl::opt<bool> X86PadForAlign(
