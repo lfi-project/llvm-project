@@ -670,8 +670,13 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
     const char* LFIRewriter = std::getenv("LFI_REWRITER");
     const char* LFIFlags = std::getenv("LFI_FLAGS");
     const char* LFIDebug = std::getenv("LFI_DEBUG");
-    if (!LFIFlags)
+    if (!LFIFlags) {
+#ifdef LFI_DEFAULT_FLAGS
+      LFIFlags = LFI_DEFAULT_FLAGS;
+#else
       LFIFlags = "";
+#endif
+    }
 
     if (!LFIRewriter)
         LFIRewriter = "lfi-rewrite";

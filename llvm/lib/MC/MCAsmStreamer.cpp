@@ -2446,8 +2446,8 @@ void MCAsmStreamer::emitInstruction(const MCInst &Inst,
     Sec->setHasInstructions(true);
   }
 
-  if (LFIExpander && LFIExpander->isEnabled() && LFIExpander->expandInst(Inst, *this, STI))
-    return;
+  // if (LFIExpander && LFIExpander->isEnabled() && LFIExpander->expandInst(Inst, *this, STI))
+  //   return;
 
   if (MAI->isAIX() && CurFrag)
     // Now that a machine instruction has been assembled into this section, make

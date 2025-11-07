@@ -495,6 +495,18 @@ const uint32_t *X86RegisterInfo::getDarwinTLSCallPreservedMask() const {
   return CSR_64_TLS_Darwin_RegMask;
 }
 
+static bool hasLFIFlag(std::string Flag) {
+  const char* LFIFlags = std::getenv("LFI_FLAGS");
+  if (!LFIFlags) {
+#ifdef LFI_DEFAULT_FLAGS
+    LFIFlags = LFI_DEFAULT_FLAGS;
+#else
+    LFIFlags = "";
+#endif
+  }
+  return std::string(LFIFlags).find(Flag) != std::string::npos;
+}
+
 BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   const X86FrameLowering *TFI = getFrameLowering(MF);
@@ -513,6 +525,10 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
       Reserved.set(SubReg);
     for (const MCPhysReg &SubReg : subregs_inclusive(X86::R14)) // base
       Reserved.set(SubReg);
+    if (hasLFIFlag("--p2size=0")) {
+      for (const MCPhysReg &SubReg : subregs_inclusive(X86::R15)) // mask
+        Reserved.set(SubReg);
+    }
   }
 
   // Set the stack-pointer register and its aliases as reserved.
