@@ -830,6 +830,10 @@ void X86AsmBackend::relaxInstruction(MCInst &Inst,
   Inst.setOpcode(RelaxedOp);
 }
 
+static bool mayNotPrefixPad(unsigned Opcode) {
+  return Opcode == X86::CPUID;
+}
+
 bool X86AsmBackend::padInstructionViaPrefix(MCFragment &RF,
                                             MCCodeEmitter &Emitter,
                                             unsigned &RemainingSize) const {
@@ -841,6 +845,9 @@ bool X86AsmBackend::padInstructionViaPrefix(MCFragment &RF,
   // prevent padding this single instruction as well.
   if (mayNeedRelaxation(RF.getOpcode(), RF.getOperands(),
                         *RF.getSubtargetInfo()))
+    return false;
+
+  if (mayNotPrefixPad(RF.getOpcode()))
     return false;
 
   const unsigned OldSize = RF.getVarSize();
