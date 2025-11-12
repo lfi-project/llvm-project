@@ -3074,10 +3074,10 @@ void AsmPrinter::SetupMachineFunction(MachineFunction &MF) {
   this->MF = &MF;
   const Function &F = MF.getFunction();
 
-  // if (TM.getTargetTriple().isX8664LFI())
-  //   for (auto &MBB : MF)
-  //     if (shouldEmitLabelForBasicBlock(MBB))
-  //       MBB.setAlignment(Align(32));
+  if (TM.getTargetTriple().isX8664LFI())
+    for (auto &MBB : MF)
+      if (shouldEmitLabelForBasicBlock(MBB))
+        MBB.setAlignment(Align(32));
 
   // Record that there are split-stack functions, so we will emit a special
   // section to tell the linker.

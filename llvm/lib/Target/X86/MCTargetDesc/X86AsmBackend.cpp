@@ -117,7 +117,7 @@ cl::opt<bool> X86PadForBranchAlign(
     cl::desc("Pad previous instructions to implement branch alignment"));
 
 cl::opt<bool> X86PrefixPadForLFI(
-    "x86-prefix-pad-for-lfi", cl::init(true), cl::Hidden,
+    "x86-prefix-pad-for-lfi", cl::init(false), cl::Hidden,
     cl::desc("Pad using prefixes to implement instruction bundling"));
 
 cl::opt<bool> X86DisableRelaxForPad(

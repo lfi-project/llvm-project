@@ -45,57 +45,57 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
 
   MF.setAlignment(llvm::Align(32));
 
-  // LLVM does not consider basic blocks which are the targets of jump tables
-  // to be address-taken (the address can't escape anywhere else), but they are
-  // used for indirect branches, so need to be properly aligned.
-  SmallPtrSet<MachineBasicBlock *, 8> JumpTableTargets;
-  if (auto *JTI = MF.getJumpTableInfo())
-    for (auto &JTE : JTI->getJumpTables())
-      for (auto *MBB : JTE.MBBs)
-        JumpTableTargets.insert(MBB);
-
-  const X86TargetMachine *TM =
-      static_cast<const X86TargetMachine *>(&MF.getTarget());
-
-  for (MachineBasicBlock &MBB : MF) {
-    // TODO: consider only setting this if MBB.hasAddressTaken() is true.
-    if (MBB.hasAddressTaken() || JumpTableTargets.count(&MBB)) {
-      MBB.setAlignment(llvm::Align(32));
-      Modified = true;
-    }
-    // Exception handle may indirectly jump to catch pad, So we should add
-    // ENDBR before catch pad instructions. For SjLj exception model, it will
-    // create a new BB(new landingpad) indirectly jump to the old landingpad.
-    if (TM->Options.ExceptionModel == ExceptionHandling::SjLj) {
-      for (MachineBasicBlock::iterator I = MBB.begin(); I != MBB.end(); ++I) {
-        // New Landingpad BB without EHLabel.
-        if (MBB.isEHPad()) {
-          if (I->isDebugInstr())
-            continue;
-          MBB.setAlignment(llvm::Align(32));
-          Modified = true;
-          break;
-        } else if (I->isEHLabel()) {
-          // Old Landingpad BB (is not Landingpad now) with
-          // the old "callee" EHLabel.
-          MCSymbol *Sym = I->getOperand(0).getMCSymbol();
-          if (!MF.hasCallSiteLandingPad(Sym))
-            continue;
-          MBB.setAlignment(llvm::Align(32));
-          Modified = true;
-          break;
-        }
-      }
-    } else if (MBB.isEHPad()){
-      for (MachineBasicBlock::iterator I = MBB.begin(); I != MBB.end(); ++I) {
-        if (!I->isEHLabel())
-          continue;
-        MBB.setAlignment(llvm::Align(32));
-        Modified = true;
-        break;
-      }
-    }
-  }
+  // // LLVM does not consider basic blocks which are the targets of jump tables
+  // // to be address-taken (the address can't escape anywhere else), but they are
+  // // used for indirect branches, so need to be properly aligned.
+  // SmallPtrSet<MachineBasicBlock *, 8> JumpTableTargets;
+  // if (auto *JTI = MF.getJumpTableInfo())
+  //   for (auto &JTE : JTI->getJumpTables())
+  //     for (auto *MBB : JTE.MBBs)
+  //       JumpTableTargets.insert(MBB);
+  //
+  // const X86TargetMachine *TM =
+  //     static_cast<const X86TargetMachine *>(&MF.getTarget());
+  //
+  // for (MachineBasicBlock &MBB : MF) {
+  //   // TODO: consider only setting this if MBB.hasAddressTaken() is true.
+  //   if (MBB.hasAddressTaken() || JumpTableTargets.count(&MBB)) {
+  //     MBB.setAlignment(llvm::Align(32));
+  //     Modified = true;
+  //   }
+  //   // Exception handle may indirectly jump to catch pad, So we should add
+  //   // ENDBR before catch pad instructions. For SjLj exception model, it will
+  //   // create a new BB(new landingpad) indirectly jump to the old landingpad.
+  //   if (TM->Options.ExceptionModel == ExceptionHandling::SjLj) {
+  //     for (MachineBasicBlock::iterator I = MBB.begin(); I != MBB.end(); ++I) {
+  //       // New Landingpad BB without EHLabel.
+  //       if (MBB.isEHPad()) {
+  //         if (I->isDebugInstr())
+  //           continue;
+  //         MBB.setAlignment(llvm::Align(32));
+  //         Modified = true;
+  //         break;
+  //       } else if (I->isEHLabel()) {
+  //         // Old Landingpad BB (is not Landingpad now) with
+  //         // the old "callee" EHLabel.
+  //         MCSymbol *Sym = I->getOperand(0).getMCSymbol();
+  //         if (!MF.hasCallSiteLandingPad(Sym))
+  //           continue;
+  //         MBB.setAlignment(llvm::Align(32));
+  //         Modified = true;
+  //         break;
+  //       }
+  //     }
+  //   } else if (MBB.isEHPad()){
+  //     for (MachineBasicBlock::iterator I = MBB.begin(); I != MBB.end(); ++I) {
+  //       if (!I->isEHLabel())
+  //         continue;
+  //       MBB.setAlignment(llvm::Align(32));
+  //       Modified = true;
+  //       break;
+  //     }
+  //   }
+  // }
   return Modified;
 }
 
