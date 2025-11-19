@@ -33,9 +33,9 @@ using namespace llvm;
 
 #define DEBUG_TYPE "lfi"
 
-static cl::opt<bool> X86LFIErrorReserved(
-    "x86-lfi-error-reserved", cl::Hidden, cl::init(false),
-    cl::desc("Produce errors for uses of LFI reserved registers"));
+static cl::opt<bool> X86LFIWarningReserved(
+    "x86-lfi-warning-reserved", cl::Hidden, cl::init(false),
+    cl::desc("Produce warnings for uses of LFI reserved registers"));
 
 static const int BundleSize = 32;
 
@@ -891,14 +891,15 @@ void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
   if (isPrefix(Inst)) {
     return Prefixes.push_back(Inst);
   }
-  if (explicitlyModifiesRegister(Inst, LFIBaseReg)) {
-    if (X86LFIErrorReserved)
-      return Out.getContext().reportError(
-          Inst.getLoc(), "illegal modification of reserved LFI register");
-    Out.getContext().reportWarning(
-        Inst.getLoc(), "deleting modification of reserved LFI register");
-    MCInst New = replaceReg(Inst, LFIScratchReg, LFIBaseReg);
-    return doExpandInst(New, Out, STI, EmitPrefixes);
+  if (explicitlyModifiesRegister(Inst, LFIBaseReg) || explicitlyModifiesRegister(Inst, LFIScratchReg)) {
+    if (X86LFIWarningReserved) {
+      Out.getContext().reportWarning(
+          Inst.getLoc(), "deleting modification of reserved LFI register");
+      MCInst New = replaceReg(Inst, LFIScratchReg, LFIBaseReg);
+      return doExpandInst(New, Out, STI, EmitPrefixes);
+    }
+    return Out.getContext().reportError(
+        Inst.getLoc(), "illegal modification of reserved LFI register");
   } else if (isSyscall(Inst)) {
     expandSyscall(Inst, Out, STI);
   } else if (isTLSRead(Inst)) {
