@@ -47,6 +47,7 @@ private:
   bool ActiveBB = false;
   bool ActiveGuard = false;
   MCRegister ActiveGuardReg;
+  std::optional<MCInst> ActiveAdrp;
 
   MCRegister getScratch();
 
@@ -64,6 +65,8 @@ private:
   bool mayModifyReserved(const MCInst &Inst);
 
   bool mayModifyLR(const MCInst &Inst);
+
+  bool expandMatchedAdrp(const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI);
 
   void expandControlFlow(const MCInst &Inst, MCStreamer &Out,
                          const MCSubtargetInfo &STI);

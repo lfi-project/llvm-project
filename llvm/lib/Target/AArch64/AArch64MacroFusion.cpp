@@ -497,7 +497,7 @@ static bool shouldScheduleAdjacent(const TargetInstrInfo &TII,
     return true;
   if (ST.hasFuseLiterals() && isLiteralsPair(FirstMI, SecondMI))
     return true;
-  if (ST.hasFuseAddress() && isAddressLdStPair(FirstMI, SecondMI))
+  if ((ST.hasFuseAddress() || ST.isAArch64LFI()) && isAddressLdStPair(FirstMI, SecondMI))
     return true;
   if (ST.hasFuseCmpCSel() && isCmpCSelPair(FirstMI, SecondMI))
     return true;

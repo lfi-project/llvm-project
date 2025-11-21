@@ -304,6 +304,60 @@ static void emitSafeLoadStore(const MCInst &Inst, unsigned N,
   Exp.emitInst(LoadStore, Out, STI);
 }
 
+static std::optional<MemInstInfo> getAtomicLoadStoreInfo(const MCInst &Inst);
+
+static std::optional<MemInstInfo> getMemInstInfo(const MCInst &Inst) {
+  auto MII = getLoadInfo(Inst);
+  if (MII.has_value())
+    return MII;
+  MII = getStoreInfo(Inst);
+  if (MII.has_value())
+    return MII;
+  MII = getAtomicLoadStoreInfo(Inst);
+  if (MII.has_value())
+    return MII;
+  return std::nullopt;
+}
+
+bool AArch64::AArch64MCLFIExpander::expandMatchedAdrp(const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  switch (Inst.getOpcode()) {
+  case AArch64::LDRBBui:
+  case AArch64::LDRBui:
+  case AArch64::LDRDui:
+  case AArch64::LDRHHui:
+  case AArch64::LDRHui:
+  case AArch64::LDRQui:
+  case AArch64::LDRSBWui:
+  case AArch64::LDRSBXui:
+  case AArch64::LDRSHWui:
+  case AArch64::LDRSHXui:
+  case AArch64::LDRSWui:
+  case AArch64::LDRSui:
+  case AArch64::LDRWui:
+  case AArch64::LDRXui:
+    break;
+  default:
+    return false;
+  }
+  MCRegister AdrpReg = ActiveAdrp.value().getOperand(0).getReg();
+  MCRegister Dest = Inst.getOperand(0).getReg();
+  MCRegister Base = Inst.getOperand(1).getReg();
+
+  if ((AdrpReg == Dest || getWRegFromXReg(AdrpReg) == Dest) && AdrpReg == Base) {
+    MCInst NewAdrp = replaceReg(ActiveAdrp.value(), LFIAddrReg, AdrpReg);
+    MCInst NewLoad(Inst);
+    NewLoad.getOperand(1).setReg(LFIAddrReg);
+    emitInst(NewAdrp, Out, STI);
+    emitInst(NewLoad, Out, STI);
+    ActiveAdrp.reset();
+    // If there is active guard elimination we have to cancel it because we just clobbered x28.
+    ActiveGuard = false;
+    return true;
+  }
+
+  return false;
+}
+
 void AArch64::AArch64MCLFIExpander::expandLoadStoreBasic(
     const MCInst &Inst, MemInstInfo &MII, MCStreamer &Out,
     const MCSubtargetInfo &STI) {
@@ -429,21 +483,6 @@ void AArch64::AArch64MCLFIExpander::expandLoadStoreRoW(
   }
 }
 
-static std::optional<MemInstInfo> getAtomicLoadStoreInfo(const MCInst &Inst);
-
-static std::optional<MemInstInfo> getMemInstInfo(const MCInst &Inst) {
-  auto MII = getLoadInfo(Inst);
-  if (MII.has_value())
-    return MII;
-  MII = getStoreInfo(Inst);
-  if (MII.has_value())
-    return MII;
-  MII = getAtomicLoadStoreInfo(Inst);
-  if (MII.has_value())
-    return MII;
-  return std::nullopt;
-}
-
 void AArch64::AArch64MCLFIExpander::expandLoadStore(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
   if (hasFeature(FeatureBitset({AArch64::FeatureLFIJumps}), STI))
@@ -558,6 +597,13 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
         return Out.getContext().reportError(
             Inst.getLoc(), "illegal modification guarded register");
 
+  if (ActiveAdrp.has_value()) {
+    if (expandMatchedAdrp(Inst, Out, STI))
+      return;
+    emitInst(ActiveAdrp.value(), Out, STI);
+    ActiveAdrp.reset();
+  }
+
   if (isSyscall(Inst))
     return expandSyscall(Inst, Out, STI);
 
@@ -578,6 +624,11 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
 
   if (isBranch(Inst))
     return emitInst(Inst, Out, STI);
+
+  if (Inst.getOpcode() == AArch64::ADRP) {
+      ActiveAdrp = Inst;
+      return;
+  }
 
   // Bail out with an error. In the future, we could consider automatically
   // rewriting uses of reserved LFI registers.
