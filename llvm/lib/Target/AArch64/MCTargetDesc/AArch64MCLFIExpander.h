@@ -32,6 +32,8 @@ public:
                        std::unique_ptr<MCInstrInfo> &&II)
       : MCLFIExpander(Ctx, std::move(RI), std::move(II)) {}
 
+  void emitFuncCall(StringRef FuncName, MCStreamer &Out, const MCSubtargetInfo &STI);
+
   bool expandInst(const MCInst &Inst, MCStreamer &Out,
                   const MCSubtargetInfo &STI) override;
 

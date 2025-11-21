@@ -1559,13 +1559,8 @@ bool AArch64ExpandPseudo::expandMI(MachineBasicBlock &MBB,
       SysReg = AArch64SysReg::TPIDR_EL1;
     else if (MF->getSubtarget<AArch64Subtarget>().useROEL0ForTP())
       SysReg = AArch64SysReg::TPIDRRO_EL0;
-    BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(AArch64::ORRXrs))
-        .addReg(DstReg)
-        .addReg(AArch64::XZR)
-        .addReg(AArch64::X28)
-        .addImm(0);
-    // BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(AArch64::MRS), DstReg)
-    //     .addImm(SysReg);
+    BuildMI(MBB, MBBI, MI.getDebugLoc(), TII->get(AArch64::MRS), DstReg)
+        .addImm(SysReg);
     MI.eraseFromParent();
     return true;
   }

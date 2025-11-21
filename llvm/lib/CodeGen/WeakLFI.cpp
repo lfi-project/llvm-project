@@ -61,8 +61,6 @@ Value *readRegister(IRBuilder<> &IRB, StringRef Name) {
 }
 
 bool WeakLFI::run() {
-  errs() << "[WeakLFI] run Function: " << F.getName() << "\n";
-
   SmallVector<Instruction*, 64> ToInstrument;
 
   // Collect loads and stores (we collect first to avoid iterator invalidation)

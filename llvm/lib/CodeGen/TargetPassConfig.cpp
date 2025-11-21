@@ -34,6 +34,7 @@
 #include "llvm/InitializePasses.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
@@ -977,7 +978,8 @@ void TargetPassConfig::addISelPrepare() {
   // Add both the safe stack and the stack protection passes: each of them will
   // only protect functions that have corresponding attributes.
   addPass(createSafeStackPass());
-  addPass(createWeakLFIPass());
+  if (TM->getTargetTriple().isLFI())
+    addPass(createWeakLFIPass());
   addPass(createStackProtectorPass());
 
   if (PrintISelInput)
