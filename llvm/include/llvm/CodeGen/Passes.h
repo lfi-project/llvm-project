@@ -504,6 +504,11 @@ createGlobalMergePass(const TargetMachine *TM, unsigned MaximalOffset,
                       bool MergeConstantByDefault = false,
                       bool MergeConstAggressiveByDefault = false);
 
+/// This pass enforces LFI sandboxing via LLVM IR rather than machine code
+/// rewrites. This means that it is generally more performant easier to work
+/// with compared to standard LFI, but provides weaker guarantees.
+LLVM_ABI FunctionPass *createWeakLFIPass();
+
 /// This pass splits the stack into a safe stack and an unsafe stack to
 /// protect against stack-based overflow vulnerabilities.
 LLVM_ABI FunctionPass *createSafeStackPass();

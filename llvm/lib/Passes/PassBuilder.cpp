@@ -177,6 +177,7 @@
 #include "llvm/CodeGen/UnreachableBlockElim.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/CodeGen/WasmEHPrepare.h"
+#include "llvm/CodeGen/WeakLFI.h"
 #include "llvm/CodeGen/WinEHPrepare.h"
 #include "llvm/CodeGen/XRayInstrumentation.h"
 #include "llvm/IR/DebugInfo.h"

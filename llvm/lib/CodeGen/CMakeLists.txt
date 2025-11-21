@@ -252,6 +252,7 @@ add_llvm_component_library(LLVMCodeGen
   VLIWMachineScheduler.cpp
   VirtRegMap.cpp
   WasmEHPrepare.cpp
+  WeakLFI.cpp
   WindowScheduler.cpp
   WindowsSecureHotPatching.cpp
   WinEHPrepare.cpp

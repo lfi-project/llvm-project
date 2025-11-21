@@ -101,6 +101,7 @@
 #include "llvm/CodeGen/UnreachableBlockElim.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 #include "llvm/CodeGen/WasmEHPrepare.h"
+#include "llvm/CodeGen/WeakLFI.h"
 #include "llvm/CodeGen/WinEHPrepare.h"
 #include "llvm/CodeGen/XRayInstrumentation.h"
 #include "llvm/IR/PassManager.h"
@@ -895,6 +896,7 @@ void CodeGenPassBuilder<Derived, TargetMachineT>::addISelPrepare(
   // Add both the safe stack and the stack protection passes: each of them will
   // only protect functions that have corresponding attributes.
   addPass(SafeStackPass(TM));
+  addPass(WeakLFIPass(TM));
   addPass(StackProtectorPass(TM));
 
   if (Opt.PrintISelInput)

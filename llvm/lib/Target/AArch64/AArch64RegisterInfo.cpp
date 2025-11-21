@@ -423,6 +423,10 @@ AArch64RegisterInfo::getStrictlyReservedRegs(const MachineFunction &MF) const {
   BitVector Reserved(getNumRegs());
   markSuperRegs(Reserved, AArch64::WSP);
   markSuperRegs(Reserved, AArch64::WZR);
+  markSuperRegs(Reserved, AArch64::W28);
+  markSuperRegs(Reserved, AArch64::X28);
+  markSuperRegs(Reserved, AArch64::W27);
+  markSuperRegs(Reserved, AArch64::X27);
 
   if (TFI->isFPReserved(MF))
     markSuperRegs(Reserved, AArch64::W29);
