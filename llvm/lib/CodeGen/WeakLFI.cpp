@@ -51,7 +51,7 @@ public:
 
 } // end anonymous namespace
 
-Value *readRegister(IRBuilder<> &IRB, StringRef Name) {
+static Value *readRegister(IRBuilder<> &IRB, StringRef Name) {
   Module *M = IRB.GetInsertBlock()->getParent()->getParent();
   MDNode *MD =
       MDNode::get(M->getContext(), {MDString::get(M->getContext(), Name)});
@@ -60,10 +60,34 @@ Value *readRegister(IRBuilder<> &IRB, StringRef Name) {
                              IRB.getIntPtrTy(M->getDataLayout()), Args);
 }
 
+static Value *guardPtr(IRBuilder<> &B, Value *Base, Value *Ptr) {
+  Value *Addr64 = B.CreatePtrToInt(Ptr, B.getInt64Ty());
+  Value *Addr32 = B.CreateTrunc(Addr64, B.getInt32Ty());
+  Value *Addr32Ext = B.CreateZExt(Addr32, B.getInt64Ty());
+  Value *AddrMasked = B.CreateAdd(Base, Addr32Ext);
+  Value *PtrMasked = B.CreateIntToPtr(AddrMasked, B.getPtrTy());
+  return PtrMasked;
+}
+
+static Value *makeResultSafe(Instruction *I, Value *Base, ValueToValueMapTy &SafeValues) {
+  if (!I->getType()->isPointerTy())
+    return I;
+  IRBuilder<> B(I);
+  Value *SafeValue = guardPtr(B, Base, I);
+  SafeValues[I] = SafeValue;
+  return SafeValue;
+}
+
 bool WeakLFI::run() {
   SmallVector<Instruction*, 64> ToInstrument;
 
-  // Collect loads and stores (we collect first to avoid iterator invalidation)
+  BasicBlock &Entry = F.getEntryBlock();
+  IRBuilder<> BF(&Entry, Entry.begin());
+  Value *Base = readRegister(BF, "x27");
+
+  ValueToValueMapTy SafeValues;
+
+  // Collect loads and stores.
   for (Instruction &I : instructions(F))
     if (isa<LoadInst>(&I) || isa<StoreInst>(&I))
       ToInstrument.push_back(&I);
@@ -71,22 +95,12 @@ bool WeakLFI::run() {
   for (Instruction *I : ToInstrument) {
     if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
       IRBuilder<> B(LI);
-      Value *Base = readRegister(B, "x27");
-      Value *Addr64 = B.CreatePtrToInt(LI->getPointerOperand(), B.getInt64Ty());
-      Value *Addr32 = B.CreateTrunc(Addr64, B.getInt32Ty());
-      Value *Addr32Ext = B.CreateZExt(Addr32, B.getInt64Ty());
-      Value *AddrMasked = B.CreateAdd(Base, Addr32Ext);
-      Value *PtrMasked = B.CreateIntToPtr(AddrMasked, B.getPtrTy());
-      LI->setOperand(0, PtrMasked);
+      Value *Ptr = LI->getPointerOperand();
+      LI->setOperand(0, guardPtr(B, Base, Ptr));
     } else if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
       IRBuilder<> B(SI);
-      Value *Base = readRegister(B, "x27");
-      Value *Addr64 = B.CreatePtrToInt(SI->getPointerOperand(), B.getInt64Ty());
-      Value *Addr32 = B.CreateTrunc(Addr64, B.getInt32Ty());
-      Value *Addr32Ext = B.CreateZExt(Addr32, B.getInt64Ty());
-      Value *AddrMasked = B.CreateAdd(Base, Addr32Ext);
-      Value *PtrMasked = B.CreateIntToPtr(AddrMasked, B.getPtrTy());
-      SI->setOperand(1, PtrMasked);
+      Value *Ptr = SI->getPointerOperand();
+      SI->setOperand(1, guardPtr(B, Base, Ptr));
     }
   }
 

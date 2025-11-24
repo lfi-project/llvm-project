@@ -346,6 +346,7 @@ static bool shouldPinPassToLegacyPM(StringRef Pass) {
       "amdgcn-", "polly-", "riscv-", "dxil-"};
   static constexpr StringLiteral PassNameContain[] = {"-eh-prepare"};
   static constexpr StringLiteral PassNameExact[] = {
+      "weak-lfi",
       "safe-stack",
       "cost-model",
       "codegenprepare",

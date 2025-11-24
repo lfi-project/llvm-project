@@ -34,6 +34,9 @@ public:
 
   void emitFuncCall(StringRef FuncName, MCStreamer &Out, const MCSubtargetInfo &STI);
 
+  void doExpandInst(const MCInst &Inst, MCStreamer &Out,
+                    const MCSubtargetInfo &STI);
+
   bool expandInst(const MCInst &Inst, MCStreamer &Out,
                   const MCSubtargetInfo &STI) override;
 
