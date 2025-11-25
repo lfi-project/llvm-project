@@ -45,6 +45,7 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
 
   MF.setAlignment(llvm::Align(32));
 
+#ifdef LFI_UNALIGN
   // LLVM does not consider basic blocks which are the targets of jump tables
   // to be address-taken (the address can't escape anywhere else), but they are
   // used for indirect branches, so need to be properly aligned.
@@ -96,6 +97,7 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
       }
     }
   }
+#endif
   return Modified;
 }
 
