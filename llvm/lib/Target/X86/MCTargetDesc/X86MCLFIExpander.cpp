@@ -929,7 +929,7 @@ bool X86::X86MCLFIExpander::expandInst(const MCInst &Inst, MCStreamer &Out,
     return false;
   Guard = true;
 
-  if (explicitlyModifiesRegister(Inst, LFIBaseReg) || explicitlyModifiesRegister(Inst, LFIScratchReg)) {
+  if (explicitlyModifiesRegister(Inst, LFIBaseReg)) {
     if (X86LFIWarningReserved) {
       Out.getContext().reportWarning(
           Inst.getLoc(), "deleting modification of reserved LFI register");
