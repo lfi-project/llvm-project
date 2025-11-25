@@ -235,6 +235,10 @@ void X86::X86MCLFIExpander::expandReturn(const MCInst &Inst, MCStreamer &Out,
   emitIndirectJumpReg(ScratchReg, Out, STI);
 }
 
+// Normalize F*rST0 instructions for LFI verifier.
+// following instructions are functionally identical, e.g.,
+// dc c8: fmul %st, %st(0)
+// d8 c8: fmul %st(0), %st
 static unsigned normalizeOpcode(unsigned Op) {
   switch (Op) {
   case X86::ADD_FrST0:
@@ -277,7 +281,8 @@ void X86::X86MCLFIExpander::expandLoadStore(const MCInst &Inst, MCStreamer &Out,
 
   MCInst SandboxedInst(Inst);
 
-  if (normalizeOpcode(Op) != Op)
+  if (normalizeOpcode(Op) != Op &&
+      SandboxedInst.getOperand(0).getReg() == X86::ST0)
     SandboxedInst.setOpcode(normalizeOpcode(Op));
 
   MCRegister ScratchReg;
