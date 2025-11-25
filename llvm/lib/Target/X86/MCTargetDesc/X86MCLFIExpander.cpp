@@ -891,16 +891,8 @@ void X86::X86MCLFIExpander::doExpandInst(const MCInst &Inst, MCStreamer &Out,
   if (isPrefix(Inst)) {
     return Prefixes.push_back(Inst);
   }
-  if (explicitlyModifiesRegister(Inst, LFIBaseReg) || explicitlyModifiesRegister(Inst, LFIScratchReg)) {
-    if (X86LFIWarningReserved) {
-      Out.getContext().reportWarning(
-          Inst.getLoc(), "deleting modification of reserved LFI register");
-      MCInst New = replaceReg(Inst, LFIScratchReg, LFIBaseReg);
-      return doExpandInst(New, Out, STI, EmitPrefixes);
-    }
-    return Out.getContext().reportError(
-        Inst.getLoc(), "illegal modification of reserved LFI register");
-  } else if (isSyscall(Inst)) {
+
+  if (isSyscall(Inst)) {
     expandSyscall(Inst, Out, STI);
   } else if (isTLSRead(Inst)) {
     expandTLSRead(Inst, Out, STI);
@@ -936,6 +928,20 @@ bool X86::X86MCLFIExpander::expandInst(const MCInst &Inst, MCStreamer &Out,
   if (Guard)
     return false;
   Guard = true;
+
+  if (explicitlyModifiesRegister(Inst, LFIBaseReg) || explicitlyModifiesRegister(Inst, LFIScratchReg)) {
+    if (X86LFIWarningReserved) {
+      Out.getContext().reportWarning(
+          Inst.getLoc(), "deleting modification of reserved LFI register");
+      MCInst New = replaceReg(Inst, LFIScratchReg, LFIBaseReg);
+      doExpandInst(New, Out, STI, true);
+      Guard = false;
+      return true;
+    }
+    Out.getContext().reportError(
+        Inst.getLoc(), "illegal modification of reserved LFI register");
+    return false;
+  }
 
   doExpandInst(Inst, Out, STI, true);
   invalidateScratchRegs(Inst);
