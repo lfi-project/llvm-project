@@ -238,9 +238,10 @@ public:
       mca::InstrumentManager *(*)(const MCSubtargetInfo &STI,
                                   const MCInstrInfo &MCII);
 
-  using MCLFIRewriterCtorTy = MCLFIRewriter *(*)(
-      MCStreamer &S, std::unique_ptr<MCRegisterInfo> &&RegInfo,
-      std::unique_ptr<MCInstrInfo> &&InstInfo);
+  using MCLFIRewriterCtorTy =
+      MCLFIRewriter *(*)(MCStreamer &S,
+                         std::unique_ptr<MCRegisterInfo> &&RegInfo,
+                         std::unique_ptr<MCInstrInfo> &&InstInfo);
 
 private:
   /// Next - The next registered target in the linked list, maintained by the
@@ -602,8 +603,8 @@ public:
   }
 
   void createMCLFIRewriter(MCStreamer &S,
-      std::unique_ptr<MCRegisterInfo> &&RegInfo,
-      std::unique_ptr<MCInstrInfo> &&InstInfo) const {
+                           std::unique_ptr<MCRegisterInfo> &&RegInfo,
+                           std::unique_ptr<MCInstrInfo> &&InstInfo) const {
     if (MCLFIRewriterCtorFn)
       MCLFIRewriterCtorFn(S, std::move(RegInfo), std::move(InstInfo));
   }
@@ -1080,8 +1081,7 @@ struct TargetRegistry {
     T.InstrumentManagerCtorFn = Fn;
   }
 
-  static void RegisterMCLFIRewriter(Target &T,
-                                    Target::MCLFIRewriterCtorTy Fn) {
+  static void RegisterMCLFIRewriter(Target &T, Target::MCLFIRewriterCtorTy Fn) {
     T.MCLFIRewriterCtorFn = Fn;
   }
 

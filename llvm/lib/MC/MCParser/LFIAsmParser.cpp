@@ -31,8 +31,10 @@ public:
   void Initialize(MCAsmParser &Parser) override {
     // Call the base implementation.
     MCAsmParserExtension::Initialize(Parser);
-    addDirectiveHandler<&LFIAsmParser::parseRewriteDisable>(".lfi_rewrite_disable");
-    addDirectiveHandler<&LFIAsmParser::parseRewriteEnable>(".lfi_rewrite_enable");
+    addDirectiveHandler<&LFIAsmParser::parseRewriteDisable>(
+        ".lfi_rewrite_disable");
+    addDirectiveHandler<&LFIAsmParser::parseRewriteEnable>(
+        ".lfi_rewrite_enable");
   }
 
   /// ::= {.lfi_rewrite_disable}

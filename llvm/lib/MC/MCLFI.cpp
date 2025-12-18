@@ -23,8 +23,8 @@ static const char NoteNamespace[] = "LFI";
 namespace llvm {
 
 cl::opt<bool> FlagEnableRewriting("lfi-enable-rewriter",
-                              cl::desc("Don't enable rewriting for LFI."),
-                              cl::init(true));
+                                  cl::desc("Don't enable rewriting for LFI."),
+                                  cl::init(true));
 
 void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
                              const Triple &TheTriple) {
@@ -48,8 +48,7 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
   if (FlagEnableRewriting) {
     TheTarget->createMCLFIRewriter(
         Streamer,
-        std::unique_ptr<MCRegisterInfo>(
-            TheTarget->createMCRegInfo(TheTriple)),
+        std::unique_ptr<MCRegisterInfo>(TheTarget->createMCRegInfo(TheTriple)),
         std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo()));
   }
 
