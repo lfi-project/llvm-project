@@ -37,7 +37,6 @@ static cl::opt<bool> AArch64LFIErrorReserved(
 static MCRegister LFIAddrReg = AArch64::X28;
 static MCRegister LFIBaseReg = AArch64::X27;
 static MCRegister LFIScratchReg = AArch64::X26;
-static MCRegister LFITLSReg = AArch64::X25;
 
 static bool hasFeature(const FeatureBitset Feature,
                        const MCSubtargetInfo &STI) {
@@ -179,6 +178,8 @@ void AArch64::AArch64MCLFIExpander::expandCall(const MCInst &Inst,
 void AArch64::AArch64MCLFIExpander::expandReturn(const MCInst &Inst,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
+  if (Inst.getNumOperands() == 0)
+    return Out.getContext().reportError(Inst.getLoc(), "non-basic ret is not supported by LFI");
   assert(Inst.getOperand(0).isReg());
   if (Inst.getOperand(0).getReg() != AArch64::LR)
     expandIndirectBranch(Inst, Out, STI, false);
@@ -216,13 +217,12 @@ static MCInst replaceReg(const MCInst &Inst, MCRegister Dest, MCRegister Src) {
 
 void AArch64::AArch64MCLFIExpander::expandLRModification(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  MCRegister Scratch = getScratch();
-  MCInst New = replaceReg(Inst, Scratch, AArch64::LR);
-  if (mayLoad(New) || mayStore(New))
-    expandLoadStore(New, Out, STI);
+  if (mayLoad(Inst) || mayStore(Inst))
+    expandLoadStore(Inst, Out, STI);
   else
-    emitInst(New, Out, STI);
-  emitAddMask(AArch64::LR, Scratch, Out, STI);
+    emitInst(Inst, Out, STI);
+  // Emit a guard for LR when we reach the end of the basic block.
+  DeferredLRGuard = true;
 }
 
 void AArch64::AArch64MCLFIExpander::expandStackModification(
@@ -477,6 +477,14 @@ void AArch64::AArch64MCLFIExpander::emitLFICall(LFICallType CallType,
   emitAddMask(AArch64::LR, Scratch, Out, STI);
 }
 
+void AArch64::AArch64MCLFIExpander::expandAutiasp(const MCInst &Inst,
+                                                  MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI) {
+  emitInst(Inst, Out, STI);
+  // force immediate validation
+  emit(AArch64::LDRXui, AArch64::XZR, AArch64::LR, 0, *this, Out, STI);
+}
+
 void AArch64::AArch64MCLFIExpander::expandSyscall(const MCInst &Inst,
                                                   MCStreamer &Out,
                                                   const MCSubtargetInfo &STI) {
@@ -494,9 +502,6 @@ void AArch64::AArch64MCLFIExpander::expandTLSRead(const MCInst &Inst,
                                                   MCStreamer &Out,
                                                   const MCSubtargetInfo &STI) {
   MCRegister Reg = Inst.getOperand(0).getReg();
-
-  if (hasFeature(FeatureBitset({AArch64::FeatureLFITLSReg}), STI))
-    return emit(AArch64::LDRXui, Reg, LFITLSReg, 0, *this, Out, STI);
 
   if (Reg == AArch64::X0) {
     emitLFICall(LFITLSRead, Out, STI);
@@ -524,6 +529,11 @@ static bool isSyscall(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::SVC;
 }
 
+static bool isAutiasp(const MCInst &Inst) {
+  return Inst.getOpcode() == AArch64::AUTIASP ||
+    (Inst.getOpcode() == AArch64::HINT && Inst.getOperand(0).getImm() == 29);
+}
+
 static bool isTLSRead(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::MRS &&
          Inst.getOperand(1).getImm() == AArch64SysReg::TPIDR_EL0;
@@ -543,6 +553,11 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
         return Out.getContext().reportError(
             Inst.getLoc(), "illegal modification guarded register");
 
+  // Emit a guard for LR if there is one pending.
+  if (mayAffectControlFlow(Inst))
+    if (DeferredLRGuard)
+    emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+
   if (isSyscall(Inst))
     return expandSyscall(Inst, Out, STI);
 
@@ -551,6 +566,9 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
 
   if (isTLSWrite(Inst))
     return expandTLSWrite(Inst, Out, STI);
+
+  if (isAutiasp(Inst))
+    return expandAutiasp(Inst, Out, STI);
 
   if (isReturn(Inst))
     return expandReturn(Inst, Out, STI);

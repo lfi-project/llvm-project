@@ -46,6 +46,7 @@ private:
 
   bool ActiveBB = false;
   bool ActiveGuard = false;
+  bool DeferredLRGuard = false;
   MCRegister ActiveGuardReg;
 
   MCRegister getScratch();
@@ -87,6 +88,9 @@ private:
                           MCStreamer &Out, const MCSubtargetInfo &STI);
 
   void expandSyscall(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI);
+
+  void expandAutiasp(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
 
   void expandTLSRead(const MCInst &Inst, MCStreamer &Out,
