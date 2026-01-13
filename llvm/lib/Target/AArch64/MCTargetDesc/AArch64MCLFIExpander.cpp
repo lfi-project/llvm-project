@@ -37,6 +37,7 @@ static cl::opt<bool> AArch64LFIErrorReserved(
 static MCRegister LFIAddrReg = AArch64::X28;
 static MCRegister LFIBaseReg = AArch64::X27;
 static MCRegister LFIScratchReg = AArch64::X26;
+static MCRegister LFITLSReg = AArch64::X25;
 
 static bool hasFeature(const FeatureBitset Feature,
                        const MCSubtargetInfo &STI) {
@@ -503,6 +504,9 @@ void AArch64::AArch64MCLFIExpander::expandTLSRead(const MCInst &Inst,
                                                   const MCSubtargetInfo &STI) {
   MCRegister Reg = Inst.getOperand(0).getReg();
 
+  if (hasFeature(FeatureBitset({AArch64::FeatureLFITLSReg}), STI))
+    return emit(AArch64::LDRXui, Reg, LFITLSReg, 0, *this, Out, STI);
+
   if (Reg == AArch64::X0) {
     emitLFICall(LFITLSRead, Out, STI);
   } else {
@@ -555,8 +559,10 @@ void AArch64::AArch64MCLFIExpander::doExpandInst(const MCInst &Inst,
 
   // Emit a guard for LR if there is one pending.
   if (mayAffectControlFlow(Inst))
-    if (DeferredLRGuard)
-    emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+    if (DeferredLRGuard) {
+      emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+      DeferredLRGuard = false;
+    }
 
   if (isSyscall(Inst))
     return expandSyscall(Inst, Out, STI);
@@ -621,6 +627,10 @@ void AArch64::AArch64MCLFIExpander::endBB(MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
   ActiveBB = false;
   ActiveGuard = false;
+  if (DeferredLRGuard) {
+    emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+    DeferredLRGuard = false;
+  }
 }
 
 bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst,

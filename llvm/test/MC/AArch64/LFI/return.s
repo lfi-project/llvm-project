@@ -1,19 +1,19 @@
 // RUN: llvm-mc -filetype asm -triple aarch64_lfi %s | FileCheck %s
 
+.bb_start
 mov x30, x0
-// CHECK:      mov x26, x0
-// CHECK-NEXT: add x30, x27, w26, uxtw
+.bb_end
+// CHECK:      mov x30, x0
+// CHECK-NEXT: add x30, x27, w30, uxtw
 
+.bb_start
 ldr x30, [sp]
-// CHECK:      ldr x26, [sp]
-// CHECK-NEXT: add x30, x27, w26, uxtw
+.bb_end
+// CHECK:      ldr x30, [sp]
+// CHECK-NEXT: add x30, x27, w30, uxtw
 
+.bb_start
 ldp x29, x30, [sp]
-// CHECK:      ldp x29, x26, [sp]
-// CHECK-NEXT: add x30, x27, w26, uxtw
-
-.scratch x10
-ldr x30, [sp]
-// CHECK:      ldr x10, [sp]
-// CHECK-NEXT: add x30, x27, w10, uxtw
-.scratch_clear
+.bb_end
+// CHECK:      ldp x29, x30, [sp]
+// CHECK-NEXT: add x30, x27, w30, uxtw
