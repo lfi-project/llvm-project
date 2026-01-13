@@ -207,6 +207,10 @@ public:
   unsigned getBundleAlignSize() const { return BundleAlignSize; }
   void setBundleAlignSize(unsigned Size) { BundleAlignSize = Size; }
 
+  bool isBundlingEnabled() const { return BundleAlignSize != 0; }
+  unsigned getBundleAlignSize() const { return BundleAlignSize; }
+  void setBundleAlignSize(unsigned Size) { BundleAlignSize = Size; }
+
   const_iterator begin() const { return Sections.begin(); }
   const_iterator end() const { return Sections.end(); }
 
