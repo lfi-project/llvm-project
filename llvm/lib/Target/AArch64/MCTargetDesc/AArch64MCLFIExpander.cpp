@@ -212,8 +212,13 @@ static bool isPACIASP(const MCInst &Inst) {
     (Inst.getOpcode() == AArch64::HINT && Inst.getOperand(0).getImm() == 25);
 }
 
+static bool isAUTIASP(const MCInst &Inst) {
+  return Inst.getOpcode() == AArch64::AUTIASP ||
+    (Inst.getOpcode() == AArch64::HINT && Inst.getOperand(0).getImm() == 29);
+}
+
 bool AArch64::AArch64MCLFIExpander::mayModifyLR(const MCInst &Inst) {
-  if (isPACIASP(Inst))
+  if (isPACIASP(Inst) || isAUTIASP(Inst))
     return false;
   return mayModifyRegister(Inst, AArch64::LR);
 }

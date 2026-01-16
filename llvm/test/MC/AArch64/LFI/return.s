@@ -17,3 +17,13 @@ ldr x30, [sp]
 // CHECK:      ldr x10, [sp]
 // CHECK-NEXT: add x30, x27, w10, uxtw
 .scratch_clear
+
+autiasp
+nop
+// CHECK:      hint #29
+// CHECK-NEXT: nop
+
+paciasp
+nop
+// CHECK:      hint #25
+// CHECK-NEXT: nop
