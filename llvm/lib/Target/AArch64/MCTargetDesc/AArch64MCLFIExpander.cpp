@@ -207,7 +207,14 @@ bool AArch64::AArch64MCLFIExpander::mayModifyReserved(const MCInst &Inst) {
          mayModifyRegister(Inst, LFIBaseReg);
 }
 
+static bool isPACIASP(const MCInst &Inst) {
+  return Inst.getOpcode() == AArch64::PACIASP ||
+    (Inst.getOpcode() == AArch64::HINT && Inst.getOperand(0).getImm() == 25);
+}
+
 bool AArch64::AArch64MCLFIExpander::mayModifyLR(const MCInst &Inst) {
+  if (isPACIASP(Inst))
+    return false;
   return mayModifyRegister(Inst, AArch64::LR);
 }
 
