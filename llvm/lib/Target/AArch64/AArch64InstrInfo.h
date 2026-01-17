@@ -814,6 +814,7 @@ static inline unsigned getPACOpcodeForKey(AArch64PACKey::ID K, bool Zero) {
 #define TSFLAG_FALSE_LANE_TYPE(X)       ((X) << 7)  // 2-bits
 #define TSFLAG_INSTR_FLAGS(X)           ((X) << 9)  // 2-bits
 #define TSFLAG_SME_MATRIX_TYPE(X)       ((X) << 11) // 3-bits
+#define TSFLAG_MEM_OP_ADDR_MODE(X)      ((X) << 14) // 4-bits
 // }
 
 namespace AArch64 {
@@ -863,11 +864,119 @@ enum SMEMatrixType {
   SMEMatrixArray    = TSFLAG_SME_MATRIX_TYPE(0x6),
 };
 
+/// Memory operation addressing mode classification for load/store instructions.
+/// Used to identify operand layout for memory operations.
+enum MemOpAddrModeType {
+  MemOpAddrModeMask       = TSFLAG_MEM_OP_ADDR_MODE(0xf),
+  MemOpAddrModeNone       = TSFLAG_MEM_OP_ADDR_MODE(0x0),  // Not a memory op
+  MemOpAddrModeIndexed    = TSFLAG_MEM_OP_ADDR_MODE(0x1),  // [Xn, #imm]
+  MemOpAddrModeUnscaled   = TSFLAG_MEM_OP_ADDR_MODE(0x2),  // [Xn, #simm]
+  MemOpAddrModePreIdx     = TSFLAG_MEM_OP_ADDR_MODE(0x3),  // [Xn, #imm]!
+  MemOpAddrModePostIdx    = TSFLAG_MEM_OP_ADDR_MODE(0x4),  // [Xn], #imm
+  MemOpAddrModeRegOff     = TSFLAG_MEM_OP_ADDR_MODE(0x5),  // [Xn, Xm, ext]
+  MemOpAddrModeLiteral    = TSFLAG_MEM_OP_ADDR_MODE(0x6),  // PC-relative
+  MemOpAddrModeNoIdx      = TSFLAG_MEM_OP_ADDR_MODE(0x7),  // [Xn] (no offset)
+  MemOpAddrModePair       = TSFLAG_MEM_OP_ADDR_MODE(0x8),  // LDP/STP [Xn, #imm]
+  MemOpAddrModePairPre    = TSFLAG_MEM_OP_ADDR_MODE(0x9),  // LDP/STP [Xn, #imm]!
+  MemOpAddrModePairPost   = TSFLAG_MEM_OP_ADDR_MODE(0xa),  // LDP/STP [Xn], #imm
+  MemOpAddrModePostIdxReg = TSFLAG_MEM_OP_ADDR_MODE(0xb),  // [Xn], Xm (SIMD)
+};
+
+/// Get the base register operand index for a memory instruction.
+/// Returns -1 if not a memory instruction or base cannot be determined.
+inline int getMemOpBaseRegIdx(uint64_t TSFlags) {
+  switch (TSFlags & MemOpAddrModeMask) {
+  case MemOpAddrModeIndexed:
+  case MemOpAddrModeUnscaled:
+  case MemOpAddrModeRegOff:
+  case MemOpAddrModeNoIdx:
+  case MemOpAddrModePostIdxReg:
+    return 1;  // Rt, [Rn, ...]
+  case MemOpAddrModePreIdx:
+  case MemOpAddrModePostIdx:
+    return 2;  // wback, Rt, [Rn, ...]
+  case MemOpAddrModePair:
+    return 2;  // Rt, Rt2, [Rn, ...]
+  case MemOpAddrModePairPre:
+  case MemOpAddrModePairPost:
+    return 3;  // wback, Rt, Rt2, [Rn, ...]
+  case MemOpAddrModeLiteral:
+  case MemOpAddrModeNone:
+  default:
+    return -1;
+  }
+}
+
+/// Get the offset operand index for a memory instruction.
+/// Returns -1 if there is no offset operand.
+inline int getMemOpOffsetIdx(uint64_t TSFlags) {
+  switch (TSFlags & MemOpAddrModeMask) {
+  case MemOpAddrModeIndexed:
+  case MemOpAddrModeUnscaled:
+    return 2;  // Rt, Rn, #imm
+  case MemOpAddrModeRegOff:
+    return 2;  // Rt, Rn, Rm, extend
+  case MemOpAddrModePreIdx:
+  case MemOpAddrModePostIdx:
+    return 3;  // wback, Rt, Rn, #imm
+  case MemOpAddrModePair:
+    return 3;  // Rt, Rt2, Rn, #imm
+  case MemOpAddrModePairPre:
+  case MemOpAddrModePairPost:
+    return 4;  // wback, Rt, Rt2, Rn, #imm
+  case MemOpAddrModePostIdxReg:
+    return 2;  // wback, Vt, Rn, Xm (SIMD)
+  case MemOpAddrModeNoIdx:
+  case MemOpAddrModeLiteral:
+  case MemOpAddrModeNone:
+  default:
+    return -1;
+  }
+}
+
+/// Returns true if the offset operand is a register (vs immediate).
+inline bool isMemOpOffsetReg(uint64_t TSFlags) {
+  switch (TSFlags & MemOpAddrModeMask) {
+  case MemOpAddrModeRegOff:
+  case MemOpAddrModePostIdxReg:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Returns true if this is a memory operation with pre/post-index writeback.
+inline bool isMemOpPrePostIdx(uint64_t TSFlags) {
+  switch (TSFlags & MemOpAddrModeMask) {
+  case MemOpAddrModePreIdx:
+  case MemOpAddrModePostIdx:
+  case MemOpAddrModePairPre:
+  case MemOpAddrModePairPost:
+  case MemOpAddrModePostIdxReg:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Returns true if this is a load/store pair instruction.
+inline bool isMemOpPair(uint64_t TSFlags) {
+  switch (TSFlags & MemOpAddrModeMask) {
+  case MemOpAddrModePair:
+  case MemOpAddrModePairPre:
+  case MemOpAddrModePairPost:
+    return true;
+  default:
+    return false;
+  }
+}
+
 #undef TSFLAG_ELEMENT_SIZE_TYPE
 #undef TSFLAG_DESTRUCTIVE_INST_TYPE
 #undef TSFLAG_FALSE_LANE_TYPE
 #undef TSFLAG_INSTR_FLAGS
 #undef TSFLAG_SME_MATRIX_TYPE
+#undef TSFLAG_MEM_OP_ADDR_MODE
 
 int getSVEPseudoMap(uint16_t Opcode);
 int getSVERevInstr(uint16_t Opcode);

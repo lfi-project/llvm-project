@@ -75,6 +75,24 @@ def SMEMatrixTileD : SMEMatrixTypeEnum<4>;
 def SMEMatrixTileQ : SMEMatrixTypeEnum<5>;
 def SMEMatrixArray : SMEMatrixTypeEnum<6>;
 
+// Memory operation addressing mode classification for load/store instructions.
+// Used to identify operand layout for memory operations.
+class MemOpAddrModeEnum<bits<4> val> {
+  bits<4> Value = val;
+}
+def MemOpAddrModeNone       : MemOpAddrModeEnum<0>;  // Not a memory operation
+def MemOpAddrModeIndexed    : MemOpAddrModeEnum<1>;  // [Xn, #imm]
+def MemOpAddrModeUnscaled   : MemOpAddrModeEnum<2>;  // [Xn, #simm] (unscaled)
+def MemOpAddrModePreIdx     : MemOpAddrModeEnum<3>;  // [Xn, #imm]!
+def MemOpAddrModePostIdx    : MemOpAddrModeEnum<4>;  // [Xn], #imm
+def MemOpAddrModeRegOff     : MemOpAddrModeEnum<5>;  // [Xn, Xm, extend]
+def MemOpAddrModeLiteral    : MemOpAddrModeEnum<6>;  // PC-relative literal
+def MemOpAddrModeNoIdx      : MemOpAddrModeEnum<7>;  // [Xn] (no offset)
+def MemOpAddrModePair       : MemOpAddrModeEnum<8>;  // LDP/STP [Xn, #imm]
+def MemOpAddrModePairPre    : MemOpAddrModeEnum<9>;  // LDP/STP [Xn, #imm]!
+def MemOpAddrModePairPost   : MemOpAddrModeEnum<10>; // LDP/STP [Xn], #imm
+def MemOpAddrModePostIdxReg : MemOpAddrModeEnum<11>; // [Xn], Xm (SIMD post-index)
+
 // AArch64 Instruction Format
 class AArch64Inst<Format f, string cstr> : Instruction {
   field bits<32> Inst; // Instruction encoding.
@@ -97,7 +115,9 @@ class AArch64Inst<Format f, string cstr> : Instruction {
   DestructiveInstTypeEnum DestructiveInstType = NotDestructive;
   SMEMatrixTypeEnum SMEMatrixType = SMEMatrixNone;
   ElementSizeEnum ElementSize = ElementSizeNone;
+  MemOpAddrModeEnum MemOpAddrMode = MemOpAddrModeNone;
 
+  let TSFlags{17-14} = MemOpAddrMode.Value;
   let TSFlags{13-11} = SMEMatrixType.Value;
   let TSFlags{10}    = isPTestLike;
   let TSFlags{9}     = isWhile;
@@ -3719,6 +3739,7 @@ class BaseLoadStoreUI<bits<2> sz, bit V, bits<2> opc, dag oops, dag iops,
   let Inst{4-0}   = Rt;
 
   let DecoderMethod = "DecodeUnsignedLdStInstruction";
+  let MemOpAddrMode = MemOpAddrModeIndexed;
 }
 
 multiclass LoadUI<bits<2> sz, bit V, bits<2> opc, DAGOperand regtype,
@@ -3805,6 +3826,7 @@ class LoadLiteral<bits<2> opc, bit V, RegisterOperand regtype, string asm, list<
   let Inst{25-24} = 0b00;
   let Inst{23-5}  = label;
   let Inst{4-0}   = Rt;
+  let MemOpAddrMode = MemOpAddrModeLiteral;
 }
 
 let mayLoad = 0, mayStore = 0, hasSideEffects = 1 in
@@ -3956,6 +3978,7 @@ class LoadStore8RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
   let Inst{11-10} = 0b10;
   let Inst{9-5}   = Rn;
   let Inst{4-0}   = Rt;
+  let MemOpAddrMode = MemOpAddrModeRegOff;
 }
 
 class ROInstAlias<string asm, DAGOperand regtype, Instruction INST,
@@ -4035,6 +4058,7 @@ class LoadStore16RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
   let Inst{11-10} = 0b10;
   let Inst{9-5}   = Rn;
   let Inst{4-0}   = Rt;
+  let MemOpAddrMode = MemOpAddrModeRegOff;
 }
 
 multiclass Load16RO<bits<2> sz, bit V, bits<2> opc, DAGOperand regtype,
@@ -4107,6 +4131,7 @@ class LoadStore32RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
   let Inst{11-10} = 0b10;
   let Inst{9-5}   = Rn;
   let Inst{4-0}   = Rt;
+  let MemOpAddrMode = MemOpAddrModeRegOff;
 }
 
 multiclass Load32RO<bits<2> sz, bit V, bits<2> opc, DAGOperand regtype,
@@ -4179,6 +4204,7 @@ class LoadStore64RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
   let Inst{11-10} = 0b10;
   let Inst{9-5}   = Rn;
   let Inst{4-0}   = Rt;
+  let MemOpAddrMode = MemOpAddrModeRegOff;
 }
 
 multiclass Load64RO<bits<2> sz, bit V, bits<2> opc, DAGOperand regtype,
@@ -4251,6 +4277,7 @@ class LoadStore128RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
   let Inst{11-10} = 0b10;
   let Inst{9-5}   = Rn;
   let Inst{4-0}   = Rt;
+  let MemOpAddrMode = MemOpAddrModeRegOff;
 }
 
 multiclass Load128RO<bits<2> sz, bit V, bits<2> opc, DAGOperand regtype,
@@ -4393,6 +4420,7 @@ class BaseLoadStoreUnscale<bits<2> sz, bit V, bits<2> opc, dag oops, dag iops,
   let Inst{4-0}   = Rt;
 
   let DecoderMethod = "DecodeSignedLdStInstruction";
+  let MemOpAddrMode = MemOpAddrModeUnscaled;
 }
 
 // Armv8.4 LDAPR & STLR with Immediate Offset instruction
@@ -4525,6 +4553,7 @@ class BaseLoadStorePreIdx<bits<2> sz, bit V, bits<2> opc, dag oops, dag iops,
   let Inst{4-0}   = Rt;
 
   let DecoderMethod = "DecodeSignedLdStInstruction";
+  let MemOpAddrMode = MemOpAddrModePreIdx;
 }
 
 let hasSideEffects = 0 in {
@@ -4571,6 +4600,7 @@ class BaseLoadStorePostIdx<bits<2> sz, bit V, bits<2> opc, dag oops, dag iops,
   let Inst{4-0}   = Rt;
 
   let DecoderMethod = "DecodeSignedLdStInstruction";
+  let MemOpAddrMode = MemOpAddrModePostIdx;
 }
 
 let hasSideEffects = 0 in {
@@ -4620,6 +4650,7 @@ class BaseLoadStorePairOffset<bits<2> opc, bit V, bit L, dag oops, dag iops,
   let Inst{4-0}   = Rt;
 
   let DecoderMethod = "DecodePairLdStInstruction";
+  let MemOpAddrMode = MemOpAddrModePair;
 }
 
 multiclass LoadPairOffset<bits<2> opc, bit V, RegisterOperand regtype,
@@ -4711,6 +4742,7 @@ class BaseLoadStorePairPreIdx<bits<2> opc, bit V, bit L, dag oops, dag iops,
   let Inst{4-0}   = Rt;
 
   let DecoderMethod = "DecodePairLdStInstruction";
+  let MemOpAddrMode = MemOpAddrModePairPre;
 }
 
 let hasSideEffects = 0 in {
@@ -4752,6 +4784,7 @@ class BaseLoadStorePairPostIdx<bits<2> opc, bit V, bit L, dag oops, dag iops,
   let Inst{4-0}   = Rt;
 
   let DecoderMethod = "DecodePairLdStInstruction";
+  let MemOpAddrMode = MemOpAddrModePairPost;
 }
 
 let hasSideEffects = 0 in {
@@ -4904,6 +4937,8 @@ class BaseLoadStoreExclusive<bits<2> sz, bit o2, bit L, bit o1, bit o0,
   let Inst{15}    = o0;
 
   let DecoderMethod = "DecodeExclusiveLdStInstruction";
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 // Neither Rs nor Rt2 operands.
@@ -4965,6 +5000,8 @@ class BaseLoadStoreExclusiveLSUI<bits<2> sz, bit L, bit o0,
   let Inst{22}    = L;
   let Inst{21}    = 0b0;
   let Inst{15}    = o0;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 
@@ -5025,6 +5062,8 @@ class BaseLoadUnprivilegedLSUI<bits<2> sz, dag oops, dag iops, string asm>
    let Inst{9-5} = Rn;
    let Inst{4-0} = Rt;
    let PostEncoderMethod = "fixLoadStoreExclusive<0,0>";
+
+   let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 multiclass LoadUnprivilegedLSUI<bits<2> sz, RegisterClass regtype, string asm> {
@@ -5051,6 +5090,8 @@ class BaseStoreUnprivilegedLSUI<bits<2> sz, dag oops, dag iops, string asm>
    let Inst{4-0} = Rt;
    let PostEncoderMethod = "fixLoadStoreExclusive<1,0>";
    let mayStore = 1;
+
+   let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 multiclass StoreUnprivilegedLSUI<bits<2> sz, RegisterClass regtype, string asm> {
@@ -10787,6 +10828,8 @@ class BaseSIMDLdSt<bit Q, bit L, bits<4> opcode, bits<2> size,
   let Inst{11-10} = size;
   let Inst{9-5} = Rn;
   let Inst{4-0} = Vt;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 class BaseSIMDLdStPost<bit Q, bit L, bits<4> opcode, bits<2> size,
@@ -10805,6 +10848,8 @@ class BaseSIMDLdStPost<bit Q, bit L, bits<4> opcode, bits<2> size,
   let Inst{11-10} = size;
   let Inst{9-5} = Rn;
   let Inst{4-0} = Vt;
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 
 // The immediate form of AdvSIMD post-indexed addressing is encoded with
@@ -11119,6 +11164,8 @@ class BaseSIMDLdR<bit Q, bit R, bits<3> opcode, bit S, bits<2> size, string asm,
   let Inst{20-16} = 0b00000;
   let Inst{12} = S;
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 let mayLoad = 1, mayStore = 0, hasSideEffects = 0 in
 class BaseSIMDLdRPost<bit Q, bit R, bits<3> opcode, bit S, bits<2> size,
@@ -11133,6 +11180,8 @@ class BaseSIMDLdRPost<bit Q, bit R, bits<3> opcode, bit S, bits<2> size,
   let Inst{20-16} = Xm;
   let Inst{12} = S;
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 
 multiclass SIMDLdrAliases<string BaseName, string asm, string layout, string Count,
@@ -11242,6 +11291,8 @@ class SIMDLdStSingleB<bit L, bit R, bits<3> opcode, string asm,
   let Inst{20-16} = 0b00000;
   let Inst{12} = idx{2};
   let Inst{11-10} = idx{1-0};
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 class SIMDLdStSingleBTied<bit L, bit R, bits<3> opcode, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11254,6 +11305,8 @@ class SIMDLdStSingleBTied<bit L, bit R, bits<3> opcode, string asm,
   let Inst{20-16} = 0b00000;
   let Inst{12} = idx{2};
   let Inst{11-10} = idx{1-0};
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 class SIMDLdStSingleBPost<bit L, bit R, bits<3> opcode, string asm,
                           dag oops, dag iops>
@@ -11267,6 +11320,8 @@ class SIMDLdStSingleBPost<bit L, bit R, bits<3> opcode, string asm,
   let Inst{20-16} = Xm;
   let Inst{12} = idx{2};
   let Inst{11-10} = idx{1-0};
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 class SIMDLdStSingleBTiedPost<bit L, bit R, bits<3> opcode, string asm,
                           dag oops, dag iops>
@@ -11280,6 +11335,8 @@ class SIMDLdStSingleBTiedPost<bit L, bit R, bits<3> opcode, string asm,
   let Inst{20-16} = Xm;
   let Inst{12} = idx{2};
   let Inst{11-10} = idx{1-0};
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 
 class SIMDLdStSingleH<bit L, bit R, bits<3> opcode, bit size, string asm,
@@ -11294,6 +11351,8 @@ class SIMDLdStSingleH<bit L, bit R, bits<3> opcode, bit size, string asm,
   let Inst{12} = idx{1};
   let Inst{11} = idx{0};
   let Inst{10} = size;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 class SIMDLdStSingleHTied<bit L, bit R, bits<3> opcode, bit size, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11307,6 +11366,8 @@ class SIMDLdStSingleHTied<bit L, bit R, bits<3> opcode, bit size, string asm,
   let Inst{12} = idx{1};
   let Inst{11} = idx{0};
   let Inst{10} = size;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 class SIMDLdStSingleHPost<bit L, bit R, bits<3> opcode, bit size, string asm,
@@ -11322,6 +11383,8 @@ class SIMDLdStSingleHPost<bit L, bit R, bits<3> opcode, bit size, string asm,
   let Inst{12} = idx{1};
   let Inst{11} = idx{0};
   let Inst{10} = size;
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 class SIMDLdStSingleHTiedPost<bit L, bit R, bits<3> opcode, bit size, string asm,
                           dag oops, dag iops>
@@ -11336,6 +11399,8 @@ class SIMDLdStSingleHTiedPost<bit L, bit R, bits<3> opcode, bit size, string asm
   let Inst{12} = idx{1};
   let Inst{11} = idx{0};
   let Inst{10} = size;
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 class SIMDLdStSingleS<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11348,6 +11413,8 @@ class SIMDLdStSingleS<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
   let Inst{20-16} = 0b00000;
   let Inst{12} = idx{0};
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 class SIMDLdStSingleSTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11360,6 +11427,8 @@ class SIMDLdStSingleSTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm
   let Inst{20-16} = 0b00000;
   let Inst{12} = idx{0};
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 class SIMDLdStSingleSPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>
@@ -11373,6 +11442,8 @@ class SIMDLdStSingleSPost<bit L, bit R, bits<3> opcode, bits<2> size,
   let Inst{20-16} = Xm;
   let Inst{12} = idx{0};
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 class SIMDLdStSingleSTiedPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>
@@ -11386,6 +11457,8 @@ class SIMDLdStSingleSTiedPost<bit L, bit R, bits<3> opcode, bits<2> size,
   let Inst{20-16} = Xm;
   let Inst{12} = idx{0};
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 class SIMDLdStSingleD<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11398,6 +11471,8 @@ class SIMDLdStSingleD<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
   let Inst{20-16} = 0b00000;
   let Inst{12} = 0;
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 class SIMDLdStSingleDTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11410,6 +11485,8 @@ class SIMDLdStSingleDTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm
   let Inst{20-16} = 0b00000;
   let Inst{12} = 0;
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 class SIMDLdStSingleDPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>
@@ -11423,6 +11500,8 @@ class SIMDLdStSingleDPost<bit L, bit R, bits<3> opcode, bits<2> size,
   let Inst{20-16} = Xm;
   let Inst{12} = 0;
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 class SIMDLdStSingleDTiedPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>
@@ -11436,6 +11515,8 @@ class SIMDLdStSingleDTiedPost<bit L, bit R, bits<3> opcode, bits<2> size,
   let Inst{20-16} = Xm;
   let Inst{12} = 0;
   let Inst{11-10} = size;
+
+  let MemOpAddrMode = MemOpAddrModePostIdxReg;
 }
 
 let mayLoad = 1, mayStore = 0, hasSideEffects = 0 in
@@ -12201,6 +12282,8 @@ class BaseCASEncoding<dag oops, dag iops, string asm, string operands,
   let Inst{9-5} = Rn;
   let Inst{4-0} = Rt;
   let Predicates = [HasLSE];
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 class BaseCAS<string order, string size, RegisterClass RC>
@@ -12254,6 +12337,8 @@ class BaseCASTEncoding<dag oops, dag iops, string asm,
   let Unpredictable{14-10} = 0b11111;
   let Inst{9-5} = Rn;
   let Inst{4-0} = Rt;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 multiclass CompareAndSwapUnprivileged<bits<2> Sz, bit L, bit o0, string order> {
@@ -12299,6 +12384,8 @@ class BaseSWP<string order, string size, RegisterClass RC>
   let Inst{9-5} = Rn;
   let Inst{4-0} = Rt;
   let Predicates = [HasLSE];
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 multiclass Swap<bits<1> Acq, bits<1> Rel, string order> {
@@ -12330,6 +12417,8 @@ class BaseSWPLSUI<string order, RegisterClass RC>
    let Inst{11-10} = 0b01;
    let Inst{9-5} = Rn;
    let Inst{4-0} = Rt;
+
+   let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 multiclass SwapLSUI<bits<1> Acq, bits<1> Rel, string order> {
@@ -12361,6 +12450,8 @@ class BaseLDOPregister<string op, string order, string size, RegisterClass RC>
   let Inst{9-5} = Rn;
   let Inst{4-0} = Rt;
   let Predicates = [HasLSE];
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 multiclass LDOPregister<bits<3> opc, string op, bits<1> Acq, bits<1> Rel,
@@ -12397,6 +12488,8 @@ class BaseLDOPregisterLSUI<string op, string order, RegisterClass RC>
   let Inst{11-10} = 0b01;
   let Inst{9-5} = Rn;
   let Inst{4-0} = Rt;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 
@@ -13324,6 +13417,8 @@ class BaseAtomicFPLoad<RegisterClass regtype, bits<2> sz, bits<2> AR,
   let Inst{11-10} = 0b00;
   let Inst{9-5}   = Rn;
   let Inst{4-0}   = Rt;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 multiclass AtomicFPLoad<bits<2> AR, bits<3> op0, string asm> {
@@ -13353,6 +13448,8 @@ class BaseAtomicFPStore<RegisterClass regtype, bits<2> sz, bit R,
   let Inst{11-10} = 0b00;
   let Inst{9-5}   = Rn;
   let Inst{4-0}   = 0b11111;
+
+  let MemOpAddrMode = MemOpAddrModeNoIdx;
 }
 
 multiclass AtomicFPStore<bit R, bits<3> op0, string asm> {
