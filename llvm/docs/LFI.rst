@@ -240,30 +240,81 @@ before moving it back into ``sp`` with a safe ``add``.
 Link register modification
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-When the link register is modified, we write the modified value to a
-temporary, before loading it back into ``x30`` with a safe ``add``.
+When the link register is modified, the guard is deferred until the next
+control flow instruction. This approach maintains compatibility with Pointer
+Authentication Code (PAC) instructions by keeping signed pointers intact until
+they are needed for control flow. The guard uses ``x30`` as both the source and
+destination (``add x30, x27, w30, uxtw``).
 
-+-----------------------+----------------------------+
-|       Original        |         Rewritten          |
-+-----------------------+----------------------------+
-| .. code-block::       | .. code-block::            |
-|                       |                            |
-|    ldr x30, [...]     |    ldr x26, [...]          |
-|                       |    add x30, x27, w26, uxtw |
-|                       |                            |
-+-----------------------+----------------------------+
-| .. code-block::       | .. code-block::            |
-|                       |                            |
-|    ldp xN, x30, [...] |    ldp xN, x26, [...]      |
-|                       |    add x30, x27, w26, uxtw |
-|                       |                            |
-+-----------------------+----------------------------+
-| .. code-block::       | .. code-block::            |
-|                       |                            |
-|    ldp x30, xN, [...] |    ldp x26, xN, [...]      |
-|                       |    add x30, x27, w26, uxtw |
-|                       |                            |
-+-----------------------+----------------------------+
++---------------------------+-------------------------------+
+|         Original          |           Rewritten           |
++---------------------------+-------------------------------+
+| .. code-block::           | .. code-block::               |
+|                           |                               |
+|    ldr x30, [...]         |    ldr x30, [...]             |
+|    ret                    |    add x30, x27, w30, uxtw    |
+|                           |    ret                        |
+|                           |                               |
++---------------------------+-------------------------------+
+| .. code-block::           | .. code-block::               |
+|                           |                               |
+|    ldp xN, x30, [...]     |    ldp xN, x30, [...]         |
+|    ret                    |    add x30, x27, w30, uxtw    |
+|                           |    ret                        |
+|                           |                               |
++---------------------------+-------------------------------+
+
+Pointer Authentication Code (PAC) support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+LFI is designed to be compatible with ARM Pointer Authentication Code (PAC)
+instructions. PAC signs and authenticates pointers (typically the return
+address in ``x30``) to protect against control-flow hijacking attacks.
+
+**PACIASP** (sign return address) passes through unchanged. It signs the
+current value of ``x30`` using the stack pointer as a modifier, which does not
+affect LFI's security guarantees.
+
+**AUTIASP** (authenticate return address) requires special handling. After
+authentication, if the signature was invalid, ``x30`` contains a "poisoned"
+pointer that will fault when used. On processors without FEAT_FPAC (Faulting
+PAC), authentication failure does not immediately fault—the poisoned pointer
+only faults when dereferenced. To ensure immediate detection of authentication
+failures, LFI emits a validation load after ``autiasp``:
+
++-------------------+------------------------+
+|     Original      |       Rewritten        |
++-------------------+------------------------+
+| .. code-block::   | .. code-block::        |
+|                   |                        |
+|    paciasp        |    paciasp             |
+|                   |                        |
++-------------------+------------------------+
+| .. code-block::   | .. code-block::        |
+|                   |                        |
+|    autiasp        |    autiasp             |
+|                   |    ldr xzr, [x30]      |
+|                   |                        |
++-------------------+------------------------+
+
+On processors with **FEAT_FPAC** support (e.g., Apple M2 and later), PAC
+authentication automatically faults on failure, so the validation load is
+omitted:
+
++-------------------+------------------------+
+|     Original      |  Rewritten (FEAT_FPAC) |
++-------------------+------------------------+
+| .. code-block::   | .. code-block::        |
+|                   |                        |
+|    autiasp        |    autiasp             |
+|                   |                        |
++-------------------+------------------------+
+
+Note that the deferred LR guard approach is essential for PAC compatibility.
+If the guard were applied immediately after loading a signed return address,
+it would corrupt the PAC signature, causing subsequent ``autiasp`` to fail.
+By deferring the guard until control flow, signed pointers remain intact
+through the authentication process.
 
 System instructions
 ~~~~~~~~~~~~~~~~~~~

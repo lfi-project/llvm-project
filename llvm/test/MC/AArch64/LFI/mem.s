@@ -186,3 +186,211 @@ prfm pstl1strm, [x10]
 prfm pstl1strm, [x10, x11]
 // CHECK:      add x26, x10, x11
 // CHECK-NEXT: prfm pstl1strm, [x27, w26, uxtw]
+// Different data sizes - byte, half, word, double
+// Byte loads/stores
+ldrb w0, [x1]
+// CHECK: ldrb w0, [x27, w1, uxtw]
+
+ldrb w0, [x1, #1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldrb w0, [x28, #1]
+
+strb w0, [x1]
+// CHECK: strb w0, [x27, w1, uxtw]
+
+ldrsb w0, [x1]
+// CHECK: ldrsb w0, [x27, w1, uxtw]
+
+ldrsb x0, [x1]
+// CHECK: ldrsb x0, [x27, w1, uxtw]
+
+// Halfword loads/stores
+ldrh w0, [x1]
+// CHECK: ldrh w0, [x27, w1, uxtw]
+
+ldrh w0, [x1, #2]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldrh w0, [x28, #2]
+
+strh w0, [x1]
+// CHECK: strh w0, [x27, w1, uxtw]
+
+ldrsh w0, [x1]
+// CHECK: ldrsh w0, [x27, w1, uxtw]
+
+ldrsh x0, [x1]
+// CHECK: ldrsh x0, [x27, w1, uxtw]
+
+// Word loads/stores
+ldr w0, [x1]
+// CHECK: ldr w0, [x27, w1, uxtw]
+
+ldr w0, [x1, #4]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldr w0, [x28, #4]
+
+str w0, [x1]
+// CHECK: str w0, [x27, w1, uxtw]
+
+ldrsw x0, [x1]
+// CHECK: ldrsw x0, [x27, w1, uxtw]
+
+// 32-bit pairs
+ldp w0, w1, [x2]
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: ldp w0, w1, [x28]
+
+stp w0, w1, [x2]
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: stp w0, w1, [x28]
+// Unscaled offset loads/stores
+ldurb w0, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldurb w0, [x28]
+
+ldurb w0, [x1, #1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldurb w0, [x28, #1]
+
+ldursb w0, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldursb w0, [x28]
+
+ldurh w0, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldurh w0, [x28]
+
+ldursh w0, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldursh w0, [x28]
+
+ldur w0, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldur w0, [x28]
+
+ldursw x0, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: ldursw x0, [x28]
+
+sturb w0, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: sturb w0, [x28]
+
+sturh w0, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: sturh w0, [x28]
+
+stur w0, [x1]
+// CHECK:      add x28, x27, w1, uxtw
+// CHECK-NEXT: stur w0, [x28]
+// Pre/post-index with different sizes
+// Byte pre/post-index
+ldrb w0, [x1, #1]!
+// CHECK:      add x1, x1, #1
+// CHECK-NEXT: ldrb w0, [x27, w1, uxtw]
+
+ldrb w0, [x1], #1
+// CHECK:      ldrb w0, [x27, w1, uxtw]
+// CHECK-NEXT: add x1, x1, #1
+
+strb w0, [x1, #1]!
+// CHECK:      add x1, x1, #1
+// CHECK-NEXT: strb w0, [x27, w1, uxtw]
+
+strb w0, [x1], #1
+// CHECK:      strb w0, [x27, w1, uxtw]
+// CHECK-NEXT: add x1, x1, #1
+
+// Halfword pre/post-index
+ldrh w0, [x1, #2]!
+// CHECK:      add x1, x1, #2
+// CHECK-NEXT: ldrh w0, [x27, w1, uxtw]
+
+ldrh w0, [x1], #2
+// CHECK:      ldrh w0, [x27, w1, uxtw]
+// CHECK-NEXT: add x1, x1, #2
+
+// Word pre/post-index
+ldr w0, [x1, #4]!
+// CHECK:      add x1, x1, #4
+// CHECK-NEXT: ldr w0, [x27, w1, uxtw]
+
+ldr w0, [x1], #4
+// CHECK:      ldr w0, [x27, w1, uxtw]
+// CHECK-NEXT: add x1, x1, #4
+// Register offset with different sizes
+ldrb w0, [x1, x2]
+// CHECK:      add x26, x1, x2
+// CHECK-NEXT: ldrb w0, [x27, w26, uxtw]
+
+ldrh w0, [x1, x2]
+// CHECK:      add x26, x1, x2
+// CHECK-NEXT: ldrh w0, [x27, w26, uxtw]
+
+ldrh w0, [x1, x2, lsl #1]
+// CHECK:      add x26, x1, x2, lsl #1
+// CHECK-NEXT: ldrh w0, [x27, w26, uxtw]
+
+ldr w0, [x1, x2]
+// CHECK:      add x26, x1, x2
+// CHECK-NEXT: ldr w0, [x27, w26, uxtw]
+
+ldr w0, [x1, x2, lsl #2]
+// CHECK:      add x26, x1, x2, lsl #2
+// CHECK-NEXT: ldr w0, [x27, w26, uxtw]
+
+strb w0, [x1, x2]
+// CHECK:      add x26, x1, x2
+// CHECK-NEXT: strb w0, [x27, w26, uxtw]
+
+strh w0, [x1, x2]
+// CHECK:      add x26, x1, x2
+// CHECK-NEXT: strh w0, [x27, w26, uxtw]
+
+str w0, [x1, x2]
+// CHECK:      add x26, x1, x2
+// CHECK-NEXT: str w0, [x27, w26, uxtw]
+
+str x0, [x1, x2]
+// CHECK:      add x26, x1, x2
+// CHECK-NEXT: str x0, [x27, w26, uxtw]
+// Sign/zero extension variants for register offset
+ldrb w0, [x1, w2, uxtw]
+// CHECK:      add x26, x1, w2, uxtw
+// CHECK-NEXT: ldrb w0, [x27, w26, uxtw]
+
+ldrb w0, [x1, w2, sxtw]
+// CHECK:      add x26, x1, w2, sxtw
+// CHECK-NEXT: ldrb w0, [x27, w26, uxtw]
+
+ldrh w0, [x1, w2, uxtw]
+// CHECK:      add x26, x1, w2, uxtw
+// CHECK-NEXT: ldrh w0, [x27, w26, uxtw]
+
+ldrh w0, [x1, w2, uxtw #1]
+// CHECK:      add x26, x1, w2, uxtw #1
+// CHECK-NEXT: ldrh w0, [x27, w26, uxtw]
+
+ldr w0, [x1, w2, sxtw #2]
+// CHECK:      add x26, x1, w2, sxtw #2
+// CHECK-NEXT: ldr w0, [x27, w26, uxtw]
+// 32-bit pair pre/post-index
+ldp w0, w1, [x2], #8
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: ldp w0, w1, [x28]
+// CHECK-NEXT: add x2, x2, #8
+
+ldp w0, w1, [x2, #8]!
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: ldp w0, w1, [x28, #8]
+// CHECK-NEXT: add x2, x2, #8
+
+stp w0, w1, [x2], #8
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: stp w0, w1, [x28]
+// CHECK-NEXT: add x2, x2, #8
+
+stp w0, w1, [x2, #8]!
+// CHECK:      add x28, x27, w2, uxtw
+// CHECK-NEXT: stp w0, w1, [x28, #8]
+// CHECK-NEXT: add x2, x2, #8

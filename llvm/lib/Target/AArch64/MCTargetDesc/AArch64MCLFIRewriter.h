@@ -56,6 +56,11 @@ private:
   /// Recursion guard to prevent infinite loops when emitting instructions.
   bool Guard = false;
 
+  /// Deferred LR guard - emitted before the next control flow instruction.
+  /// This allows PAC-compatible code to work correctly by guarding x30 into
+  /// x30 only when needed for control flow.
+  bool DeferredLRGuard = false;
+
   //===--------------------------------------------------------------------===//
   // Instruction classification
   //===--------------------------------------------------------------------===//
@@ -117,6 +122,10 @@ private:
                                 const MCSubtargetInfo &STI);
   void rewriteLRModification(const MCInst &Inst, MCStreamer &Out,
                              const MCSubtargetInfo &STI);
+
+  // PAC (Pointer Authentication Code) instructions
+  void rewriteAutiasp(const MCInst &Inst, MCStreamer &Out,
+                      const MCSubtargetInfo &STI);
 
   // System instructions
   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,

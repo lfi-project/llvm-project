@@ -11340,7 +11340,7 @@ class SIMDLdStSingleB<bit L, bit R, bits<3> opcode, string asm,
   let Inst{11-10} = idx{1-0};
 
   let MemOpAddrMode = MemOpAddrModeNoIdx;
-  let MemOpBaseIdx = 1;  // Vt$idx, [Rn]
+  let MemOpBaseIdx = 2;  // Vt, idx, [Rn]
 }
 class SIMDLdStSingleBTied<bit L, bit R, bits<3> opcode, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11371,8 +11371,8 @@ class SIMDLdStSingleBPost<bit L, bit R, bits<3> opcode, string asm,
   let Inst{11-10} = idx{1-0};
 
   let MemOpAddrMode = MemOpAddrModePostIdxReg;
-  let MemOpBaseIdx = 2;  // wback, Vt$idx, [Rn], Xm
-  let MemOpOffsetIdx = 3;
+  let MemOpBaseIdx = 3;  // wback, Vt, idx, [Rn], Xm
+  let MemOpOffsetIdx = 4;
 }
 class SIMDLdStSingleBTiedPost<bit L, bit R, bits<3> opcode, string asm,
                           dag oops, dag iops>
@@ -11406,7 +11406,7 @@ class SIMDLdStSingleH<bit L, bit R, bits<3> opcode, bit size, string asm,
   let Inst{10} = size;
 
   let MemOpAddrMode = MemOpAddrModeNoIdx;
-  let MemOpBaseIdx = 1;  // Vt$idx, [Rn]
+  let MemOpBaseIdx = 2;  // Vt, idx, [Rn]
 }
 class SIMDLdStSingleHTied<bit L, bit R, bits<3> opcode, bit size, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11440,8 +11440,8 @@ class SIMDLdStSingleHPost<bit L, bit R, bits<3> opcode, bit size, string asm,
   let Inst{10} = size;
 
   let MemOpAddrMode = MemOpAddrModePostIdxReg;
-  let MemOpBaseIdx = 2;  // wback, Vt$idx, [Rn], Xm
-  let MemOpOffsetIdx = 3;
+  let MemOpBaseIdx = 3;  // wback, Vt, idx, [Rn], Xm
+  let MemOpOffsetIdx = 4;
 }
 class SIMDLdStSingleHTiedPost<bit L, bit R, bits<3> opcode, bit size, string asm,
                           dag oops, dag iops>
@@ -11474,7 +11474,7 @@ class SIMDLdStSingleS<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
   let Inst{11-10} = size;
 
   let MemOpAddrMode = MemOpAddrModeNoIdx;
-  let MemOpBaseIdx = 1;  // Vt$idx, [Rn]
+  let MemOpBaseIdx = 2;  // Vt, idx, [Rn]
 }
 class SIMDLdStSingleSTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11505,8 +11505,8 @@ class SIMDLdStSingleSPost<bit L, bit R, bits<3> opcode, bits<2> size,
   let Inst{11-10} = size;
 
   let MemOpAddrMode = MemOpAddrModePostIdxReg;
-  let MemOpBaseIdx = 2;  // wback, Vt$idx, [Rn], Xm
-  let MemOpOffsetIdx = 3;
+  let MemOpBaseIdx = 3;  // wback, Vt, idx, [Rn], Xm
+  let MemOpOffsetIdx = 4;
 }
 class SIMDLdStSingleSTiedPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>
@@ -11538,7 +11538,7 @@ class SIMDLdStSingleD<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
   let Inst{11-10} = size;
 
   let MemOpAddrMode = MemOpAddrModeNoIdx;
-  let MemOpBaseIdx = 1;  // Vt$idx, [Rn]
+  let MemOpBaseIdx = 2;  // Vt, idx, [Rn]
 }
 class SIMDLdStSingleDTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
@@ -11569,8 +11569,8 @@ class SIMDLdStSingleDPost<bit L, bit R, bits<3> opcode, bits<2> size,
   let Inst{11-10} = size;
 
   let MemOpAddrMode = MemOpAddrModePostIdxReg;
-  let MemOpBaseIdx = 2;  // wback, Vt$idx, [Rn], Xm
-  let MemOpOffsetIdx = 3;
+  let MemOpBaseIdx = 3;  // wback, Vt, idx, [Rn], Xm
+  let MemOpOffsetIdx = 4;
 }
 class SIMDLdStSingleDTiedPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>

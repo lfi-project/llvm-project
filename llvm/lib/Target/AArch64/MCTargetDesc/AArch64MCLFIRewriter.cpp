@@ -127,8 +127,9 @@ static bool isAUTIASP(const MCInst &Inst) {
 }
 
 bool AArch64::AArch64MCLFIRewriter::mayModifyLR(const MCInst &Inst) const {
-  // PAC instructions don't affect control flow safety.
-  if (isPACIASP(Inst) || isAUTIASP(Inst))
+  // PACIASP signs LR but doesn't affect control flow safety.
+  // AUTIASP is handled specially (needs validation load).
+  if (isPACIASP(Inst))
     return false;
   return mayModifyRegister(Inst, AArch64::LR);
 }
@@ -266,8 +267,31 @@ void AArch64::AArch64MCLFIRewriter::emitMemRoW(unsigned Opcode,
 // Control flow rewriting
 //===----------------------------------------------------------------------===//
 
+static bool isAuthenticatedBranch(unsigned Opcode) {
+  switch (Opcode) {
+  case AArch64::BRAA:
+  case AArch64::BRAAZ:
+  case AArch64::BRAB:
+  case AArch64::BRABZ:
+  case AArch64::BLRAA:
+  case AArch64::BLRAAZ:
+  case AArch64::BLRAB:
+  case AArch64::BLRABZ:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void AArch64::AArch64MCLFIRewriter::rewriteIndirectBranch(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  // Authenticated branches (BRAA/BRAB/BLRAA/BLRAB) are not supported.
+  if (isAuthenticatedBranch(Inst.getOpcode())) {
+    error(Inst, "authenticated branches (BRAA/BRAB/BLRAA/BLRAB) are not "
+                "supported by LFI");
+    return;
+  }
+
   assert(Inst.getOperand(0).isReg());
   MCRegister BranchReg = Inst.getOperand(0).getReg();
 
@@ -288,6 +312,14 @@ void AArch64::AArch64MCLFIRewriter::rewriteCall(const MCInst &Inst,
 void AArch64::AArch64MCLFIRewriter::rewriteReturn(const MCInst &Inst,
                                                    MCStreamer &Out,
                                                    const MCSubtargetInfo &STI) {
+  // Authenticated returns (RETAA/RETAB/ERETAA/ERETAB) are not supported.
+  // They have no operands and combine return with PAC authentication.
+  if (Inst.getNumOperands() == 0) {
+    error(Inst, "authenticated returns (RETAA/RETAB/ERETAA/ERETAB) are not "
+                "supported by LFI");
+    return;
+  }
+
   assert(Inst.getOperand(0).isReg());
   // RET through LR is safe since LR is always within sandbox.
   if (Inst.getOperand(0).getReg() != AArch64::LR)
@@ -654,15 +686,37 @@ void AArch64::AArch64MCLFIRewriter::rewriteStackModification(
 
 void AArch64::AArch64MCLFIRewriter::rewriteLRModification(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  // Replace LR with scratch, perform operation, then sandbox LR.
-  MCInst NewInst = replaceReg(Inst, LFIScratchReg, AArch64::LR);
-
-  if (mayLoad(NewInst) || mayStore(NewInst))
-    rewriteLoadStore(NewInst, Out, STI);
+  // Emit the instruction with memory sandboxing if needed.
+  if (mayLoad(Inst) || mayStore(Inst))
+    rewriteLoadStore(Inst, Out, STI);
   else
-    emitInst(NewInst, Out, STI);
+    emitInst(Inst, Out, STI);
 
-  emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
+  // Defer the LR guard until the next control flow instruction.
+  // This allows PAC-compatible code to work correctly by guarding x30 into
+  // x30 only when needed.
+  DeferredLRGuard = true;
+}
+
+void AArch64::AArch64MCLFIRewriter::rewriteAutiasp(
+    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  // Emit the AUTIASP instruction.
+  emitInst(Inst, Out, STI);
+
+  // If FEAT_FPAC is supported, authentication failure automatically faults,
+  // so no explicit validation is needed.
+  if (hasFeature(AArch64::FeatureFPAC, STI))
+    return;
+
+  // Force immediate validation by loading from the authenticated pointer.
+  // If PAC authentication failed, x30 contains a poisoned pointer that will
+  // fault on this load.
+  MCInst ValidateLoad;
+  ValidateLoad.setOpcode(AArch64::LDRXui);
+  ValidateLoad.addOperand(MCOperand::createReg(AArch64::XZR));
+  ValidateLoad.addOperand(MCOperand::createReg(AArch64::LR));
+  ValidateLoad.addOperand(MCOperand::createImm(0));
+  emitInst(ValidateLoad, Out, STI);
 }
 
 //===----------------------------------------------------------------------===//
@@ -740,6 +794,19 @@ void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
 
   if (isTLSWrite(Inst))
     return rewriteTLSWrite(Inst, Out, STI);
+
+  // AUTIASP needs special handling - emit validation load after.
+  if (isAUTIASP(Inst))
+    return rewriteAutiasp(Inst, Out, STI);
+
+  // Emit deferred LR guard before control flow instructions.
+  if (DeferredLRGuard) {
+    if (isReturn(Inst) || isIndirectBranch(Inst) || isCall(Inst) ||
+        isBranch(Inst)) {
+      emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+      DeferredLRGuard = false;
+    }
+  }
 
   // Control flow.
   if (isReturn(Inst))
