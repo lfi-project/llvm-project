@@ -124,8 +124,16 @@ private:
                              const MCSubtargetInfo &STI);
 
   // PAC (Pointer Authentication Code) instructions
+  void emitValidationLoad(MCRegister Reg, MCStreamer &Out,
+                          const MCSubtargetInfo &STI);
   void rewriteAutiasp(const MCInst &Inst, MCStreamer &Out,
                       const MCSubtargetInfo &STI);
+  void rewriteAuthenticatedReturn(const MCInst &Inst, MCStreamer &Out,
+                                  const MCSubtargetInfo &STI);
+  void rewriteAuthenticatedBranch(const MCInst &Inst, MCStreamer &Out,
+                                  const MCSubtargetInfo &STI);
+  void rewriteAuthenticatedCall(const MCInst &Inst, MCStreamer &Out,
+                                const MCSubtargetInfo &STI);
 
   // System instructions
   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,

@@ -273,6 +273,14 @@ static bool isAuthenticatedBranch(unsigned Opcode) {
   case AArch64::BRAAZ:
   case AArch64::BRAB:
   case AArch64::BRABZ:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool isAuthenticatedCall(unsigned Opcode) {
+  switch (Opcode) {
   case AArch64::BLRAA:
   case AArch64::BLRAAZ:
   case AArch64::BLRAB:
@@ -283,15 +291,28 @@ static bool isAuthenticatedBranch(unsigned Opcode) {
   }
 }
 
+static bool isAuthenticatedReturn(unsigned Opcode) {
+  switch (Opcode) {
+  case AArch64::RETAA:
+  case AArch64::RETAB:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static bool isExceptionReturn(unsigned Opcode) {
+  switch (Opcode) {
+  case AArch64::ERETAA:
+  case AArch64::ERETAB:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void AArch64::AArch64MCLFIRewriter::rewriteIndirectBranch(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  // Authenticated branches (BRAA/BRAB/BLRAA/BLRAB) are not supported.
-  if (isAuthenticatedBranch(Inst.getOpcode())) {
-    error(Inst, "authenticated branches (BRAA/BRAB/BLRAA/BLRAB) are not "
-                "supported by LFI");
-    return;
-  }
-
   assert(Inst.getOperand(0).isReg());
   MCRegister BranchReg = Inst.getOperand(0).getReg();
 
@@ -312,15 +333,15 @@ void AArch64::AArch64MCLFIRewriter::rewriteCall(const MCInst &Inst,
 void AArch64::AArch64MCLFIRewriter::rewriteReturn(const MCInst &Inst,
                                                    MCStreamer &Out,
                                                    const MCSubtargetInfo &STI) {
-  // Authenticated returns (RETAA/RETAB/ERETAA/ERETAB) are not supported.
-  // They have no operands and combine return with PAC authentication.
-  if (Inst.getNumOperands() == 0) {
-    error(Inst, "authenticated returns (RETAA/RETAB/ERETAA/ERETAB) are not "
+  // Authenticated exception returns (ERETAA/ERETAB) are not supported.
+  if (isExceptionReturn(Inst.getOpcode())) {
+    error(Inst, "authenticated exception returns (ERETAA/ERETAB) are not "
                 "supported by LFI");
     return;
   }
 
-  assert(Inst.getOperand(0).isReg());
+  // Regular RET has an operand, handle it normally.
+  assert(Inst.getNumOperands() > 0 && Inst.getOperand(0).isReg());
   // RET through LR is safe since LR is always within sandbox.
   if (Inst.getOperand(0).getReg() != AArch64::LR)
     rewriteIndirectBranch(Inst, Out, STI);
@@ -698,6 +719,19 @@ void AArch64::AArch64MCLFIRewriter::rewriteLRModification(
   DeferredLRGuard = true;
 }
 
+void AArch64::AArch64MCLFIRewriter::emitValidationLoad(
+    MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  // Force immediate validation by loading from the authenticated pointer.
+  // If PAC authentication failed, the register contains a poisoned pointer
+  // that will fault on this load.
+  MCInst ValidateLoad;
+  ValidateLoad.setOpcode(AArch64::LDRXui);
+  ValidateLoad.addOperand(MCOperand::createReg(AArch64::XZR));
+  ValidateLoad.addOperand(MCOperand::createReg(Reg));
+  ValidateLoad.addOperand(MCOperand::createImm(0));
+  emitInst(ValidateLoad, Out, STI);
+}
+
 void AArch64::AArch64MCLFIRewriter::rewriteAutiasp(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
   // Emit the AUTIASP instruction.
@@ -708,15 +742,134 @@ void AArch64::AArch64MCLFIRewriter::rewriteAutiasp(
   if (hasFeature(AArch64::FeatureFPAC, STI))
     return;
 
-  // Force immediate validation by loading from the authenticated pointer.
-  // If PAC authentication failed, x30 contains a poisoned pointer that will
-  // fault on this load.
-  MCInst ValidateLoad;
-  ValidateLoad.setOpcode(AArch64::LDRXui);
-  ValidateLoad.addOperand(MCOperand::createReg(AArch64::XZR));
-  ValidateLoad.addOperand(MCOperand::createReg(AArch64::LR));
-  ValidateLoad.addOperand(MCOperand::createImm(0));
-  emitInst(ValidateLoad, Out, STI);
+  emitValidationLoad(AArch64::LR, Out, STI);
+}
+
+void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedReturn(
+    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  // RETAA/RETAB = AUTIASP/AUTIBSP + RET
+  // Expand to: AUTIASP/AUTIBSP, [validation load if no FPAC], guard LR, RET
+  unsigned Opcode = Inst.getOpcode();
+
+  // Emit the appropriate AUTxSP instruction.
+  MCInst Auth;
+  if (Opcode == AArch64::RETAA)
+    Auth.setOpcode(AArch64::AUTIASP);
+  else
+    Auth.setOpcode(AArch64::AUTIBSP);
+  emitInst(Auth, Out, STI);
+
+  // Emit validation load if FEAT_FPAC is not supported.
+  if (!hasFeature(AArch64::FeatureFPAC, STI))
+    emitValidationLoad(AArch64::LR, Out, STI);
+
+  // Guard LR and emit RET.
+  emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+
+  MCInst Ret;
+  Ret.setOpcode(AArch64::RET);
+  Ret.addOperand(MCOperand::createReg(AArch64::LR));
+  emitInst(Ret, Out, STI);
+}
+
+void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedBranch(
+    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  // BRAA Xn, Xm  = AUTIA Xn, Xm + BR Xn
+  // BRAAZ Xn     = AUTIZA Xn + BR Xn
+  // BRAB Xn, Xm  = AUTIB Xn, Xm + BR Xn
+  // BRABZ Xn     = AUTIZB Xn + BR Xn
+  unsigned Opcode = Inst.getOpcode();
+  MCRegister TargetReg = Inst.getOperand(0).getReg();
+
+  // Emit the appropriate authentication instruction.
+  // AUTIA/AUTIB: 3 operands - dst, src (tied to dst), modifier
+  // AUTIZA/AUTIZB: 2 operands - dst, src (tied to dst)
+  MCInst Auth;
+  switch (Opcode) {
+  case AArch64::BRAA:
+    Auth.setOpcode(AArch64::AUTIA);
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
+    Auth.addOperand(Inst.getOperand(1));              // modifier
+    break;
+  case AArch64::BRAAZ:
+    Auth.setOpcode(AArch64::AUTIZA);
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
+    break;
+  case AArch64::BRAB:
+    Auth.setOpcode(AArch64::AUTIB);
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
+    Auth.addOperand(Inst.getOperand(1));              // modifier
+    break;
+  case AArch64::BRABZ:
+    Auth.setOpcode(AArch64::AUTIZB);
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
+    break;
+  default:
+    llvm_unreachable("unexpected authenticated branch opcode");
+  }
+  emitInst(Auth, Out, STI);
+
+  // Emit validation load if FEAT_FPAC is not supported.
+  if (!hasFeature(AArch64::FeatureFPAC, STI))
+    emitValidationLoad(TargetReg, Out, STI);
+
+  // Guard the target and branch.
+  emitAddMask(LFIAddrReg, TargetReg, Out, STI);
+  emitBranch(AArch64::BR, LFIAddrReg, Out, STI);
+}
+
+void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedCall(
+    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  // BLRAA Xn, Xm  = AUTIA Xn, Xm + BLR Xn
+  // BLRAAZ Xn     = AUTIZA Xn + BLR Xn
+  // BLRAB Xn, Xm  = AUTIB Xn, Xm + BLR Xn
+  // BLRABZ Xn     = AUTIZB Xn + BLR Xn
+  unsigned Opcode = Inst.getOpcode();
+  MCRegister TargetReg = Inst.getOperand(0).getReg();
+
+  // Emit the appropriate authentication instruction.
+  // AUTIA/AUTIB: 3 operands - dst, src (tied to dst), modifier
+  // AUTIZA/AUTIZB: 2 operands - dst, src (tied to dst)
+  MCInst Auth;
+  switch (Opcode) {
+  case AArch64::BLRAA:
+    Auth.setOpcode(AArch64::AUTIA);
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
+    Auth.addOperand(Inst.getOperand(1));              // modifier
+    break;
+  case AArch64::BLRAAZ:
+    Auth.setOpcode(AArch64::AUTIZA);
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
+    break;
+  case AArch64::BLRAB:
+    Auth.setOpcode(AArch64::AUTIB);
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
+    Auth.addOperand(Inst.getOperand(1));              // modifier
+    break;
+  case AArch64::BLRABZ:
+    Auth.setOpcode(AArch64::AUTIZB);
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
+    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
+    break;
+  default:
+    llvm_unreachable("unexpected authenticated call opcode");
+  }
+  emitInst(Auth, Out, STI);
+
+  // Emit validation load if FEAT_FPAC is not supported.
+  if (!hasFeature(AArch64::FeatureFPAC, STI))
+    emitValidationLoad(TargetReg, Out, STI);
+
+  // Guard the target and call.
+  emitAddMask(LFIAddrReg, TargetReg, Out, STI);
+  emitBranch(AArch64::BLR, LFIAddrReg, Out, STI);
 }
 
 //===----------------------------------------------------------------------===//
@@ -798,6 +951,16 @@ void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
   // AUTIASP needs special handling - emit validation load after.
   if (isAUTIASP(Inst))
     return rewriteAutiasp(Inst, Out, STI);
+
+  // Authenticated PAC instructions are expanded to their component operations.
+  if (isAuthenticatedReturn(Inst.getOpcode()))
+    return rewriteAuthenticatedReturn(Inst, Out, STI);
+
+  if (isAuthenticatedBranch(Inst.getOpcode()))
+    return rewriteAuthenticatedBranch(Inst, Out, STI);
+
+  if (isAuthenticatedCall(Inst.getOpcode()))
+    return rewriteAuthenticatedCall(Inst, Out, STI);
 
   // Emit deferred LR guard before control flow instructions.
   if (DeferredLRGuard) {
