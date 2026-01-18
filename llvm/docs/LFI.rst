@@ -418,22 +418,22 @@ Thread-local storage
 
 TLS accesses are rewritten into accesses offset from ``x25``, which is a
 reserved register that points to a virtual register file, with a location for
-storing the sandbox's thread pointer. ``TP`` is the offset into that virtual
-register file where the thread pointer is stored.
+storing the sandbox's thread pointer. The thread pointer is stored at offset
+32 into the virtual register file.
 
-+----------------------+-----------------------+
-|       Original       |       Rewritten       |
-+----------------------+-----------------------+
-| .. code-block::      | .. code-block::       |
-|                      |                       |
-|    mrs xN, tpidr_el0 |    ldr xN, [x25, #TP] |
-|                      |                       |
-+----------------------+-----------------------+
-| .. code-block::      | .. code-block::       |
-|                      |                       |
-|    mrs tpidr_el0, xN |    str xN, [x25, #TP] |
-|                      |                       |
-+----------------------+-----------------------+
++----------------------+-------------------------+
+|       Original       |        Rewritten        |
++----------------------+-------------------------+
+| .. code-block::      | .. code-block::         |
+|                      |                         |
+|    mrs xN, tpidr_el0 |    ldr xN, [x25, #32]   |
+|                      |                         |
++----------------------+-------------------------+
+| .. code-block::      | .. code-block::         |
+|                      |                         |
+|    msr tpidr_el0, xN |    str xN, [x25, #32]   |
+|                      |                         |
++----------------------+-------------------------+
 
 Optimizations
 =============

@@ -42,8 +42,9 @@ const MCRegister LFIScratchReg = AArch64::X26;
 const MCRegister LFITLSReg = AArch64::X25;
 
 // Offset into the virtual register file (pointed to by LFITLSReg) where the
-// thread pointer is stored.
-const unsigned LFITPOffset = 0;
+// thread pointer is stored. This is a scaled offset (multiplied by 8 for
+// 64-bit loads), so a value of 4 means an actual byte offset of 32.
+const unsigned LFITPOffset = 4;
 
 
 //===----------------------------------------------------------------------===//
