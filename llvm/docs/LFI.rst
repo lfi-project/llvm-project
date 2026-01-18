@@ -316,6 +316,82 @@ it would corrupt the PAC signature, causing subsequent ``autiasp`` to fail.
 By deferring the guard until control flow, signed pointers remain intact
 through the authentication process.
 
+**Authenticated returns** (``retaa``/``retab``) combine authentication with
+return. LFI expands these into their component operations:
+
++-------------------+-------------------------------+
+|     Original      |           Rewritten           |
++-------------------+-------------------------------+
+| .. code-block::   | .. code-block::               |
+|                   |                               |
+|    retaa          |    autiasp                    |
+|                   |    ldr xzr, [x30]             |
+|                   |    add x30, x27, w30, uxtw    |
+|                   |    ret                        |
+|                   |                               |
++-------------------+-------------------------------+
+| .. code-block::   | .. code-block::               |
+|                   |                               |
+|    retab          |    autibsp                    |
+|                   |    ldr xzr, [x30]             |
+|                   |    add x30, x27, w30, uxtw    |
+|                   |    ret                        |
+|                   |                               |
++-------------------+-------------------------------+
+
+**Authenticated branches** (``braa``/``brab``/``braaz``/``brabz``) combine
+authentication with indirect branch. LFI expands these by first authenticating
+the target register, then performing a normal sandboxed branch:
+
++-------------------+-------------------------------+
+|     Original      |           Rewritten           |
++-------------------+-------------------------------+
+| .. code-block::   | .. code-block::               |
+|                   |                               |
+|    braa xN, xM    |    autia xN, xM               |
+|                   |    ldr xzr, [xN]              |
+|                   |    add x28, x27, wN, uxtw     |
+|                   |    br x28                     |
+|                   |                               |
++-------------------+-------------------------------+
+| .. code-block::   | .. code-block::               |
+|                   |                               |
+|    braaz xN       |    autiza xN                  |
+|                   |    ldr xzr, [xN]              |
+|                   |    add x28, x27, wN, uxtw     |
+|                   |    br x28                     |
+|                   |                               |
++-------------------+-------------------------------+
+
+**Authenticated calls** (``blraa``/``blrab``/``blraaz``/``blrabz``) are
+expanded similarly:
+
++-------------------+-------------------------------+
+|     Original      |           Rewritten           |
++-------------------+-------------------------------+
+| .. code-block::   | .. code-block::               |
+|                   |                               |
+|    blraa xN, xM   |    autia xN, xM               |
+|                   |    ldr xzr, [xN]              |
+|                   |    add x28, x27, wN, uxtw     |
+|                   |    blr x28                    |
+|                   |                               |
++-------------------+-------------------------------+
+| .. code-block::   | .. code-block::               |
+|                   |                               |
+|    blraaz xN      |    autiza xN                  |
+|                   |    ldr xzr, [xN]              |
+|                   |    add x28, x27, wN, uxtw     |
+|                   |    blr x28                    |
+|                   |                               |
++-------------------+-------------------------------+
+
+As with ``autiasp``, the validation load is omitted on processors with
+FEAT_FPAC support.
+
+**Authenticated exception returns** (``eretaa``/``eretab``) are not supported
+by LFI and will produce an error.
+
 System instructions
 ~~~~~~~~~~~~~~~~~~~
 
