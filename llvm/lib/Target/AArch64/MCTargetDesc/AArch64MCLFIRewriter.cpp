@@ -881,12 +881,12 @@ void AArch64::AArch64MCLFIRewriter::emitSyscall(MCStreamer &Out,
   // Save LR to scratch.
   emitMov(LFIScratchReg, AArch64::LR, Out, STI);
 
-  // Load syscall handler address from sandbox base (offset 0).
+  // Load syscall handler address from negative offset from sandbox base.
   MCInst Load;
-  Load.setOpcode(AArch64::LDRXui);
+  Load.setOpcode(AArch64::LDURXi);
   Load.addOperand(MCOperand::createReg(AArch64::LR));
   Load.addOperand(MCOperand::createReg(LFIBaseReg));
-  Load.addOperand(MCOperand::createImm(0));
+  Load.addOperand(MCOperand::createImm(-8));
   emitInst(Load, Out, STI);
 
   // Call the runtime.

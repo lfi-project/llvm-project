@@ -397,21 +397,21 @@ System instructions
 
 System calls are rewritten into a sequence that loads the address of the first
 runtime call entrypoint and jumps to it. The runtime call entrypoint table is
-stored at the start of the sandbox, so it can be referenced by ``x27``. The
-rewrite also saves and restores the link register, since it is used for
-branching into the runtime.
+stored at a negative offset from the sandbox base, so it can be referenced by
+``x27``. The rewrite also saves and restores the link register, since it is
+used for branching into the runtime.
 
-+-----------------+----------------------------+
-|    Original     |         Rewritten          |
-+-----------------+----------------------------+
-| .. code-block:: | .. code-block::            |
-|                 |                            |
-|    svc #0       |    mov w26, w30            |
-|                 |    ldr x30, [x27]          |
-|                 |    blr x30                 |
-|                 |    add x30, x27, w26, uxtw |
-|                 |                            |
-+-----------------+----------------------------+
++-----------------+------------------------------+
+|    Original     |          Rewritten           |
++-----------------+------------------------------+
+| .. code-block:: | .. code-block::              |
+|                 |                              |
+|    svc #0       |    mov w26, w30              |
+|                 |    ldur x30, [x27, #-8]      |
+|                 |    blr x30                   |
+|                 |    add x30, x27, w26, uxtw   |
+|                 |                              |
++-----------------+------------------------------+
 
 Thread-local storage
 ~~~~~~~~~~~~~~~~~~~~
