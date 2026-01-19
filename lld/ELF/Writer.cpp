@@ -2970,22 +2970,35 @@ static void fillTrap(std::array<uint8_t, 4> trapInstr, uint8_t *i,
     memcpy(i, trapInstr.data(), 4);
 }
 
-// Fill the last page of executable segments with trap instructions
-// instead of leaving them as zero. Even though it is not required by any
-// standard, it is in general a good thing to do for security reasons.
-//
-// We'll leave other pages in segments as-is because the rest will be
-// overwritten by output sections.
+// Fill executable segments with trap instructions. This includes both the
+// gaps between sections (due to alignment) and the tail padding to the page
+// boundary. Even though it is not required by any standard, it is in general
+// a good thing to do for security reasons.
 template <class ELFT> void Writer<ELFT>::writeTrapInstr() {
   for (Partition &part : ctx.partitions) {
-    // Fill the last page.
-    for (std::unique_ptr<PhdrEntry> &p : part.phdrs)
+    // Fill gaps between consecutive sections in the same executable segment.
+    OutputSection *prev = nullptr;
+    for (OutputSection *sec : ctx.outputSections) {
+      PhdrEntry *p = sec->ptLoad;
+      if (!p || !(p->p_flags & PF_X))
+        continue;
+      if (prev && prev->ptLoad == p)
+        fillTrap(ctx.target->trapInstr,
+                 ctx.bufferStart + alignDown(prev->offset + prev->size, 4),
+                 ctx.bufferStart + sec->offset);
+      prev = sec;
+    }
+
+    // Fill the tail padding to the page boundary for each executable segment.
+    for (std::unique_ptr<PhdrEntry> &p : part.phdrs) {
       if (p->p_type == PT_LOAD && (p->p_flags & PF_X))
-        fillTrap(
-            ctx.target->trapInstr,
-            ctx.bufferStart + alignDown(p->firstSec->offset + p->p_filesz, 4),
-            ctx.bufferStart + alignToPowerOf2(p->firstSec->offset + p->p_filesz,
-                                              ctx.arg.maxPageSize));
+        fillTrap(ctx.target->trapInstr,
+                 ctx.bufferStart +
+                     alignDown(p->lastSec->offset + p->lastSec->size, 4),
+                 ctx.bufferStart +
+                     alignToPowerOf2(p->firstSec->offset + p->p_filesz,
+                                     ctx.arg.maxPageSize));
+    }
 
     // Round up the file size of the last segment to the page boundary iff it is
     // an executable segment to ensure that other tools don't accidentally
