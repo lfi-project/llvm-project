@@ -136,8 +136,10 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   // Specific cases handle instructions of variable sizes
   switch (Desc.getOpcode()) {
   default:
-    if (Desc.getSize())
-      return Desc.getSize();
+    if (Desc.getSize()) {
+      NumBytes = Desc.getSize();
+      break;
+    }
 
     // Anything not explicitly designated otherwise (i.e. pseudo-instructions
     // with fixed constant size but not specified in .td file) is a normal
