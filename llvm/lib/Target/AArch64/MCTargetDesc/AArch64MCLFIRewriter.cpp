@@ -164,6 +164,16 @@ void AArch64::AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol) {
 void AArch64::AArch64MCLFIRewriter::emitInst(const MCInst &Inst,
                                               MCStreamer &Out,
                                               const MCSubtargetInfo &STI) {
+  // Guard elimination: invalidate guard if instruction modifies guarded
+  // register or affects control flow.
+  if (ActiveGuard) {
+    const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
+    if (Desc.mayAffectControlFlow(Inst, *RegInfo) ||
+        mayModifyRegister(Inst, ActiveGuardReg) ||
+        mayModifyRegister(Inst, getWRegFromXReg(ActiveGuardReg)))
+      ActiveGuard = false;
+  }
+
   Out.emitInstruction(Inst, STI);
 }
 
@@ -993,19 +1003,6 @@ void AArch64::AArch64MCLFIRewriter::rewriteTLSWrite(const MCInst &Inst,
 void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
                                                    MCStreamer &Out,
                                                    const MCSubtargetInfo &STI) {
-  // Guard elimination: invalidate guard if instruction modifies guarded
-  // register or affects control flow.
-  if (ActiveGuard) {
-    const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
-    bool IsControlFlow = Desc.isBranch() || Desc.isCall() || Desc.isReturn() ||
-                         Desc.isBarrier();
-    bool ModifiesGuardReg =
-        mayModifyRegister(Inst, ActiveGuardReg) ||
-        mayModifyRegister(Inst, getWRegFromXReg(ActiveGuardReg));
-    if (IsControlFlow || ModifiesGuardReg)
-      ActiveGuard = false;
-  }
-
   // System instructions.
   if (isSyscall(Inst))
     return rewriteSyscall(Inst, Out, STI);
