@@ -168,12 +168,13 @@ void AArch64::AArch64MCLFIRewriter::emitInst(const MCInst &Inst,
                                               MCStreamer &Out,
                                               const MCSubtargetInfo &STI) {
   // Guard elimination: invalidate guard if instruction modifies guarded
-  // register or affects control flow.
+  // register, x28 (which holds the guarded value), or affects control flow.
   if (ActiveGuard) {
     const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
     if (Desc.mayAffectControlFlow(Inst, *RegInfo) ||
         mayModifyRegister(Inst, ActiveGuardReg) ||
-        mayModifyRegister(Inst, getWRegFromXReg(ActiveGuardReg)))
+        mayModifyRegister(Inst, getWRegFromXReg(ActiveGuardReg)) ||
+        mayModifyRegister(Inst, LFIAddrReg))
       ActiveGuard = false;
   }
 
