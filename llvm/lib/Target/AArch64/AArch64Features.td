@@ -1067,6 +1067,9 @@ def FeatureNoLFIStores : SubtargetFeature<"no-lfi-stores", "NoLFIStores", "true"
 def FeatureNoLFIGuardElim : SubtargetFeature<"no-lfi-guard-elim",
   "NoLFIGuardElim", "true",
   "Disable LFI guard elimination optimization">;
+def FeatureLFIAdrpOpt : SubtargetFeature<"lfi-adrp-opt",
+  "LFIAdrpOpt", "true",
+  "Enable LFI ADRP optimization (redirect ADRP to x28)">;
 
 // Only intended to be used by disassemblers.
 def FeatureAll

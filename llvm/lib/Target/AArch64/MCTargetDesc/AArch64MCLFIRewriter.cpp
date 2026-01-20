@@ -155,6 +155,9 @@ bool AArch64::AArch64MCLFIRewriter::mayPrefetch(const MCInst &Inst) const {
 void AArch64::AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol) {
   // Labels are potential branch targets, reset guard state
   ActiveGuard = false;
+  // Emit any pending ADRP as-is since the sequence was broken
+  // Note: We can't emit here as we don't have Out/STI. The pending ADRP
+  // will be emitted at the start of the next instruction processing.
 }
 
 //===----------------------------------------------------------------------===//
@@ -997,12 +1000,74 @@ void AArch64::AArch64MCLFIRewriter::rewriteTLSWrite(const MCInst &Inst,
 }
 
 //===----------------------------------------------------------------------===//
+// ADRP optimization
+//===----------------------------------------------------------------------===//
+
+bool AArch64::AArch64MCLFIRewriter::rewriteMatchedAdrp(const MCInst &Inst,
+                                                        MCStreamer &Out,
+                                                        const MCSubtargetInfo &STI) {
+  // Check if this is a supported load instruction for ADRP optimization.
+  switch (Inst.getOpcode()) {
+  case AArch64::LDRBBui:
+  case AArch64::LDRBui:
+  case AArch64::LDRDui:
+  case AArch64::LDRHHui:
+  case AArch64::LDRHui:
+  case AArch64::LDRQui:
+  case AArch64::LDRSBWui:
+  case AArch64::LDRSBXui:
+  case AArch64::LDRSHWui:
+  case AArch64::LDRSHXui:
+  case AArch64::LDRSWui:
+  case AArch64::LDRSui:
+  case AArch64::LDRWui:
+  case AArch64::LDRXui:
+    break;
+  default:
+    return false;
+  }
+
+  MCRegister AdrpReg = PendingAdrp.value().getOperand(0).getReg();
+  MCRegister Dest = Inst.getOperand(0).getReg();
+  MCRegister Base = Inst.getOperand(1).getReg();
+
+  // The optimization applies when:
+  // 1. The load uses the ADRP result as its base (AdrpReg == Base)
+  // 2. The load overwrites the ADRP register (AdrpReg == Dest), so the
+  //    ADRP value is no longer needed after this instruction.
+  if ((AdrpReg == Dest || getWRegFromXReg(AdrpReg) == Dest) && AdrpReg == Base) {
+    // Emit ADRP targeting x28 instead of the original register.
+    MCInst NewAdrp = replaceReg(PendingAdrp.value(), LFIAddrReg, AdrpReg);
+    emitInst(NewAdrp, Out, STI);
+
+    // Emit the load using x28 as the base.
+    MCInst NewLoad(Inst);
+    NewLoad.getOperand(1).setReg(LFIAddrReg);
+    emitInst(NewLoad, Out, STI);
+
+    PendingAdrp.reset();
+    return true;
+  }
+
+  return false;
+}
+
+//===----------------------------------------------------------------------===//
 // Main rewriting logic
 //===----------------------------------------------------------------------===//
 
 void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
                                                    MCStreamer &Out,
                                                    const MCSubtargetInfo &STI) {
+  // Handle pending ADRP from previous instruction.
+  if (PendingAdrp.has_value()) {
+    if (rewriteMatchedAdrp(Inst, Out, STI))
+      return;
+    // No match - emit the ADRP as-is and continue processing current instruction.
+    emitInst(PendingAdrp.value(), Out, STI);
+    PendingAdrp.reset();
+  }
+
   // System instructions.
   if (isSyscall(Inst))
     return rewriteSyscall(Inst, Out, STI);
@@ -1065,6 +1130,13 @@ void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
   // Memory operations.
   if (mayLoad(Inst) || mayStore(Inst) || mayPrefetch(Inst))
     return rewriteLoadStore(Inst, Out, STI);
+
+  // ADRP optimization: defer emission to check for matching load.
+  if (Inst.getOpcode() == AArch64::ADRP &&
+      hasFeature(AArch64::FeatureLFIAdrpOpt, STI)) {
+    PendingAdrp = Inst;
+    return;
+  }
 
   // Default: emit as-is.
   emitInst(Inst, Out, STI);

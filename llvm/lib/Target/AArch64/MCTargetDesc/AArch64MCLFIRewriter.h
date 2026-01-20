@@ -20,6 +20,7 @@
 #include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include <optional>
 
 namespace llvm {
 class MCContext;
@@ -69,6 +70,11 @@ private:
   bool ActiveGuard = false;
   MCRegister ActiveGuardReg;
 
+  /// ADRP optimization state - holds pending ADRP instruction.
+  /// When ADRP xN, target is seen, we defer emission and check if the next
+  /// instruction is a matching load that can use x28 directly.
+  std::optional<MCInst> PendingAdrp;
+
   //===--------------------------------------------------------------------===//
   // Instruction classification
   //===--------------------------------------------------------------------===//
@@ -108,6 +114,10 @@ private:
 
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
+
+  // ADRP optimization
+  bool rewriteMatchedAdrp(const MCInst &Inst, MCStreamer &Out,
+                          const MCSubtargetInfo &STI);
 
   // Control flow
   void rewriteIndirectBranch(const MCInst &Inst, MCStreamer &Out,
