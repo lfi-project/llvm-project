@@ -1,4 +1,4 @@
-// RUN: llvm-mc -filetype asm -triple aarch64_lfi %s | FileCheck %s
+// RUN: llvm-mc -filetype asm -triple aarch64_lfi -mattr=+no-lfi-guard-elim %s | FileCheck %s
 
 // Basic prefetch with immediate offset
 prfm pldl1keep, [x0]

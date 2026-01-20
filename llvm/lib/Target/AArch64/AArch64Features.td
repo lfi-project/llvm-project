@@ -1058,12 +1058,15 @@ def FeatureHardenSlsNoComdat : SubtargetFeature<"harden-sls-nocomdat",
   "Generate thunk code for SLS mitigation in the normal text section">;
 
 // LFI (Lightweight Fault Isolation) features.
-// By default, both loads and stores are sandboxed. Use +nolfi-loads for
-// stores-only mode, or +nolfi-loads+nolfi-stores for jumps-only mode.
-def FeatureNoLFILoads : SubtargetFeature<"nolfi-loads", "NoLFILoads", "true",
+// By default, both loads and stores are sandboxed. Use +no-lfi-loads for
+// stores-only mode, or +no-lfi-loads+no-lfi-stores for jumps-only mode.
+def FeatureNoLFILoads : SubtargetFeature<"no-lfi-loads", "NoLFILoads", "true",
   "Disable LFI sandboxing for load instructions (stores-only mode)">;
-def FeatureNoLFIStores : SubtargetFeature<"nolfi-stores", "NoLFIStores", "true",
+def FeatureNoLFIStores : SubtargetFeature<"no-lfi-stores", "NoLFIStores", "true",
   "Disable LFI sandboxing for store instructions">;
+def FeatureNoLFIGuardElim : SubtargetFeature<"no-lfi-guard-elim",
+  "NoLFIGuardElim", "true",
+  "Disable LFI guard elimination optimization">;
 
 // Only intended to be used by disassemblers.
 def FeatureAll

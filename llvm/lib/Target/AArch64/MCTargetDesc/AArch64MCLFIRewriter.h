@@ -52,6 +52,8 @@ public:
   bool rewriteInst(const MCInst &Inst, MCStreamer &Out,
                    const MCSubtargetInfo &STI) override;
 
+  void onLabel(const MCSymbol *Symbol) override;
+
 private:
   /// Recursion guard to prevent infinite loops when emitting instructions.
   bool Guard = false;
@@ -60,6 +62,12 @@ private:
   /// This allows PAC-compatible code to work correctly by guarding x30 into
   /// x30 only when needed for control flow.
   bool DeferredLRGuard = false;
+
+  /// Guard elimination state - tracks which register x28 was last guarded with.
+  /// Reset when: label emitted, control flow instruction processed, or
+  /// guarded register modified.
+  bool ActiveGuard = false;
+  MCRegister ActiveGuardReg;
 
   //===--------------------------------------------------------------------===//
   // Instruction classification

@@ -149,6 +149,15 @@ bool AArch64::AArch64MCLFIRewriter::mayPrefetch(const MCInst &Inst) const {
 }
 
 //===----------------------------------------------------------------------===//
+// Guard elimination
+//===----------------------------------------------------------------------===//
+
+void AArch64::AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol) {
+  // Labels are potential branch targets, reset guard state
+  ActiveGuard = false;
+}
+
+//===----------------------------------------------------------------------===//
 // Instruction emission helpers
 //===----------------------------------------------------------------------===//
 
@@ -162,6 +171,11 @@ void AArch64::AArch64MCLFIRewriter::emitAddMask(MCRegister Dest,
                                                  MCRegister Src,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
+  // Guard elimination: skip if same guard already active
+  bool NoGuardElim = hasFeature(AArch64::FeatureNoLFIGuardElim, STI);
+  if (!NoGuardElim && Dest == LFIAddrReg && ActiveGuard && ActiveGuardReg == Src)
+    return;
+
   // Emit: add Dest, LFIBaseReg, W(Src), uxtw
   MCInst Inst;
   Inst.setOpcode(AArch64::ADDXrx);
@@ -171,6 +185,12 @@ void AArch64::AArch64MCLFIRewriter::emitAddMask(MCRegister Dest,
   Inst.addOperand(MCOperand::createImm(
       AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)));
   emitInst(Inst, Out, STI);
+
+  // Update guard state
+  if (Dest == LFIAddrReg) {
+    ActiveGuard = true;
+    ActiveGuardReg = Src;
+  }
 }
 
 void AArch64::AArch64MCLFIRewriter::emitBranch(unsigned Opcode,
@@ -645,8 +665,8 @@ void AArch64::AArch64MCLFIRewriter::rewriteLoadStore(const MCInst &Inst,
 
   // Check if this memory access needs sandboxing based on LFI mode.
   // - Default: sandbox both loads and stores
-  // - +nolfi-loads: stores-only mode, skip loads
-  // - +nolfi-loads+nolfi-stores: jumps-only mode, skip all memory
+  // - +no-lfi-loads: stores-only mode, skip loads
+  // - +no-lfi-loads+no-lfi-stores: jumps-only mode, skip all memory
   bool SkipLoads = hasFeature(AArch64::FeatureNoLFILoads, STI);
   bool SkipStores = hasFeature(AArch64::FeatureNoLFIStores, STI);
 
@@ -682,7 +702,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteStackModification(
     return;
   }
 
-  // In jumps-only mode (+nolfi-loads+nolfi-stores), no stack sandboxing needed.
+  // In jumps-only mode (+no-lfi-loads+no-lfi-stores), no stack sandboxing needed.
   bool SkipLoads = hasFeature(AArch64::FeatureNoLFILoads, STI);
   bool SkipStores = hasFeature(AArch64::FeatureNoLFIStores, STI);
   if (SkipLoads && SkipStores) {
@@ -725,6 +745,40 @@ void AArch64::AArch64MCLFIRewriter::emitValidationLoad(
   // Force immediate validation by loading from the authenticated pointer.
   // If PAC authentication failed, the register contains a poisoned pointer
   // that will fault on this load.
+
+  if (hasFeature(AArch64::FeatureExecuteOnly, STI)) {
+    // In execute-only mode, we can't read from code addresses. Instead, we
+    // extract the upper 32 bits (where PAC bits reside) and load from that
+    // address - 8. If PAC authentication failed, the upper bits will be
+    // invalid and the load will fault. If authentication succeeded, it will
+    // perform a dummy load from the read-only runtime call page.
+    //   and x28, Reg, #0xffffffff00000000
+    //   ldur xzr, [x28, #-8]
+    //   mov x28, x27
+
+    // Note: this instruction may cause x28 to take on a value that violates
+    // its invariant. It must be reset to a valid value immediately after the
+    // dummy load.
+    MCInst And;
+    And.setOpcode(AArch64::ANDXri);
+    And.addOperand(MCOperand::createReg(LFIAddrReg));
+    And.addOperand(MCOperand::createReg(Reg));
+    And.addOperand(MCOperand::createImm(
+        AArch64_AM::encodeLogicalImmediate(0xffffffff00000000ULL, 64)));
+    emitInst(And, Out, STI);
+
+    MCInst ValidateLoad;
+    ValidateLoad.setOpcode(AArch64::LDURXi);
+    ValidateLoad.addOperand(MCOperand::createReg(AArch64::XZR));
+    ValidateLoad.addOperand(MCOperand::createReg(LFIAddrReg));
+    ValidateLoad.addOperand(MCOperand::createImm(-8));
+    emitInst(ValidateLoad, Out, STI);
+
+    // Restore x28 to a safe value.
+    emitMov(LFIAddrReg, LFIBaseReg, Out, STI);
+    return;
+  }
+
   MCInst ValidateLoad;
   ValidateLoad.setOpcode(AArch64::LDRXui);
   ValidateLoad.addOperand(MCOperand::createReg(AArch64::XZR));
@@ -939,6 +993,19 @@ void AArch64::AArch64MCLFIRewriter::rewriteTLSWrite(const MCInst &Inst,
 void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
                                                    MCStreamer &Out,
                                                    const MCSubtargetInfo &STI) {
+  // Guard elimination: invalidate guard if instruction modifies guarded
+  // register or affects control flow.
+  if (ActiveGuard) {
+    const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
+    bool IsControlFlow = Desc.isBranch() || Desc.isCall() || Desc.isReturn() ||
+                         Desc.isBarrier();
+    bool ModifiesGuardReg =
+        mayModifyRegister(Inst, ActiveGuardReg) ||
+        mayModifyRegister(Inst, getWRegFromXReg(ActiveGuardReg));
+    if (IsControlFlow || ModifiesGuardReg)
+      ActiveGuard = false;
+  }
+
   // System instructions.
   if (isSyscall(Inst))
     return rewriteSyscall(Inst, Out, STI);

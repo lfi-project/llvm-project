@@ -24,6 +24,7 @@ namespace llvm {
 class MCInst;
 class MCSubtargetInfo;
 class MCStreamer;
+class MCSymbol;
 
 class MCLFIRewriter {
 private:
@@ -58,6 +59,10 @@ public:
   virtual ~MCLFIRewriter() = default;
   virtual bool rewriteInst(const MCInst &Inst, MCStreamer &Out,
                            const MCSubtargetInfo &STI) = 0;
+
+  /// Called when a label is emitted. Used to reset guard elimination state
+  /// since labels are potential branch targets (basic block boundaries).
+  virtual void onLabel(const MCSymbol *Symbol) {}
 };
 
 } // namespace llvm

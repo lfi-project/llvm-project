@@ -63,15 +63,16 @@ to be applied to hand-written assembly, including inline assembly.
 Compiler Options
 ================
 
-The LFI target has several configuration options.
+The LFI target has several configuration options, specified via ``-mattr=``:
 
-* ``+lfi-loads``: enable sandboxing for loads (default: true).
-* ``+lfi-stores``: enable sandboxing for stores (default: true).
+* ``+no-lfi-loads``: Disable sandboxing for load instructions (stores-only mode).
+* ``+no-lfi-stores``: Disable sandboxing for store instructions.
+* ``+no-lfi-guard-elim``: Disable the guard elimination optimization.
 
-Use ``+nolfi-loads`` to create a "stores-only" sandbox that may read, but not
+Use ``+no-lfi-loads`` to create a "stores-only" sandbox that may read, but not
 write, outside the sandbox region.
 
-Use ``+nolfi-loads+nolfi-stores`` to create a "jumps-only" sandbox that may
+Use ``+no-lfi-loads,+no-lfi-stores`` to create a "jumps-only" sandbox that may
 read/write outside the sandbox region but may not transfer control outside
 (e.g., may not execute system calls directly). This is primarily useful in
 combination with some other form of memory sandboxing, such as Intel MPK.

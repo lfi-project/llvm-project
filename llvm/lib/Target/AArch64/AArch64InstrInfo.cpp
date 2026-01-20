@@ -187,6 +187,14 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
     break;
   }
 
+  if (Subtarget.getTargetTriple().isLFI()) {
+    // Loads and stores may be expanded to include an additional guard
+    // instruction, so we overestimate the size here to allow things like
+    // branch relaxation to be more accurate.
+    if (Desc.mayLoad() || Desc.mayStore())
+      NumBytes += 4;
+  }
+
   return NumBytes;
 }
 

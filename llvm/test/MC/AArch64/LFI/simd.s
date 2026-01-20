@@ -1,4 +1,4 @@
-// RUN: llvm-mc -filetype asm -triple aarch64_lfi %s | FileCheck %s
+// RUN: llvm-mc -filetype asm -triple aarch64_lfi -mattr=+no-lfi-guard-elim %s | FileCheck %s
 // LD1/ST1 single structure (no post-index)
 ld1 { v0.b }[0], [x0]
 // CHECK:      add x28, x27, w0, uxtw
