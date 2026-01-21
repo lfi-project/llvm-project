@@ -884,6 +884,8 @@ set(ve_SOURCES
 
 set(m68k_SOURCES ${GENERIC_SOURCES})
 
+set(x86_64_lfi_SOURCES ${x86_64_SOURCES})
+
 add_custom_target(builtins)
 set_target_properties(builtins PROPERTIES FOLDER "Compiler-RT/Metatargets")
 
