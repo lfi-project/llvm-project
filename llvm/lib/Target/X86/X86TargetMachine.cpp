@@ -564,6 +564,9 @@ void X86PassConfig::addPreEmitPass() {
   }
   addPass(createX86CompressEVEXPass());
   addPass(createX86InsertX87waitPass());
+
+  if (Triple(TM->getTargetTriple()).isLFI())
+    addPass(createX86LFIRewritePass());
 }
 
 void X86PassConfig::addPreEmitPass2() {

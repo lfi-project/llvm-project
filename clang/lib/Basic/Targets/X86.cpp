@@ -527,7 +527,7 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
     DefineStd(Builder, "i386", Opts);
   }
 
-  if (getTriple().isX8664LFI()) {
+  if (getTriple().isLFI()) {
     Builder.defineMacro("__LFI__");
   }
 

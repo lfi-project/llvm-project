@@ -170,6 +170,9 @@ FunctionPass *createX86ReturnThunksPass();
 /// fp exceptions when strict-fp enabled.
 FunctionPass *createX86InsertX87waitPass();
 
+/// This pass modifies code generation for LFI rules.
+FunctionPass *createX86LFIRewritePass();
+
 /// This pass optimizes arithmetic based on knowledge that is only used by
 /// a reduction sequence and is therefore safe to reassociate in interesting
 /// ways.
