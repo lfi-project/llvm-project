@@ -472,6 +472,16 @@ def FeatureHardenSlsIJmp
           "harden-sls-ijmp", "HardenSlsIJmp", "true",
           "Harden against straight line speculation across indirect JMP instructions.">;
 
+// LFI (Lightweight Fault Isolation) features.
+// By default, both loads and stores are sandboxed. Use +no-lfi-loads for
+// stores-only mode, or +no-lfi-loads+no-lfi-stores for jumps-only mode.
+def FeatureNoLFILoads : SubtargetFeature<"no-lfi-loads", "NoLFILoads", "true",
+  "Disable LFI sandboxing for load instructions (stores-only mode)">;
+def FeatureNoLFIStores : SubtargetFeature<"no-lfi-stores", "NoLFIStores", "true",
+  "Disable LFI sandboxing for store instructions">;
+def FeatureNoLFISegue : SubtargetFeature<"no-lfi-segue", "NoLFISegue", "true",
+  "Disable LFI use of GS segment for memory sandboxing">;
+
 //===----------------------------------------------------------------------===//
 // X86 Subtarget Tuning features
 //===----------------------------------------------------------------------===//
