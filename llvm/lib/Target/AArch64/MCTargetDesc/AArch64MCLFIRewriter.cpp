@@ -102,12 +102,6 @@ static bool isPACIASP(const MCInst &Inst) {
           Inst.getOperand(0).getImm() == 25);
 }
 
-static bool isAUTIASP(const MCInst &Inst) {
-  return Inst.getOpcode() == AArch64::AUTIASP ||
-         (Inst.getOpcode() == AArch64::HINT &&
-          Inst.getOperand(0).getImm() == 29);
-}
-
 } // anonymous namespace
 
 bool AArch64::AArch64MCLFIRewriter::mayModifyStack(const MCInst &Inst) const {
@@ -121,7 +115,6 @@ bool AArch64::AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const 
 
 bool AArch64::AArch64MCLFIRewriter::mayModifyLR(const MCInst &Inst) const {
   // PACIASP signs LR but doesn't affect control flow safety.
-  // AUTIASP is handled specially (needs validation load).
   if (isPACIASP(Inst))
     return false;
   return mayModifyRegister(Inst, AArch64::LR);
@@ -692,70 +685,10 @@ void AArch64::AArch64MCLFIRewriter::rewriteLRModification(
   DeferredLRGuard = true;
 }
 
-void AArch64::AArch64MCLFIRewriter::emitValidationLoad(
-    MCRegister Reg, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  // Force immediate validation by loading from the authenticated pointer.
-  // If PAC authentication failed, the register contains a poisoned pointer
-  // that will fault on this load.
-
-  if (STI.hasFeature(AArch64::FeatureExecuteOnly)) {
-    // In execute-only mode, we can't read from code addresses. Instead, we
-    // extract the upper 32 bits (where PAC bits reside) and load from that
-    // address - 8. If PAC authentication failed, the upper bits will be
-    // invalid and the load will fault. If authentication succeeded, it will
-    // perform a dummy load from the read-only runtime call page.
-    //   and x28, Reg, #0xffffffff00000000
-    //   ldur xzr, [x28, #-8]
-    //   mov x28, x27
-
-    // Note: this instruction may cause x28 to take on a value that violates
-    // its invariant. It must be reset to a valid value immediately after the
-    // dummy load.
-    MCInst And;
-    And.setOpcode(AArch64::ANDXri);
-    And.addOperand(MCOperand::createReg(LFIAddrReg));
-    And.addOperand(MCOperand::createReg(Reg));
-    And.addOperand(MCOperand::createImm(
-        AArch64_AM::encodeLogicalImmediate(0xffffffff00000000ULL, 64)));
-    emitInst(And, Out, STI);
-
-    MCInst ValidateLoad;
-    ValidateLoad.setOpcode(AArch64::LDURXi);
-    ValidateLoad.addOperand(MCOperand::createReg(AArch64::XZR));
-    ValidateLoad.addOperand(MCOperand::createReg(LFIAddrReg));
-    ValidateLoad.addOperand(MCOperand::createImm(-8));
-    emitInst(ValidateLoad, Out, STI);
-
-    // Restore x28 to a safe value.
-    emitMov(LFIAddrReg, LFIBaseReg, Out, STI);
-    return;
-  }
-
-  MCInst ValidateLoad;
-  ValidateLoad.setOpcode(AArch64::LDRXui);
-  ValidateLoad.addOperand(MCOperand::createReg(AArch64::XZR));
-  ValidateLoad.addOperand(MCOperand::createReg(Reg));
-  ValidateLoad.addOperand(MCOperand::createImm(0));
-  emitInst(ValidateLoad, Out, STI);
-}
-
-void AArch64::AArch64MCLFIRewriter::rewriteAutiasp(
-    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  // Emit the AUTIASP instruction.
-  emitInst(Inst, Out, STI);
-
-  // If FEAT_FPAC is supported, authentication failure automatically faults,
-  // so no explicit validation is needed.
-  if (STI.hasFeature(AArch64::FeatureFPAC))
-    return;
-
-  emitValidationLoad(AArch64::LR, Out, STI);
-}
-
 void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedReturn(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
   // RETAA/RETAB = AUTIASP/AUTIBSP + RET
-  // Expand to: AUTIASP/AUTIBSP, [validation load if no FPAC], guard LR, RET
+  // Expand to: AUTIASP/AUTIBSP, guard LR, RET
   unsigned Opcode = Inst.getOpcode();
 
   // Emit the appropriate AUTxSP instruction.
@@ -765,10 +698,6 @@ void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedReturn(
   else
     Auth.setOpcode(AArch64::AUTIBSP);
   emitInst(Auth, Out, STI);
-
-  // Emit validation load if FEAT_FPAC is not supported.
-  if (!STI.hasFeature(AArch64::FeatureFPAC))
-    emitValidationLoad(AArch64::LR, Out, STI);
 
   // Guard LR and emit RET.
   emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
@@ -820,10 +749,6 @@ void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedBranch(
   }
   emitInst(Auth, Out, STI);
 
-  // Emit validation load if FEAT_FPAC is not supported.
-  if (!STI.hasFeature(AArch64::FeatureFPAC))
-    emitValidationLoad(TargetReg, Out, STI);
-
   // Guard the target and branch.
   emitAddMask(LFIAddrReg, TargetReg, Out, STI);
   emitBranch(AArch64::BR, LFIAddrReg, Out, STI);
@@ -869,10 +794,6 @@ void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedCall(
     llvm_unreachable("unexpected authenticated call opcode");
   }
   emitInst(Auth, Out, STI);
-
-  // Emit validation load if FEAT_FPAC is not supported.
-  if (!STI.hasFeature(AArch64::FeatureFPAC))
-    emitValidationLoad(TargetReg, Out, STI);
 
   // Guard the target and call.
   emitAddMask(LFIAddrReg, TargetReg, Out, STI);
@@ -1010,10 +931,6 @@ void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
 
   if (isTLSWrite(Inst))
     return rewriteTLSWrite(Inst, Out, STI);
-
-  // AUTIASP needs special handling - emit validation load after.
-  if (isAUTIASP(Inst))
-    return rewriteAutiasp(Inst, Out, STI);
 
   // Authenticated PAC instructions are expanded to their component operations.
   if (isAuthenticatedReturn(Inst.getOpcode()))
