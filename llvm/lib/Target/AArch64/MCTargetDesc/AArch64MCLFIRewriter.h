@@ -75,22 +75,12 @@ private:
   /// instruction is a matching load that can use x28 directly.
   std::optional<MCInst> PendingAdrp;
 
-  //===--------------------------------------------------------------------===//
-  // Instruction classification
-  //===--------------------------------------------------------------------===//
-
-  bool isSyscall(const MCInst &Inst) const;
-  bool isTLSRead(const MCInst &Inst) const;
-  bool isTLSWrite(const MCInst &Inst) const;
+  // Instruction classification.
   bool mayModifyStack(const MCInst &Inst) const;
   bool mayModifyReserved(const MCInst &Inst) const;
   bool mayModifyLR(const MCInst &Inst) const;
-  bool mayPrefetch(const MCInst &Inst) const;
 
-  //===--------------------------------------------------------------------===//
-  // Instruction emission
-  //===--------------------------------------------------------------------===//
-
+  // Instruction emission.
   void emitInst(const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI);
   void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,
                    const MCSubtargetInfo &STI);
@@ -108,18 +98,15 @@ private:
   void emitMemRoW(unsigned Opcode, const MCOperand &DataOp, MCRegister BaseReg,
                   MCStreamer &Out, const MCSubtargetInfo &STI);
 
-  //===--------------------------------------------------------------------===//
-  // Rewriting logic
-  //===--------------------------------------------------------------------===//
-
+  // Rewriting logic.
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
 
-  // ADRP optimization
+  // ADRP optimization.
   bool rewriteMatchedAdrp(const MCInst &Inst, MCStreamer &Out,
                           const MCSubtargetInfo &STI);
 
-  // Control flow
+  // Control flow.
   void rewriteIndirectBranch(const MCInst &Inst, MCStreamer &Out,
                              const MCSubtargetInfo &STI);
   void rewriteCall(const MCInst &Inst, MCStreamer &Out,
@@ -127,7 +114,7 @@ private:
   void rewriteReturn(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
 
-  // Memory access
+  // Memory access.
   void rewriteLoadStore(const MCInst &Inst, MCStreamer &Out,
                         const MCSubtargetInfo &STI);
   void rewriteLoadStoreBasic(const MCInst &Inst, MCStreamer &Out,
@@ -135,13 +122,13 @@ private:
   bool rewriteLoadStoreRoW(const MCInst &Inst, MCStreamer &Out,
                            const MCSubtargetInfo &STI);
 
-  // Register modification
+  // Register modification.
   void rewriteStackModification(const MCInst &Inst, MCStreamer &Out,
                                 const MCSubtargetInfo &STI);
   void rewriteLRModification(const MCInst &Inst, MCStreamer &Out,
                              const MCSubtargetInfo &STI);
 
-  // PAC (Pointer Authentication Code) instructions
+  // PAC (Pointer Authentication Code) instructions.
   void emitValidationLoad(MCRegister Reg, MCStreamer &Out,
                           const MCSubtargetInfo &STI);
   void rewriteAutiasp(const MCInst &Inst, MCStreamer &Out,
@@ -153,7 +140,7 @@ private:
   void rewriteAuthenticatedCall(const MCInst &Inst, MCStreamer &Out,
                                 const MCSubtargetInfo &STI);
 
-  // System instructions
+  // System instructions.
   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
                       const MCSubtargetInfo &STI);
   void rewriteTLSRead(const MCInst &Inst, MCStreamer &Out,
@@ -162,15 +149,6 @@ private:
                        const MCSubtargetInfo &STI);
 
   void emitSyscall(MCStreamer &Out, const MCSubtargetInfo &STI);
-
-  //===--------------------------------------------------------------------===//
-  // Utility functions
-  //===--------------------------------------------------------------------===//
-
-  bool hasFeature(uint64_t Feature, const MCSubtargetInfo &STI) const;
-  MCInst replaceReg(const MCInst &Inst, MCRegister Dest, MCRegister Src) const;
-  bool canConvertToRoW(unsigned Opcode) const;
-  unsigned convertToRoW(unsigned Opcode) const;
 };
 
 } // namespace AArch64

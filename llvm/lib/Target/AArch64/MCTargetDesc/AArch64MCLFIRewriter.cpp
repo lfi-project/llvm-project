@@ -31,10 +31,7 @@ using namespace llvm;
 
 #define DEBUG_TYPE "aarch64-lfi-rewriter"
 
-//===----------------------------------------------------------------------===//
-// LFI Reserved Registers
-//===----------------------------------------------------------------------===//
-
+// LFI reserved registers.
 namespace {
 const MCRegister LFIBaseReg = AArch64::X27;
 const MCRegister LFIAddrReg = AArch64::X28;
@@ -46,11 +43,6 @@ const MCRegister LFITLSReg = AArch64::X25;
 // 64-bit loads), so a value of 4 means an actual byte offset of 32.
 const unsigned LFITPOffset = 4;
 
-
-//===----------------------------------------------------------------------===//
-// Forward declarations for RoW conversion functions
-//===----------------------------------------------------------------------===//
-
 static unsigned convertUiToRoW(unsigned Op);
 static unsigned convertPreToRoW(unsigned Op);
 static unsigned convertPostToRoW(unsigned Op);
@@ -60,20 +52,8 @@ static unsigned getPrePostScale(unsigned Op);
 static unsigned convertPrePostToBase(unsigned Op, bool &IsPre, bool &IsNoOffset);
 static int getSIMDNaturalOffset(unsigned Op);
 
-} // anonymous namespace
-
-//===----------------------------------------------------------------------===//
-// Utility functions
-//===----------------------------------------------------------------------===//
-
-bool AArch64::AArch64MCLFIRewriter::hasFeature(
-    uint64_t Feature, const MCSubtargetInfo &STI) const {
-  return STI.hasFeature(Feature);
-}
-
-MCInst AArch64::AArch64MCLFIRewriter::replaceReg(const MCInst &Inst,
-                                                  MCRegister Dest,
-                                                  MCRegister Src) const {
+// Replaces all occurrences of Src register with Dest in the instruction.
+static MCInst replaceReg(const MCInst &Inst, MCRegister Dest, MCRegister Src) {
   MCInst New;
   New.setOpcode(Inst.getOpcode());
   New.setLoc(Inst.getLoc());
@@ -88,31 +68,32 @@ MCInst AArch64::AArch64MCLFIRewriter::replaceReg(const MCInst &Inst,
   return New;
 }
 
-//===----------------------------------------------------------------------===//
-// Instruction classification
-//===----------------------------------------------------------------------===//
-
-bool AArch64::AArch64MCLFIRewriter::isSyscall(const MCInst &Inst) const {
+// Instruction classification.
+static bool isSyscall(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::SVC;
 }
 
-bool AArch64::AArch64MCLFIRewriter::isTLSRead(const MCInst &Inst) const {
+static bool isTLSRead(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::MRS &&
          Inst.getOperand(1).getImm() == AArch64SysReg::TPIDR_EL0;
 }
 
-bool AArch64::AArch64MCLFIRewriter::isTLSWrite(const MCInst &Inst) const {
+static bool isTLSWrite(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::MSR &&
          Inst.getOperand(0).getImm() == AArch64SysReg::TPIDR_EL0;
 }
 
-bool AArch64::AArch64MCLFIRewriter::mayModifyStack(const MCInst &Inst) const {
-  return mayModifyRegister(Inst, AArch64::SP);
-}
-
-bool AArch64::AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
-  return mayModifyRegister(Inst, LFIAddrReg) ||
-         mayModifyRegister(Inst, LFIBaseReg);
+static bool mayPrefetch(const MCInst &Inst) {
+  switch (Inst.getOpcode()) {
+  case AArch64::PRFMl:
+  case AArch64::PRFMroW:
+  case AArch64::PRFMroX:
+  case AArch64::PRFMui:
+  case AArch64::PRFUMi:
+    return true;
+  default:
+    return false;
+  }
 }
 
 static bool isPACIASP(const MCInst &Inst) {
@@ -127,6 +108,17 @@ static bool isAUTIASP(const MCInst &Inst) {
           Inst.getOperand(0).getImm() == 29);
 }
 
+} // anonymous namespace
+
+bool AArch64::AArch64MCLFIRewriter::mayModifyStack(const MCInst &Inst) const {
+  return mayModifyRegister(Inst, AArch64::SP);
+}
+
+bool AArch64::AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
+  return mayModifyRegister(Inst, LFIAddrReg) ||
+         mayModifyRegister(Inst, LFIBaseReg);
+}
+
 bool AArch64::AArch64MCLFIRewriter::mayModifyLR(const MCInst &Inst) const {
   // PACIASP signs LR but doesn't affect control flow safety.
   // AUTIASP is handled specially (needs validation load).
@@ -135,34 +127,16 @@ bool AArch64::AArch64MCLFIRewriter::mayModifyLR(const MCInst &Inst) const {
   return mayModifyRegister(Inst, AArch64::LR);
 }
 
-bool AArch64::AArch64MCLFIRewriter::mayPrefetch(const MCInst &Inst) const {
-  switch (Inst.getOpcode()) {
-  case AArch64::PRFMl:
-  case AArch64::PRFMroW:
-  case AArch64::PRFMroX:
-  case AArch64::PRFMui:
-  case AArch64::PRFUMi:
-    return true;
-  default:
-    return false;
-  }
-}
-
-//===----------------------------------------------------------------------===//
-// Guard elimination
-//===----------------------------------------------------------------------===//
+// Guard elimination.
 
 void AArch64::AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol) {
-  // Labels are potential branch targets, reset guard state
+  // Labels are potential branch targets, so reset the guard state. We can't
+  // emit here as we don't have Out/STI. The pending ADRP will be emitted at
+  // the start of the next instruction processing.
   ActiveGuard = false;
-  // Emit any pending ADRP as-is since the sequence was broken
-  // Note: We can't emit here as we don't have Out/STI. The pending ADRP
-  // will be emitted at the start of the next instruction processing.
 }
 
-//===----------------------------------------------------------------------===//
-// Instruction emission helpers
-//===----------------------------------------------------------------------===//
+// Instruction emission helpers.
 
 void AArch64::AArch64MCLFIRewriter::emitInst(const MCInst &Inst,
                                               MCStreamer &Out,
@@ -185,12 +159,12 @@ void AArch64::AArch64MCLFIRewriter::emitAddMask(MCRegister Dest,
                                                  MCRegister Src,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
-  // Guard elimination: skip if same guard already active
-  bool NoGuardElim = hasFeature(AArch64::FeatureNoLFIGuardElim, STI);
+  // Guard elimination: skip if same guard already active.
+  bool NoGuardElim = STI.hasFeature(AArch64::FeatureNoLFIGuardElim);
   if (!NoGuardElim && Dest == LFIAddrReg && ActiveGuard && ActiveGuardReg == Src)
     return;
 
-  // Emit: add Dest, LFIBaseReg, W(Src), uxtw
+  // add Dest, LFIBaseReg, W(Src), uxtw
   MCInst Inst;
   Inst.setOpcode(AArch64::ADDXrx);
   Inst.addOperand(MCOperand::createReg(Dest));
@@ -200,7 +174,6 @@ void AArch64::AArch64MCLFIRewriter::emitAddMask(MCRegister Dest,
       AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)));
   emitInst(Inst, Out, STI);
 
-  // Update guard state
   if (Dest == LFIAddrReg) {
     ActiveGuard = true;
     ActiveGuardReg = Src;
@@ -220,7 +193,7 @@ void AArch64::AArch64MCLFIRewriter::emitBranch(unsigned Opcode,
 void AArch64::AArch64MCLFIRewriter::emitMov(MCRegister Dest, MCRegister Src,
                                              MCStreamer &Out,
                                              const MCSubtargetInfo &STI) {
-  // mov Dest, Src  =>  orr Dest, xzr, Src
+  // orr Dest, xzr, Src
   MCInst Inst;
   Inst.setOpcode(AArch64::ORRXrs);
   Inst.addOperand(MCOperand::createReg(Dest));
@@ -285,22 +258,20 @@ void AArch64::AArch64MCLFIRewriter::emitMemRoW(unsigned Opcode,
                                                 MCRegister BaseReg,
                                                 MCStreamer &Out,
                                                 const MCSubtargetInfo &STI) {
-  // Emit: Op DataOp, [LFIBaseReg, W(BaseReg), uxtw]
-  // This is the RoW (register-offset-W) addressing mode that provides automatic
-  // sandboxing by zero-extending the 32-bit offset register.
+  // Emits: Op DataOp, [LFIBaseReg, W(BaseReg), uxtw]. This is the RoW
+  // (register-offset-W) addressing mode that provides automatic sandboxing by
+  // zero-extending the 32-bit offset register.
   MCInst Inst;
   Inst.setOpcode(Opcode);
   Inst.addOperand(DataOp);
   Inst.addOperand(MCOperand::createReg(LFIBaseReg));
   Inst.addOperand(MCOperand::createReg(getWRegFromXReg(BaseReg)));
-  Inst.addOperand(MCOperand::createImm(0)); // S bit (sign-extend = 0, means UXTW)
-  Inst.addOperand(MCOperand::createImm(0)); // Shift amount = 0 (unscaled)
+  Inst.addOperand(MCOperand::createImm(0)); // S bit (sign-extend = 0 means UXTW).
+  Inst.addOperand(MCOperand::createImm(0)); // Shift amount = 0 (unscaled).
   emitInst(Inst, Out, STI);
 }
 
-//===----------------------------------------------------------------------===//
-// Control flow rewriting
-//===----------------------------------------------------------------------===//
+// Control flow rewriting.
 
 static bool isAuthenticatedBranch(unsigned Opcode) {
   switch (Opcode) {
@@ -368,7 +339,6 @@ void AArch64::AArch64MCLFIRewriter::rewriteCall(const MCInst &Inst,
 void AArch64::AArch64MCLFIRewriter::rewriteReturn(const MCInst &Inst,
                                                    MCStreamer &Out,
                                                    const MCSubtargetInfo &STI) {
-  // Authenticated exception returns (ERETAA/ERETAB) are not supported.
   if (isExceptionReturn(Inst.getOpcode())) {
     error(Inst, "authenticated exception returns (ERETAA/ERETAB) are not "
                 "supported by LFI");
@@ -384,35 +354,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteReturn(const MCInst &Inst,
     emitInst(Inst, Out, STI);
 }
 
-//===----------------------------------------------------------------------===//
-// Memory access rewriting
-//===----------------------------------------------------------------------===//
-
-bool AArch64::AArch64MCLFIRewriter::canConvertToRoW(unsigned Opcode) const {
-  unsigned Shift;
-  return convertUiToRoW(Opcode) != AArch64::INSTRUCTION_LIST_END ||
-         convertPreToRoW(Opcode) != AArch64::INSTRUCTION_LIST_END ||
-         convertPostToRoW(Opcode) != AArch64::INSTRUCTION_LIST_END ||
-         convertRoXToRoW(Opcode, Shift) != AArch64::INSTRUCTION_LIST_END ||
-         convertRoWToRoW(Opcode, Shift) != AArch64::INSTRUCTION_LIST_END;
-}
-
-unsigned AArch64::AArch64MCLFIRewriter::convertToRoW(unsigned Opcode) const {
-  unsigned RoW = convertUiToRoW(Opcode);
-  if (RoW != AArch64::INSTRUCTION_LIST_END)
-    return RoW;
-  RoW = convertPreToRoW(Opcode);
-  if (RoW != AArch64::INSTRUCTION_LIST_END)
-    return RoW;
-  RoW = convertPostToRoW(Opcode);
-  if (RoW != AArch64::INSTRUCTION_LIST_END)
-    return RoW;
-  unsigned Shift;
-  RoW = convertRoXToRoW(Opcode, Shift);
-  if (RoW != AArch64::INSTRUCTION_LIST_END)
-    return RoW;
-  return convertRoWToRoW(Opcode, Shift);
-}
+// Memory access rewriting.
 
 bool AArch64::AArch64MCLFIRewriter::rewriteLoadStoreRoW(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
@@ -439,7 +381,7 @@ bool AArch64::AArch64MCLFIRewriter::rewriteLoadStoreRoW(
 
   // Case 2: Pre-index load/store.
   // ldr xN, [xM, #imm]! -> add xM, xM, #imm; ldr xN, [x27, wM, uxtw]
-  // Pre-index: update base BEFORE the access.
+  // Pre-index: update base before the access.
   if ((MemOp = convertPreToRoW(Op)) != AArch64::INSTRUCTION_LIST_END) {
     MCRegister BaseReg = Inst.getOperand(2).getReg();
     // SP-relative accesses with immediate offsets don't need sandboxing.
@@ -455,7 +397,7 @@ bool AArch64::AArch64MCLFIRewriter::rewriteLoadStoreRoW(
 
   // Case 3: Post-index load/store.
   // ldr xN, [xM], #imm -> ldr xN, [x27, wM, uxtw]; add xM, xM, #imm
-  // Post-index: update base AFTER the access.
+  // Post-index: update base after the access.
   if ((MemOp = convertPostToRoW(Op)) != AArch64::INSTRUCTION_LIST_END) {
     MCRegister BaseReg = Inst.getOperand(2).getReg();
     // SP-relative accesses with immediate offsets don't need sandboxing.
@@ -519,7 +461,6 @@ bool AArch64::AArch64MCLFIRewriter::rewriteLoadStoreRoW(
     return true;
   }
 
-  // Not a convertible instruction.
   return false;
 }
 
@@ -529,7 +470,6 @@ void AArch64::AArch64MCLFIRewriter::rewriteLoadStoreBasic(
   uint64_t TSFlags = Desc.TSFlags;
   unsigned Opcode = Inst.getOpcode();
 
-  // Check for PC-relative literal loads which are not supported.
   uint64_t AddrMode = TSFlags & AArch64::MemOpAddrModeMask;
   if (AddrMode == AArch64::MemOpAddrModeLiteral) {
     error(Inst, "PC-relative literal loads are not supported in LFI");
@@ -568,7 +508,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteLoadStoreBasic(
     // We need to demote it to the base indexed form.
     //
     // For pre-index:  ldp x0, x1, [x2, #16]! -> ldp x0, x1, [x28, #16]; add x2, x2, #128
-    // For post-index: ldp x0, x1, [x2], #16  -> ldp x0, x1, [x28];     add x2, x2, #128
+    // For post-index: ldp x0, x1, [x2], #16  -> ldp x0, x1, [x28];      add x2, x2, #128
     //
     // Note: The immediate in pair instructions is scaled, so #16 means 16*8=128 bytes for LDPXpre.
     MCInst NewInst;
@@ -681,8 +621,8 @@ void AArch64::AArch64MCLFIRewriter::rewriteLoadStore(const MCInst &Inst,
   // - Default: sandbox both loads and stores
   // - +no-lfi-loads: stores-only mode, skip loads
   // - +no-lfi-loads+no-lfi-stores: jumps-only mode, skip all memory
-  bool SkipLoads = hasFeature(AArch64::FeatureNoLFILoads, STI);
-  bool SkipStores = hasFeature(AArch64::FeatureNoLFIStores, STI);
+  bool SkipLoads = STI.hasFeature(AArch64::FeatureNoLFILoads);
+  bool SkipStores = STI.hasFeature(AArch64::FeatureNoLFIStores);
 
   if (IsLoad && SkipLoads) {
     emitInst(Inst, Out, STI);
@@ -701,9 +641,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteLoadStore(const MCInst &Inst,
   rewriteLoadStoreBasic(Inst, Out, STI);
 }
 
-//===----------------------------------------------------------------------===//
-// Register modification rewriting
-//===----------------------------------------------------------------------===//
+// Register modification rewriting.
 
 void AArch64::AArch64MCLFIRewriter::rewriteStackModification(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
@@ -717,8 +655,8 @@ void AArch64::AArch64MCLFIRewriter::rewriteStackModification(
   }
 
   // In jumps-only mode (+no-lfi-loads+no-lfi-stores), no stack sandboxing needed.
-  bool SkipLoads = hasFeature(AArch64::FeatureNoLFILoads, STI);
-  bool SkipStores = hasFeature(AArch64::FeatureNoLFIStores, STI);
+  bool SkipLoads = STI.hasFeature(AArch64::FeatureNoLFILoads);
+  bool SkipStores = STI.hasFeature(AArch64::FeatureNoLFIStores);
   if (SkipLoads && SkipStores) {
     emitInst(Inst, Out, STI);
     return;
@@ -760,7 +698,7 @@ void AArch64::AArch64MCLFIRewriter::emitValidationLoad(
   // If PAC authentication failed, the register contains a poisoned pointer
   // that will fault on this load.
 
-  if (hasFeature(AArch64::FeatureExecuteOnly, STI)) {
+  if (STI.hasFeature(AArch64::FeatureExecuteOnly)) {
     // In execute-only mode, we can't read from code addresses. Instead, we
     // extract the upper 32 bits (where PAC bits reside) and load from that
     // address - 8. If PAC authentication failed, the upper bits will be
@@ -808,7 +746,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteAutiasp(
 
   // If FEAT_FPAC is supported, authentication failure automatically faults,
   // so no explicit validation is needed.
-  if (hasFeature(AArch64::FeatureFPAC, STI))
+  if (STI.hasFeature(AArch64::FeatureFPAC))
     return;
 
   emitValidationLoad(AArch64::LR, Out, STI);
@@ -829,7 +767,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedReturn(
   emitInst(Auth, Out, STI);
 
   // Emit validation load if FEAT_FPAC is not supported.
-  if (!hasFeature(AArch64::FeatureFPAC, STI))
+  if (!STI.hasFeature(AArch64::FeatureFPAC))
     emitValidationLoad(AArch64::LR, Out, STI);
 
   // Guard LR and emit RET.
@@ -883,7 +821,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedBranch(
   emitInst(Auth, Out, STI);
 
   // Emit validation load if FEAT_FPAC is not supported.
-  if (!hasFeature(AArch64::FeatureFPAC, STI))
+  if (!STI.hasFeature(AArch64::FeatureFPAC))
     emitValidationLoad(TargetReg, Out, STI);
 
   // Guard the target and branch.
@@ -933,7 +871,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedCall(
   emitInst(Auth, Out, STI);
 
   // Emit validation load if FEAT_FPAC is not supported.
-  if (!hasFeature(AArch64::FeatureFPAC, STI))
+  if (!STI.hasFeature(AArch64::FeatureFPAC))
     emitValidationLoad(TargetReg, Out, STI);
 
   // Guard the target and call.
@@ -941,9 +879,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedCall(
   emitBranch(AArch64::BLR, LFIAddrReg, Out, STI);
 }
 
-//===----------------------------------------------------------------------===//
-// System instruction rewriting
-//===----------------------------------------------------------------------===//
+// System instruction rewriting.
 
 void AArch64::AArch64MCLFIRewriter::emitSyscall(MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
@@ -961,7 +897,7 @@ void AArch64::AArch64MCLFIRewriter::emitSyscall(MCStreamer &Out,
   // Call the runtime.
   emitBranch(AArch64::BLR, AArch64::LR, Out, STI);
 
-  // Restore LR with sandboxing.
+  // Restore LR with guard.
   emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
 }
 
@@ -1000,9 +936,7 @@ void AArch64::AArch64MCLFIRewriter::rewriteTLSWrite(const MCInst &Inst,
   emitInst(Store, Out, STI);
 }
 
-//===----------------------------------------------------------------------===//
-// ADRP optimization
-//===----------------------------------------------------------------------===//
+// ADRP optimization.
 
 bool AArch64::AArch64MCLFIRewriter::rewriteMatchedAdrp(const MCInst &Inst,
                                                         MCStreamer &Out,
@@ -1053,9 +987,7 @@ bool AArch64::AArch64MCLFIRewriter::rewriteMatchedAdrp(const MCInst &Inst,
   return false;
 }
 
-//===----------------------------------------------------------------------===//
-// Main rewriting logic
-//===----------------------------------------------------------------------===//
+// Main rewriting logic.
 
 void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
                                                    MCStreamer &Out,
@@ -1134,7 +1066,7 @@ void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
 
   // ADRP optimization: defer emission to check for matching load.
   if (Inst.getOpcode() == AArch64::ADRP &&
-      hasFeature(AArch64::FeatureLFIAdrpOpt, STI)) {
+      STI.hasFeature(AArch64::FeatureLFIAdrpOpt)) {
     PendingAdrp = Inst;
     return;
   }
@@ -1158,9 +1090,7 @@ bool AArch64::AArch64MCLFIRewriter::rewriteInst(const MCInst &Inst,
 
 namespace {
 
-//===----------------------------------------------------------------------===//
 // RoW (Register-offset-W) Opcode Conversion Tables
-//===----------------------------------------------------------------------===//
 //
 // These tables convert various load/store addressing modes to the
 // register-offset-W form ([X27, Wn, uxtw]) which provides sandboxing in a
@@ -1489,9 +1419,7 @@ static unsigned convertRoWToRoW(unsigned Op, unsigned &Shift) {
   }
 }
 
-//===----------------------------------------------------------------------===//
 // Pre/Post-Index Conversion Tables
-//===----------------------------------------------------------------------===//
 //
 // These functions convert pre/post-index instructions to their base indexed
 // form and provide the scaling factor for the immediate offset.
@@ -1538,7 +1466,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   IsPre = false;
   IsNoOffset = false;
   switch (Op) {
-  // LDP/STP pairs
+  // LDP/STP pairs.
   case AArch64::LDPDpost:
     return AArch64::LDPDi;
   case AArch64::LDPDpre:
@@ -1594,7 +1522,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   case AArch64::STPXpre:
     IsPre = true;
     return AArch64::STPXi;
-  // SIMD single structure post-index
+  // SIMD single structure post-index.
   case AArch64::LD1i8_POST:
     IsNoOffset = true;
     return AArch64::LD1i8;
@@ -1691,7 +1619,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   case AArch64::ST4i64_POST:
     IsNoOffset = true;
     return AArch64::ST4i64;
-  // SIMD replicate post-index
+  // SIMD replicate post-index.
   case AArch64::LD1Rv8b_POST:
     IsNoOffset = true;
     return AArch64::LD1Rv8b;
@@ -1788,7 +1716,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   case AArch64::LD4Rv2d_POST:
     IsNoOffset = true;
     return AArch64::LD4Rv2d;
-  // SIMD multiple structures post-index (One)
+  // SIMD multiple structures post-index (One).
   case AArch64::LD1Onev8b_POST:
     IsNoOffset = true;
     return AArch64::LD1Onev8b;
@@ -1837,7 +1765,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   case AArch64::ST1Onev2d_POST:
     IsNoOffset = true;
     return AArch64::ST1Onev2d;
-  // SIMD multiple structures post-index (Two)
+  // SIMD multiple structures post-index (Two).
   case AArch64::LD1Twov8b_POST:
     IsNoOffset = true;
     return AArch64::LD1Twov8b;
@@ -1886,7 +1814,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   case AArch64::ST1Twov2d_POST:
     IsNoOffset = true;
     return AArch64::ST1Twov2d;
-  // SIMD multiple structures post-index (Three)
+  // SIMD multiple structures post-index (Three).
   case AArch64::LD1Threev8b_POST:
     IsNoOffset = true;
     return AArch64::LD1Threev8b;
@@ -1935,7 +1863,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   case AArch64::ST1Threev2d_POST:
     IsNoOffset = true;
     return AArch64::ST1Threev2d;
-  // SIMD multiple structures post-index (Four)
+  // SIMD multiple structures post-index (Four).
   case AArch64::LD1Fourv8b_POST:
     IsNoOffset = true;
     return AArch64::LD1Fourv8b;
@@ -1984,7 +1912,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   case AArch64::ST1Fourv2d_POST:
     IsNoOffset = true;
     return AArch64::ST1Fourv2d;
-  // LD2/ST2 multiple structures
+  // LD2/ST2 multiple structures.
   case AArch64::LD2Twov8b_POST:
     IsNoOffset = true;
     return AArch64::LD2Twov8b;
@@ -2027,7 +1955,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   case AArch64::ST2Twov2d_POST:
     IsNoOffset = true;
     return AArch64::ST2Twov2d;
-  // LD3/ST3 multiple structures
+  // LD3/ST3 multiple structures.
   case AArch64::LD3Threev8b_POST:
     IsNoOffset = true;
     return AArch64::LD3Threev8b;
@@ -2070,7 +1998,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
   case AArch64::ST3Threev2d_POST:
     IsNoOffset = true;
     return AArch64::ST3Threev2d;
-  // LD4/ST4 multiple structures
+  // LD4/ST4 multiple structures.
   case AArch64::LD4Fourv8b_POST:
     IsNoOffset = true;
     return AArch64::LD4Fourv8b;
@@ -2123,7 +2051,7 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
 /// natural (implicit) offset.
 static int getSIMDNaturalOffset(unsigned Op) {
   switch (Op) {
-  // LD1/ST1 single structure
+  // LD1/ST1 single structure.
   case AArch64::LD1i8_POST:
   case AArch64::ST1i8_POST:
     return 1;
@@ -2136,7 +2064,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1i64_POST:
   case AArch64::ST1i64_POST:
     return 8;
-  // LD2/ST2 single structure
+  // LD2/ST2 single structure.
   case AArch64::LD2i8_POST:
   case AArch64::ST2i8_POST:
     return 2;
@@ -2149,7 +2077,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD2i64_POST:
   case AArch64::ST2i64_POST:
     return 16;
-  // LD3/ST3 single structure
+  // LD3/ST3 single structure.
   case AArch64::LD3i8_POST:
   case AArch64::ST3i8_POST:
     return 3;
@@ -2162,7 +2090,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD3i64_POST:
   case AArch64::ST3i64_POST:
     return 24;
-  // LD4/ST4 single structure
+  // LD4/ST4 single structure.
   case AArch64::LD4i8_POST:
   case AArch64::ST4i8_POST:
     return 4;
@@ -2175,7 +2103,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD4i64_POST:
   case AArch64::ST4i64_POST:
     return 32;
-  // LD1R
+  // LD1R.
   case AArch64::LD1Rv8b_POST:
   case AArch64::LD1Rv16b_POST:
     return 1;
@@ -2188,7 +2116,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1Rv1d_POST:
   case AArch64::LD1Rv2d_POST:
     return 8;
-  // LD2R
+  // LD2R.
   case AArch64::LD2Rv8b_POST:
   case AArch64::LD2Rv16b_POST:
     return 2;
@@ -2201,7 +2129,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD2Rv1d_POST:
   case AArch64::LD2Rv2d_POST:
     return 16;
-  // LD3R
+  // LD3R.
   case AArch64::LD3Rv8b_POST:
   case AArch64::LD3Rv16b_POST:
     return 3;
@@ -2214,7 +2142,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD3Rv1d_POST:
   case AArch64::LD3Rv2d_POST:
     return 24;
-  // LD4R
+  // LD4R.
   case AArch64::LD4Rv8b_POST:
   case AArch64::LD4Rv16b_POST:
     return 4;
@@ -2227,7 +2155,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD4Rv1d_POST:
   case AArch64::LD4Rv2d_POST:
     return 32;
-  // LD1/ST1 multiple structures (8b)
+  // LD1/ST1 multiple structures (8b).
   case AArch64::LD1Onev8b_POST:
   case AArch64::ST1Onev8b_POST:
     return 8;
@@ -2240,7 +2168,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1Fourv8b_POST:
   case AArch64::ST1Fourv8b_POST:
     return 32;
-  // LD1/ST1 multiple structures (16b)
+  // LD1/ST1 multiple structures (16b).
   case AArch64::LD1Onev16b_POST:
   case AArch64::ST1Onev16b_POST:
     return 16;
@@ -2253,7 +2181,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1Fourv16b_POST:
   case AArch64::ST1Fourv16b_POST:
     return 64;
-  // LD1/ST1 multiple structures (4h)
+  // LD1/ST1 multiple structures (4h).
   case AArch64::LD1Onev4h_POST:
   case AArch64::ST1Onev4h_POST:
     return 8;
@@ -2266,7 +2194,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1Fourv4h_POST:
   case AArch64::ST1Fourv4h_POST:
     return 32;
-  // LD1/ST1 multiple structures (8h)
+  // LD1/ST1 multiple structures (8h).
   case AArch64::LD1Onev8h_POST:
   case AArch64::ST1Onev8h_POST:
     return 16;
@@ -2279,7 +2207,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1Fourv8h_POST:
   case AArch64::ST1Fourv8h_POST:
     return 64;
-  // LD1/ST1 multiple structures (2s)
+  // LD1/ST1 multiple structures (2s).
   case AArch64::LD1Onev2s_POST:
   case AArch64::ST1Onev2s_POST:
     return 8;
@@ -2292,7 +2220,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1Fourv2s_POST:
   case AArch64::ST1Fourv2s_POST:
     return 32;
-  // LD1/ST1 multiple structures (4s)
+  // LD1/ST1 multiple structures (4s).
   case AArch64::LD1Onev4s_POST:
   case AArch64::ST1Onev4s_POST:
     return 16;
@@ -2305,7 +2233,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1Fourv4s_POST:
   case AArch64::ST1Fourv4s_POST:
     return 64;
-  // LD1/ST1 multiple structures (1d)
+  // LD1/ST1 multiple structures (1d).
   case AArch64::LD1Onev1d_POST:
   case AArch64::ST1Onev1d_POST:
     return 8;
@@ -2318,7 +2246,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1Fourv1d_POST:
   case AArch64::ST1Fourv1d_POST:
     return 32;
-  // LD1/ST1 multiple structures (2d)
+  // LD1/ST1 multiple structures (2d).
   case AArch64::LD1Onev2d_POST:
   case AArch64::ST1Onev2d_POST:
     return 16;
@@ -2331,7 +2259,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD1Fourv2d_POST:
   case AArch64::ST1Fourv2d_POST:
     return 64;
-  // LD2/ST2 multiple structures
+  // LD2/ST2 multiple structures.
   case AArch64::LD2Twov8b_POST:
   case AArch64::ST2Twov8b_POST:
     return 16;
@@ -2353,7 +2281,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD2Twov2d_POST:
   case AArch64::ST2Twov2d_POST:
     return 32;
-  // LD3/ST3 multiple structures
+  // LD3/ST3 multiple structures.
   case AArch64::LD3Threev8b_POST:
   case AArch64::ST3Threev8b_POST:
     return 24;
@@ -2375,7 +2303,7 @@ static int getSIMDNaturalOffset(unsigned Op) {
   case AArch64::LD3Threev2d_POST:
   case AArch64::ST3Threev2d_POST:
     return 48;
-  // LD4/ST4 multiple structures
+  // LD4/ST4 multiple structures.
   case AArch64::LD4Fourv8b_POST:
   case AArch64::ST4Fourv8b_POST:
     return 32;
