@@ -995,7 +995,7 @@ void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
 bool AArch64::AArch64MCLFIRewriter::rewriteInst(const MCInst &Inst,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
-  if (Guard)
+  if (!Enabled || Guard)
     return false;
   Guard = true;
 

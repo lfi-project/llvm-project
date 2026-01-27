@@ -29,9 +29,9 @@ class MCSymbol;
 class MCLFIRewriter {
 private:
   MCContext &Ctx;
-  bool Enabled = true;
 
 protected:
+  bool Enabled = true;
   std::unique_ptr<MCInstrInfo> InstInfo;
   std::unique_ptr<MCRegisterInfo> RegInfo;
 
@@ -44,7 +44,6 @@ public:
 
   void disable();
   void enable();
-  bool isEnabled();
 
   bool isCall(const MCInst &Inst) const;
   bool isBranch(const MCInst &Inst) const;
