@@ -41,6 +41,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
+#include "llvm/MC/MCLFI.h"
 #include "llvm/MC/MCSectionCOFF.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
@@ -886,6 +887,9 @@ bool X86AsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
 
 void X86AsmPrinter::emitStartOfAsmFile(Module &M) {
   const Triple &TT = TM.getTargetTriple();
+
+  if (TT.isLFI())
+    initializeLFIMCStreamer(*OutStreamer.get(), OutContext, TT);
 
   if (TT.isOSBinFormatELF()) {
     // Assemble feature flags that may require creation of a note section.

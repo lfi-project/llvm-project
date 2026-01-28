@@ -159,9 +159,9 @@ static bool isSyscall(const MCInst &Inst) {
 static bool isTLSRead(const MCInst &Inst) {
   return Inst.getOpcode() == X86::MOV64rm &&
          Inst.getOperand(1).getReg() == X86::NoRegister &&
-         Inst.getOperand(2).getImm() == 1 &&
+         Inst.getOperand(2).isImm() && Inst.getOperand(2).getImm() == 1 &&
          Inst.getOperand(3).getReg() == X86::NoRegister &&
-         Inst.getOperand(4).getImm() == 0 &&
+         Inst.getOperand(4).isImm() && Inst.getOperand(4).getImm() == 0 &&
          Inst.getOperand(5).getReg() == X86::FS;
 }
 
@@ -489,7 +489,7 @@ void X86::X86MCLFIRewriter::expandStackModification(MCRegister StackReg,
     // pop %r11
     // .bundle_lock
     // movl %r11d, %esp
-    // addq %r14, %rsp
+    // leaq (%rsp,%r14), %rsp
     // .bundle_unlock
     MCInst PopR11;
     PopR11.setOpcode(X86::POP64r);
@@ -504,12 +504,7 @@ void X86::X86MCLFIRewriter::expandStackModification(MCRegister StackReg,
     MovR11ToESP.addOperand(MCOperand::createReg(X86::R11D));
     Out.emitInstruction(MovR11ToESP, STI);
 
-    MCInst AddBase;
-    AddBase.setOpcode(X86::ADD64rr);
-    AddBase.addOperand(MCOperand::createReg(StackReg));
-    AddBase.addOperand(MCOperand::createReg(StackReg));
-    AddBase.addOperand(MCOperand::createReg(LFIBaseReg));
-    Out.emitInstruction(AddBase, STI);
+    emitStackFixup(StackReg, Out, STI);
 
     Out.emitBundleUnlock(STI);
     return;
@@ -615,7 +610,7 @@ void X86::X86MCLFIRewriter::emitSandboxMemOp(MCInst &Inst, int MemIdx,
 
   // Case 2: No base, absolute index with scale 1.
   if (Base.getReg() == 0 && isAbsoluteReg(Index.getReg()) &&
-      Scale.getImm() == 1) {
+      Scale.isImm() && Scale.getImm() == 1) {
     Base.setReg(getReg64(Index.getReg()));
     Index.setReg(0);
     return;
@@ -694,7 +689,7 @@ void X86::X86MCLFIRewriter::emitSandboxMemOp(MCInst &Inst, int MemIdx,
   Lea.addOperand(Segment);
 
   // Special case: no base and scale is 1.
-  if (Base.getReg() == 0 && Scale.getImm() == 1) {
+  if (Base.getReg() == 0 && Scale.isImm() && Scale.getImm() == 1) {
     Lea.getOperand(1).setReg(IndexReg64);
     Lea.getOperand(3).setReg(0);
   }
@@ -720,7 +715,7 @@ static bool willEmitSandboxInsts(const MCInst &Inst, int Idx) {
   if (isAbsoluteReg(Base.getReg()) && Index.getReg() == 0) {
     return false;
   } else if (Base.getReg() == 0 && isAbsoluteReg(Index.getReg()) &&
-             Scale.getImm() == 1) {
+             Scale.isImm() && Scale.getImm() == 1) {
     return false;
   }
 
@@ -1367,21 +1362,6 @@ static void demoteInst(MCInst &Inst, const MCInstrInfo &InstInfo) {
 // Main dispatch logic
 //===----------------------------------------------------------------------===//
 
-static MCInst replaceReg(const MCInst &Inst, MCRegister Dest, MCRegister Src) {
-  MCInst New;
-  New.setOpcode(Inst.getOpcode());
-  New.setLoc(Inst.getLoc());
-  for (unsigned I = 0; I < Inst.getNumOperands(); ++I) {
-    const MCOperand &Op = Inst.getOperand(I);
-    if (Op.isReg() && Op.getReg() == Src) {
-      New.addOperand(MCOperand::createReg(Dest));
-    } else {
-      New.addOperand(Op);
-    }
-  }
-  return New;
-}
-
 void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                                            const MCSubtargetInfo &STI,
                                            bool EmitPrefixes) {
@@ -1393,10 +1373,8 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
 
   // Check for modification of reserved register R14.
   if (mayModifyRegister(Inst, LFIBaseReg)) {
-    Out.getContext().reportWarning(
-        Inst.getLoc(), "deleting modification of reserved LFI register");
-    MCInst New = replaceReg(Inst, LFIScratchReg, LFIBaseReg);
-    return doRewriteInst(New, Out, STI, EmitPrefixes);
+    error(Inst, "illegal modification of reserved LFI register %r14");
+    return;
   }
 
   // Dispatch based on instruction type.
@@ -1412,7 +1390,7 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
     expandReturn(Inst, Out, STI);
   } else if (isStringOperation(Inst)) {
     expandStringOperation(Inst, Out, STI, EmitPrefixes);
-  } else if (mayModifyRegister(Inst, X86::RSP)) {
+  } else if (explicitlyModifiesRegister(Inst, X86::RSP)) {
     expandStackModification(X86::RSP, Inst, Out, STI, EmitPrefixes);
   } else if (xchgStackReg(Inst) != X86::NoRegister) {
     expandStackModification(X86::RSP, Inst, Out, STI, EmitPrefixes);

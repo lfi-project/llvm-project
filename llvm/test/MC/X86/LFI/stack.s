@@ -90,3 +90,25 @@ leaq (%rax,%rcx), %rsp
 // CHECK-NEXT: leal (%eax,%ecx), %esp
 // CHECK-NEXT: leaq (%rsp,%r14), %rsp
 // CHECK-NEXT: .bundle_unlock
+
+// Pop into RSP (special case)
+popq %rsp
+// CHECK:      popq %r11
+// CHECK-NEXT: .bundle_lock
+// CHECK-NEXT: movl %r11d, %esp
+// CHECK-NEXT: leaq (%rsp,%r14), %rsp
+// CHECK-NEXT: .bundle_unlock
+
+// Regular push/pop should NOT trigger stack modification handling
+// (they implicitly modify RSP but don't have RSP as an explicit destination)
+pushq %rax
+// CHECK: pushq %rax
+
+popq %rax
+// CHECK: popq %rax
+
+pushq %rbx
+// CHECK: pushq %rbx
+
+popq %rbx
+// CHECK: popq %rbx

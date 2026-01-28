@@ -55,6 +55,7 @@ public:
   bool mayStore(const MCInst &Inst) const;
 
   bool mayModifyRegister(const MCInst &Inst, MCRegister Reg) const;
+  bool explicitlyModifiesRegister(const MCInst &Inst, MCRegister Reg) const;
 
   virtual ~MCLFIRewriter() = default;
   virtual bool rewriteInst(const MCInst &Inst, MCStreamer &Out,

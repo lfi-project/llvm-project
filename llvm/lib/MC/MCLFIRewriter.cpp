@@ -15,6 +15,7 @@
 
 #include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
 
@@ -57,5 +58,16 @@ bool MCLFIRewriter::mayStore(const MCInst &Inst) const {
 bool MCLFIRewriter::mayModifyRegister(const MCInst &Inst,
                                       MCRegister Reg) const {
   return InstInfo->get(Inst.getOpcode()).hasDefOfPhysReg(Inst, Reg, *RegInfo);
+}
+
+bool MCLFIRewriter::explicitlyModifiesRegister(const MCInst &Inst,
+                                               MCRegister Reg) const {
+  const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
+  for (unsigned i = 0; i < Desc.NumDefs; ++i) {
+    if (Desc.operands()[i].OperandType == MCOI::OPERAND_REGISTER &&
+        RegInfo->isSubRegisterEq(Reg, Inst.getOperand(i).getReg()))
+      return true;
+  }
+  return false;
 }
 } // namespace llvm

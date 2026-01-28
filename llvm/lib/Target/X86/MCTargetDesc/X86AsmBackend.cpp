@@ -23,6 +23,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCObjectStreamer.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -473,6 +474,13 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
     S.MCObjectStreamer::emitInstruction(Inst, STI);
     return;
   }
+
+  // Handle LFI rewriting before emitInstructionBegin/End to avoid bundle
+  // lock state inconsistency. The rewriter may call emitBundleUnlock() which
+  // would change the lock state between Begin and End calls.
+  if (S.getLFIRewriter() && S.getLFIRewriter()->isEnabled() &&
+      S.getLFIRewriter()->rewriteInst(Inst, S, STI))
+    return;
 
   auto &Backend = static_cast<X86AsmBackend &>(S.getAssembler().getBackend());
   Backend.emitInstructionBegin(S, Inst, STI);

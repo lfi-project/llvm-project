@@ -52,8 +52,12 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
 
   MF.setAlignment(llvm::Align(32));
 
-  if (!UnalignedDirectBranches)
-    return Modified;
+  if (!UnalignedDirectBranches) {
+    for (MachineBasicBlock &MBB : MF) {
+      MBB.setAlignment(llvm::Align(32));
+    }
+    return true;
+  }
 
   // When UnalignedDirectBranches is enabled, we only align basic blocks that
   // are targets of indirect branches. This includes address-taken blocks,
