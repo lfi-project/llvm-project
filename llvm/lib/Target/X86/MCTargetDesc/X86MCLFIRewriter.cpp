@@ -33,6 +33,10 @@ static const MCRegister LFIBaseReg = X86::R14;
 static const MCRegister LFIScratchReg = X86::R11;
 static const MCRegister LFIBaseSeg = X86::GS;
 
+// Byte offset into the virtual register file (pointed to by R15) where the
+// thread pointer is stored.
+static const int TPOffset = 32;
+
 // Forward declarations for helper functions.
 static MCRegister getReg64(MCRegister Reg);
 static MCRegister getReg32(MCRegister Reg);
@@ -372,8 +376,8 @@ void X86::X86MCLFIRewriter::expandSyscall(const MCInst &Inst, MCStreamer &Out,
 
 void X86::X86MCLFIRewriter::expandTLSRead(const MCInst &Inst, MCStreamer &Out,
                                            const MCSubtargetInfo &STI) {
-  // Rewrite: movq %fs:0, %rX  ->  movq (%r15), %rX
-  // R15 points to a virtual register file with the thread pointer at offset 0.
+  // Rewrite: movq %fs:0, %rX  ->  movq TP_OFFSET(%r15), %rX
+  // R15 points to a virtual register file with the thread pointer at TPOffset.
   MCRegister DestReg = Inst.getOperand(0).getReg();
 
   MCInst Mov;
@@ -382,7 +386,7 @@ void X86::X86MCLFIRewriter::expandTLSRead(const MCInst &Inst, MCStreamer &Out,
   Mov.addOperand(MCOperand::createReg(X86::R15));    // Base
   Mov.addOperand(MCOperand::createImm(1));           // Scale
   Mov.addOperand(MCOperand::createReg(X86::NoRegister)); // Index
-  Mov.addOperand(MCOperand::createImm(0));           // Displacement
+  Mov.addOperand(MCOperand::createImm(TPOffset));    // Displacement
   Mov.addOperand(MCOperand::createReg(X86::NoRegister)); // Segment
   Out.emitInstruction(Mov, STI);
 }
@@ -541,16 +545,16 @@ void X86::X86MCLFIRewriter::prepareSandboxMemOp(MCInst &Inst, int MemIdx,
   MCOperand &Segment = Inst.getOperand(MemIdx + 4);
 
   // Handle %fs segment for TLS accesses.
-  // Load thread pointer from (%r15) into scratch, then use normal addressing.
+  // Load thread pointer from TP_OFFSET(%r15) into scratch, then use normal addressing.
   if (Segment.getReg() == X86::FS) {
-    // Load thread pointer: movq (%r15), %r11
+    // Load thread pointer: movq TP_OFFSET(%r15), %r11
     MCInst LoadTP;
     LoadTP.setOpcode(X86::MOV64rm);
     LoadTP.addOperand(MCOperand::createReg(LFIScratchReg));
     LoadTP.addOperand(MCOperand::createReg(X86::R15));       // Base
     LoadTP.addOperand(MCOperand::createImm(1));              // Scale
     LoadTP.addOperand(MCOperand::createReg(X86::NoRegister)); // Index
-    LoadTP.addOperand(MCOperand::createImm(0));              // Displacement
+    LoadTP.addOperand(MCOperand::createImm(TPOffset));       // Displacement
     LoadTP.addOperand(MCOperand::createReg(X86::NoRegister)); // Segment
     Out.emitInstruction(LoadTP, STI);
 
