@@ -353,7 +353,6 @@ private:
 #endif
   };
   GPRs _registers;
-  uint64_t _scs_ptr = 0; // Shadow call stack frame counter (pseudo-register)
 #if defined(_WIN64)
   v128 _xmm[16];
 #endif
@@ -373,8 +372,6 @@ inline bool Registers_x86_64::validRegister(int regNum) const {
   if (regNum == UNW_REG_IP)
     return true;
   if (regNum == UNW_REG_SP)
-    return true;
-  if (regNum == UNW_X86_64_SCS_PTR)
     return true;
   if (regNum < 0)
     return false;
@@ -422,8 +419,6 @@ inline uint64_t Registers_x86_64::getRegister(int regNum) const {
     return _registers.__r14;
   case UNW_X86_64_R15:
     return _registers.__r15;
-  case UNW_X86_64_SCS_PTR:
-    return _scs_ptr;
   }
   _LIBUNWIND_ABORT("unsupported x86_64 register");
 }
@@ -484,9 +479,6 @@ inline void Registers_x86_64::setRegister(int regNum, uint64_t value) {
     return;
   case UNW_X86_64_R15:
     _registers.__r15 = value;
-    return;
-  case UNW_X86_64_SCS_PTR:
-    _scs_ptr = value;
     return;
   }
   _LIBUNWIND_ABORT("unsupported x86_64 register");
