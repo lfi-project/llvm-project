@@ -246,6 +246,14 @@ private:
 
   bool needsDwarfCFI(const MachineFunction &MF) const;
 
+  void emitShadowCallStackPrologue(MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator MBBI,
+                                   const DebugLoc &DL,
+                                   bool NeedsDwarfCFI) const;
+  void emitShadowCallStackEpilogue(MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator MBBI,
+                                   const DebugLoc &DL) const;
+
   uint64_t calculateMaxStackAlign(const MachineFunction &MF) const;
 
   /// Emit target stack probe as a call to a helper function

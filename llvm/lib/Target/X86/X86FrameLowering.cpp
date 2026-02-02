@@ -1584,6 +1584,124 @@ static bool isOpcodeRep(unsigned Opcode) {
   - for 32-bit code, substitute %e?? registers for %r??
 */
 
+void X86FrameLowering::emitShadowCallStackPrologue(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
+    const DebugLoc &DL, bool NeedsDwarfCFI) const {
+  // Shadow call stack prologue:
+  //   movq  %gs:0, %r10          # r10 = shadow call stack pointer
+  //   movq  (%rsp), %r11         # r11 = return address
+  //   movq  %r11, (%r10)         # store return address to shadow stack
+  //   addq  $8, %gs:0            # advance shadow call stack pointer
+
+  // movq %gs:0, %r10
+  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm), X86::R10)
+      .addReg(0)        // base
+      .addImm(1)        // scale
+      .addReg(0)        // index
+      .addImm(0)        // displacement
+      .addReg(X86::GS)  // segment
+      .setMIFlag(MachineInstr::FrameSetup);
+
+  // movq (%rsp), %r11
+  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm), X86::R11)
+      .addReg(X86::RSP) // base
+      .addImm(1)        // scale
+      .addReg(0)        // index
+      .addImm(0)        // displacement
+      .addReg(0)        // segment
+      .setMIFlag(MachineInstr::FrameSetup);
+
+  // movq %r11, (%r10)
+  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr))
+      .addReg(X86::R10) // base
+      .addImm(1)        // scale
+      .addReg(0)        // index
+      .addImm(0)        // displacement
+      .addReg(0)        // segment
+      .addReg(X86::R11) // source
+      .setMIFlag(MachineInstr::FrameSetup);
+
+  // addq $8, %gs:0
+  BuildMI(MBB, MBBI, DL, TII.get(X86::ADD64mi8))
+      .addReg(0)        // base
+      .addImm(1)        // scale
+      .addReg(0)        // index
+      .addImm(0)        // displacement
+      .addReg(X86::GS)  // segment
+      .addImm(8)        // immediate
+      .setMIFlag(MachineInstr::FrameSetup);
+
+  if (NeedsDwarfCFI) {
+    // Emit a CFI instruction that causes 8 to be subtracted from the value of
+    // the shadow call stack pointer when unwinding past this frame.
+    // Use DW_CFA_val_expression with a platform-specific register or
+    // Emit a CFI escape that increments the SCS pseudo-register (DWARF reg 33)
+    // by 1. The unwinder uses this counter to know how many SCS frames were
+    // unwound, and adjusts %gs:0 by subtracting counter * 8 before resuming.
+    // Encoding: DW_CFA_val_expression 33 { DW_OP_bregx 33 1 }
+    static const char CFIInst[] = {
+        dwarf::DW_CFA_val_expression,
+        33,   // DWARF register 33 (SCS pseudo-register), ULEB128
+        3,    // expression length
+        static_cast<char>(unsigned(dwarf::DW_OP_bregx)),
+        33,   // register 33, ULEB128
+        1,    // offset +1 (SLEB128)
+    };
+    BuildCFI(MBB, MBBI, DL,
+             MCCFIInstruction::createEscape(nullptr,
+                                            StringRef(CFIInst, sizeof(CFIInst))),
+             MachineInstr::FrameSetup);
+  }
+}
+
+void X86FrameLowering::emitShadowCallStackEpilogue(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI,
+    const DebugLoc &DL) const {
+  // Shadow call stack epilogue:
+  //   movq  %gs:0, %r10          # r10 = shadow call stack pointer
+  //   movq  -8(%r10), %r11       # r11 = return address from shadow stack
+  //   subq  $8, %gs:0            # retract shadow call stack pointer
+  //   movq  %r11, (%rsp)         # overwrite return address on stack
+
+  // movq %gs:0, %r10
+  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm), X86::R10)
+      .addReg(0)        // base
+      .addImm(1)        // scale
+      .addReg(0)        // index
+      .addImm(0)        // displacement
+      .addReg(X86::GS)  // segment
+      .setMIFlag(MachineInstr::FrameDestroy);
+
+  // movq -8(%r10), %r11
+  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm), X86::R11)
+      .addReg(X86::R10) // base
+      .addImm(1)        // scale
+      .addReg(0)        // index
+      .addImm(-8)       // displacement
+      .addReg(0)        // segment
+      .setMIFlag(MachineInstr::FrameDestroy);
+
+  // subq $8, %gs:0
+  BuildMI(MBB, MBBI, DL, TII.get(X86::SUB64mi8))
+      .addReg(0)        // base
+      .addImm(1)        // scale
+      .addReg(0)        // index
+      .addImm(0)        // displacement
+      .addReg(X86::GS)  // segment
+      .addImm(8)        // immediate
+      .setMIFlag(MachineInstr::FrameDestroy);
+
+  // movq %r11, (%rsp)
+  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr))
+      .addReg(X86::RSP) // base
+      .addImm(1)        // scale
+      .addReg(0)        // index
+      .addImm(0)        // displacement
+      .addReg(0)        // segment
+      .addReg(X86::R11) // source
+      .setMIFlag(MachineInstr::FrameDestroy);
+}
+
 void X86FrameLowering::emitPrologue(MachineFunction &MF,
                                     MachineBasicBlock &MBB) const {
   assert(&STI == &MF.getSubtarget<X86Subtarget>() &&
@@ -1620,6 +1738,10 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   // to determine the end of the prologue.
   DebugLoc DL;
   Register ArgBaseReg;
+
+  // Emit shadow call stack prologue before any frame setup.
+  if (X86FI->needsShadowCallStackPrologueEpilogue(MF))
+    emitShadowCallStackPrologue(MBB, MBBI, DL, NeedsDwarfCFI);
 
   // Emit extra prolog for argument stack slot reference.
   if (auto *MI = X86FI->getStackPtrSaveMI()) {
@@ -2648,6 +2770,27 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
       // Check for possible merge with preceding ADD instruction.
       int64_t Offset = mergeSPAdd(MBB, Terminator, -Delta, true);
       emitSPUpdate(MBB, Terminator, DL, Offset, /*InEpilogue=*/true);
+    }
+  }
+
+  // Emit shadow call stack epilogue.
+  if (X86FI->needsShadowCallStackPrologueEpilogue(MF)) {
+    if (Terminator != MBB.end() &&
+        isTailCallOpcode(Terminator->getOpcode())) {
+      // For tail calls, just pop our shadow stack entry. The tail-called
+      // function's ret will match our caller's shadow stack entry.
+      // subq $8, %gs:0
+      BuildMI(MBB, Terminator, DL, TII.get(X86::SUB64mi8))
+          .addReg(0)        // base
+          .addImm(1)        // scale
+          .addReg(0)        // index
+          .addImm(0)        // displacement
+          .addReg(X86::GS)  // segment
+          .addImm(8)        // immediate
+          .setMIFlag(MachineInstr::FrameDestroy);
+    } else {
+      // For normal returns, restore the return address from the shadow stack.
+      emitShadowCallStackEpilogue(MBB, Terminator, DL);
     }
   }
 

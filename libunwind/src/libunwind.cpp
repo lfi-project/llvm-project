@@ -278,6 +278,20 @@ _LIBUNWIND_HIDDEN int __unw_resume(unw_cursor_t *cursor) {
   __asan_handle_no_return();
 #endif
   AbstractUnwindCursor *co = (AbstractUnwindCursor *)cursor;
+#if defined(_LIBUNWIND_TARGET_X86_64) && defined(__x86_64__)
+  // Adjust the software shadow call stack pointer (%gs:0) if we unwound
+  // past any SCS-instrumented frames. The SCS_PTR pseudo-register counts
+  // the number of SCS frames unwound; subtract that many entries.
+  if (co->validReg(UNW_X86_64_SCS_PTR)) {
+    unw_word_t scsFrames = co->getReg(UNW_X86_64_SCS_PTR);
+    if (scsFrames > 0) {
+      unw_word_t scsPtr;
+      __asm__ volatile("movq %%gs:0, %0" : "=r"(scsPtr));
+      scsPtr -= scsFrames * 8;
+      __asm__ volatile("movq %0, %%gs:0" : : "r"(scsPtr) : "memory");
+    }
+  }
+#endif
   co->jumpto();
   return UNW_EUNSPEC;
 }

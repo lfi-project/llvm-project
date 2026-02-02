@@ -8,6 +8,7 @@
 
 #include "X86MachineFunctionInfo.h"
 #include "X86RegisterInfo.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 
@@ -31,6 +32,17 @@ MachineFunctionInfo *X86MachineFunctionInfo::clone(
 void X86MachineFunctionInfo::initializeBaseYamlFields(
     const yaml::X86MachineFunctionInfo &YamlMFI) {
   AMXProgModel = YamlMFI.AMXProgModel;
+}
+
+bool X86MachineFunctionInfo::needsShadowCallStackPrologueEpilogue(
+    const MachineFunction &MF) const {
+  if (!MF.getFunction().hasFnAttribute(Attribute::ShadowCallStack))
+    return false;
+
+  // Only instrument non-leaf functions (functions that make calls).
+  // Leaf functions have minimal attack surface since no stores between
+  // entry and ret can overflow into the return address.
+  return MF.getFrameInfo().hasCalls();
 }
 
 void X86MachineFunctionInfo::anchor() { }

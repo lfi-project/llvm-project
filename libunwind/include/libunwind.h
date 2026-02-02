@@ -295,6 +295,10 @@ enum {
   UNW_X86_64_XMM13 = 30,
   UNW_X86_64_XMM14 = 31,
   UNW_X86_64_XMM15 = 32,
+  // Pseudo-register used to count shadow call stack frames during unwinding.
+  // Not a real hardware register; used by the unwinder to track how many
+  // SCS-instrumented frames have been unwound so %gs:0 can be adjusted.
+  UNW_X86_64_SCS_PTR = 33,
 };
 
 

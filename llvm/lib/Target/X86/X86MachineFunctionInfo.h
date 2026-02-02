@@ -335,6 +335,8 @@ public:
     return PreallocatedArgOffsets[Id];
   }
 
+  bool needsShadowCallStackPrologueEpilogue(const MachineFunction &MF) const;
+
   bool getFPClobberedByCall() const { return FPClobberedByCall; }
   void setFPClobberedByCall(bool C) { FPClobberedByCall = C; }
 
