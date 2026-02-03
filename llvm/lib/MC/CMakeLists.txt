@@ -31,6 +31,7 @@ add_llvm_component_library(LLVMMC
   MCInstrAnalysis.cpp
   MCInstrDesc.cpp
   MCInstrInfo.cpp
+  MCHLFI.cpp
   MCLFI.cpp
   MCLFIRewriter.cpp
   MCLabel.cpp

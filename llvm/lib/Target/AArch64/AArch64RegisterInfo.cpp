@@ -450,6 +450,14 @@ AArch64RegisterInfo::getStrictlyReservedRegs(const MachineFunction &MF) const {
     }
   }
 
+  if (MF.getSubtarget<AArch64Subtarget>().isHLFI()) {
+    // HLFI reserves:
+    // - x27: sandbox base register
+    // - x25: HLFI context pointer (unsafe stack, CFI table, etc.)
+    markSuperRegs(Reserved, AArch64::W27);
+    markSuperRegs(Reserved, AArch64::W25);
+  }
+
   for (size_t i = 0; i < AArch64::GPR32commonRegClass.getNumRegs(); ++i) {
     if (MF.getSubtarget<AArch64Subtarget>().isXRegisterReserved(i))
       markSuperRegs(Reserved, AArch64::GPR32commonRegClass.getRegister(i));

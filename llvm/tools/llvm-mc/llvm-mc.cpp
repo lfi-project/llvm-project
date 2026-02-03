@@ -21,6 +21,7 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCHLFI.h"
 #include "llvm/MC/MCLFI.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCObjectWriter.h"
@@ -631,6 +632,9 @@ int main(int argc, char **argv) {
     if (T.isLFI()) {
       Str->initSections(NoExecStack, *STI);
       initializeLFIMCStreamer(*Str.get(), Ctx, T);
+    } else if (T.isHLFI()) {
+      Str->initSections(NoExecStack, *STI);
+      initializeHLFIMCStreamer(*Str.get(), Ctx, T);
     }
 
   } else if (FileType == OFT_Null) {
@@ -658,6 +662,9 @@ int main(int argc, char **argv) {
     if (T.isLFI()) {
       Str->initSections(NoExecStack, *STI);
       initializeLFIMCStreamer(*Str.get(), Ctx, T);
+    } else if (T.isHLFI()) {
+      Str->initSections(NoExecStack, *STI);
+      initializeHLFIMCStreamer(*Str.get(), Ctx, T);
     }
 
     Str->emitVersionForTarget(TheTriple, VersionTuple(), nullptr,

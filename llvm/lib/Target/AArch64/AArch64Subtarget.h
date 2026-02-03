@@ -310,6 +310,7 @@ public:
   bool isTargetFuchsia() const { return TargetTriple.isOSFuchsia(); }
   bool isWindowsArm64EC() const { return TargetTriple.isWindowsArm64EC(); }
   bool isLFI() const { return TargetTriple.isLFI(); }
+  bool isHLFI() const { return TargetTriple.isHLFI(); }
 
   bool isTargetCOFF() const { return TargetTriple.isOSBinFormatCOFF(); }
   bool isTargetELF() const { return TargetTriple.isOSBinFormatELF(); }

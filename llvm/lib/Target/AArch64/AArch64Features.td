@@ -1071,6 +1071,12 @@ def FeatureLFIAdrpOpt : SubtargetFeature<"lfi-adrp-opt",
   "LFIAdrpOpt", "true",
   "Enable LFI ADRP optimization (redirect ADRP to x28)">;
 
+// HLFI (High-Level LFI) feature.
+// HLFI does most sandboxing at LLVM IR level, only system calls and TLS
+// accesses are rewritten at the MC level.
+def FeatureHLFI : SubtargetFeature<"hlfi", "HLFI", "true",
+  "Enable HLFI (High-Level LFI) MC rewriting for syscalls and TLS">;
+
 // Only intended to be used by disassemblers.
 def FeatureAll
     : SubtargetFeature<"all", "IsAll", "true", "Enable all instructions">;

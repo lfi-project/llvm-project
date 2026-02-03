@@ -1,5 +1,6 @@
 add_llvm_component_library(LLVMInstrumentation
   AddressSanitizer.cpp
+  HLFI.cpp
   AllocToken.cpp
   BoundsChecking.cpp
   CGProfile.cpp
