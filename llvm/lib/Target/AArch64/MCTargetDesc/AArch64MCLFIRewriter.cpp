@@ -25,9 +25,14 @@
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
+
+static cl::opt<bool> AArch64LFIRtcallTLS(
+    "aarch64-lfi-rtcall-tls", cl::Hidden, cl::init(false),
+    cl::desc("Use runtime calls for TLS access instead of dedicated register"));
 
 #define DEBUG_TYPE "aarch64-lfi-rewriter"
 
@@ -204,6 +209,65 @@ void AArch64::AArch64MCLFIRewriter::emitMov(MCRegister Dest, MCRegister Src,
   Inst.addOperand(MCOperand::createReg(Src));
   Inst.addOperand(MCOperand::createImm(0));
   emitInst(Inst, Out, STI);
+}
+
+void AArch64::AArch64MCLFIRewriter::emitSwap(MCRegister Reg1, MCRegister Reg2,
+                                              MCStreamer &Out,
+                                              const MCSubtargetInfo &STI) {
+  // XOR-based register swap without using a temporary.
+  // eor Reg1, Reg1, Reg2
+  // eor Reg2, Reg1, Reg2
+  // eor Reg1, Reg1, Reg2
+  MCInst Inst1, Inst2, Inst3;
+  Inst1.setOpcode(AArch64::EORXrs);
+  Inst1.addOperand(MCOperand::createReg(Reg1));
+  Inst1.addOperand(MCOperand::createReg(Reg1));
+  Inst1.addOperand(MCOperand::createReg(Reg2));
+  Inst1.addOperand(MCOperand::createImm(0));
+  emitInst(Inst1, Out, STI);
+
+  Inst2.setOpcode(AArch64::EORXrs);
+  Inst2.addOperand(MCOperand::createReg(Reg2));
+  Inst2.addOperand(MCOperand::createReg(Reg1));
+  Inst2.addOperand(MCOperand::createReg(Reg2));
+  Inst2.addOperand(MCOperand::createImm(0));
+  emitInst(Inst2, Out, STI);
+
+  Inst3.setOpcode(AArch64::EORXrs);
+  Inst3.addOperand(MCOperand::createReg(Reg1));
+  Inst3.addOperand(MCOperand::createReg(Reg1));
+  Inst3.addOperand(MCOperand::createReg(Reg2));
+  Inst3.addOperand(MCOperand::createImm(0));
+  emitInst(Inst3, Out, STI);
+}
+
+void AArch64::AArch64MCLFIRewriter::emitLFIRuntimeCall(unsigned Offset,
+                                                        MCStreamer &Out,
+                                                        const MCSubtargetInfo &STI) {
+  // Runtime call sequence for syscalls/TLS:
+  // 1. Save LR to scratch register
+  // 2. Load handler address from [x27, #offset] (scaled offset for 64-bit)
+  // 3. Call the handler via BLR
+  // 4. Guard LR from scratch register
+  //
+  // Offset values: 0 = syscall, 1 = TLS read, 2 = TLS write
+
+  // Save LR to scratch.
+  emitMov(LFIScratchReg, AArch64::LR, Out, STI);
+
+  // Load handler address: ldr lr, [x27, #offset]
+  MCInst Load;
+  Load.setOpcode(AArch64::LDRXui);
+  Load.addOperand(MCOperand::createReg(AArch64::LR));
+  Load.addOperand(MCOperand::createReg(LFIBaseReg));
+  Load.addOperand(MCOperand::createImm(Offset));
+  emitInst(Load, Out, STI);
+
+  // Call the runtime.
+  emitBranch(AArch64::BLR, AArch64::LR, Out, STI);
+
+  // Restore LR with guard.
+  emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
 }
 
 void AArch64::AArch64MCLFIRewriter::emitAddImm(MCRegister Dest, MCRegister Src,
@@ -841,30 +905,59 @@ void AArch64::AArch64MCLFIRewriter::rewriteSyscall(const MCInst &Inst,
 void AArch64::AArch64MCLFIRewriter::rewriteTLSRead(const MCInst &Inst,
                                                     MCStreamer &Out,
                                                     const MCSubtargetInfo &STI) {
-  // mrs xN, tpidr_el0  =>  ldr xN, [x25, #TP]
-  // TP is the offset into the virtual register file where thread pointer is stored.
   MCRegister DestReg = Inst.getOperand(0).getReg();
 
-  MCInst Load;
-  Load.setOpcode(AArch64::LDRXui);
-  Load.addOperand(MCOperand::createReg(DestReg));
-  Load.addOperand(MCOperand::createReg(LFITLSReg));
-  Load.addOperand(MCOperand::createImm(LFITPOffset));
-  emitInst(Load, Out, STI);
+  if (AArch64LFIRtcallTLS) {
+    // Runtime call mode: call TLS read handler which returns value in X0.
+    // Handler address is at [x27, #8] (offset 1, scaled for 64-bit load).
+    if (DestReg == AArch64::X0) {
+      // Destination is X0, just call runtime.
+      emitLFIRuntimeCall(1, Out, STI);
+    } else {
+      // Save X0 to destination register, call runtime, then swap.
+      // After swap: X0 restored, DestReg has TLS value.
+      emitMov(DestReg, AArch64::X0, Out, STI);
+      emitLFIRuntimeCall(1, Out, STI);
+      emitSwap(AArch64::X0, DestReg, Out, STI);
+    }
+  } else {
+    // Register mode: mrs xN, tpidr_el0  =>  ldr xN, [x25, #TP]
+    // TP is the offset into the virtual register file where thread pointer is stored.
+    MCInst Load;
+    Load.setOpcode(AArch64::LDRXui);
+    Load.addOperand(MCOperand::createReg(DestReg));
+    Load.addOperand(MCOperand::createReg(LFITLSReg));
+    Load.addOperand(MCOperand::createImm(LFITPOffset));
+    emitInst(Load, Out, STI);
+  }
 }
 
 void AArch64::AArch64MCLFIRewriter::rewriteTLSWrite(const MCInst &Inst,
                                                      MCStreamer &Out,
                                                      const MCSubtargetInfo &STI) {
-  // msr tpidr_el0, xN  =>  str xN, [x25, #TP]
   MCRegister SrcReg = Inst.getOperand(1).getReg();
 
-  MCInst Store;
-  Store.setOpcode(AArch64::STRXui);
-  Store.addOperand(MCOperand::createReg(SrcReg));
-  Store.addOperand(MCOperand::createReg(LFITLSReg));
-  Store.addOperand(MCOperand::createImm(LFITPOffset));
-  emitInst(Store, Out, STI);
+  if (AArch64LFIRtcallTLS) {
+    // Runtime call mode: call TLS write handler which takes value from X0.
+    // Handler address is at [x27, #16] (offset 2, scaled for 64-bit load).
+    if (SrcReg == AArch64::X0) {
+      // Source is X0, just call runtime.
+      emitLFIRuntimeCall(2, Out, STI);
+    } else {
+      // Swap source with X0, call runtime, then swap back.
+      emitSwap(SrcReg, AArch64::X0, Out, STI);
+      emitLFIRuntimeCall(2, Out, STI);
+      emitSwap(AArch64::X0, SrcReg, Out, STI);
+    }
+  } else {
+    // Register mode: msr tpidr_el0, xN  =>  str xN, [x25, #TP]
+    MCInst Store;
+    Store.setOpcode(AArch64::STRXui);
+    Store.addOperand(MCOperand::createReg(SrcReg));
+    Store.addOperand(MCOperand::createReg(LFITLSReg));
+    Store.addOperand(MCOperand::createImm(LFITPOffset));
+    emitInst(Store, Out, STI);
+  }
 }
 
 void AArch64::AArch64MCLFIRewriter::rewriteDCZVA(const MCInst &Inst,

@@ -88,6 +88,10 @@ private:
                   const MCSubtargetInfo &STI);
   void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out,
                const MCSubtargetInfo &STI);
+  void emitSwap(MCRegister Reg1, MCRegister Reg2, MCStreamer &Out,
+                const MCSubtargetInfo &STI);
+  void emitLFIRuntimeCall(unsigned Offset, MCStreamer &Out,
+                          const MCSubtargetInfo &STI);
   void emitAddImm(MCRegister Dest, MCRegister Src, int64_t Imm, MCStreamer &Out,
                   const MCSubtargetInfo &STI);
   void emitAddReg(MCRegister Dest, MCRegister Src1, MCRegister Src2,
