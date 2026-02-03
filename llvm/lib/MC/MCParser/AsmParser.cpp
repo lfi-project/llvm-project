@@ -119,6 +119,7 @@ private:
   SourceMgr::DiagHandlerTy SavedDiagHandler;
   void *SavedDiagContext;
   std::unique_ptr<MCAsmParserExtension> PlatformParser;
+  std::unique_ptr<MCAsmParserExtension> LFIParser;
   SMLoc StartTokLoc;
   std::optional<SMLoc> CFIStartProcLoc;
 
@@ -747,8 +748,8 @@ extern MCAsmParserExtension *createWasmAsmParser();
 
 AsmParser::AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
                      const MCAsmInfo &MAI, unsigned CB = 0)
-    : MCAsmParser(Ctx, Out, SM, MAI), CurBuffer(CB ? CB : SM.getMainFileID()),
-      MacrosEnabledFlag(true) {
+    : MCAsmParser(Ctx, Out, SM, MAI), LFIParser(nullptr),
+      CurBuffer(CB ? CB : SM.getMainFileID()), MacrosEnabledFlag(true) {
   HadError = false;
   // Save the old handler.
   SavedDiagHandler = SrcMgr.getDiagHandler();
@@ -790,6 +791,10 @@ AsmParser::AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
   }
 
   PlatformParser->Initialize(*this);
+  if (Out.getLFIRewriter()) {
+    LFIParser.reset(createLFIAsmParser(Out.getLFIRewriter()));
+    LFIParser->Initialize(*this);
+  }
   initializeDirectiveKindMap();
   initializeCVDefRangeTypeMap();
 }
