@@ -69,6 +69,14 @@ static Value *guardPtr(IRBuilder<> &B, Value *Base, Value *Ptr) {
   return PtrMasked;
 }
 
+static Value *condPtr(IRBuilder<> &B, Value *Lower, Value *Upper, Value *Ptr) {
+  Value *Addr64 = B.CreatePtrToInt(Ptr, B.getInt64Ty());
+  Value *LTUpper = B.CreateICmpULT(Addr64, Upper);
+  Value *GTLower = B.CreateICmpUGT(Addr64, Lower);
+  Value *InRange = B.CreateAnd(LTUpper, GTLower);
+  return InRange;
+}
+
 static Value *makeResultSafe(Instruction *I, Value *Base, ValueToValueMapTy &SafeValues) {
   if (!I->getType()->isPointerTy())
     return I;
@@ -85,6 +93,20 @@ bool WeakLFI::run() {
   IRBuilder<> BF(&Entry, Entry.begin());
   Value *Base = readRegister(BF, "x27");
 
+  const size_t GuardSize = 128 * 1024;
+  const size_t BoxSize = 4ULL * 1024 * 1024 * 1024;
+
+  // Base - GuardSize
+  Value *GuardSizeConst = BF.getInt64(GuardSize);
+  Value *GuardLower = BF.CreateSub(Base, GuardSizeConst);
+  // Base + 4GiB + GuardSize
+  Value *BoxGuardSizeConst = BF.getInt64(BoxSize + GuardSize);
+  Value *GuardUpper = BF.CreateAdd(Base, BoxGuardSizeConst);
+
+  Value *Lower = Base;
+  Value *BoxSizeConst = BF.getInt64(BoxSize);
+  Value *Upper = BF.CreateAdd(Base, BoxSizeConst);
+
   ValueToValueMapTy SafeValues;
 
   // Collect loads and stores.
@@ -95,12 +117,38 @@ bool WeakLFI::run() {
   for (Instruction *I : ToInstrument) {
     if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
       IRBuilder<> B(LI);
+
       Value *Ptr = LI->getPointerOperand();
-      LI->setOperand(0, guardPtr(B, Base, Ptr));
+      Value *WC = B.CreateIntrinsic(Intrinsic::experimental_widenable_condition, {}, nullptr, "widenable_cond");
+      Value *Cond = B.CreateAnd(condPtr(B, GuardUpper, GuardLower, Ptr), WC);
+
+      BasicBlock *OldBlock = LI->getParent();
+      BasicBlock *GuardBlock = OldBlock->splitBasicBlock(LI, "");
+      BasicBlock *RestBlock = GuardBlock->splitBasicBlock(LI, "");
+
+
+      Instruction *OldTerm = OldBlock->getTerminator();
+      OldTerm->eraseFromParent();
+      B.SetInsertPoint(OldBlock);
+      B.CreateCondBr(Cond, RestBlock, GuardBlock);
+
+      // BasicBlock *GuardBlock = BasicBlock::Create(LI->getContext(), "", OldBlock->getParent(), OldBlock);
+      // IRBuilder<> GB(GuardBlock);
+      // GB.CreateBr(RestBlock);
+
+      B.SetInsertPoint(LI->getParent(), ++BasicBlock::iterator(LI));
+      Function *FnAssume =
+          Intrinsic::getOrInsertDeclaration(LI->getModule(), Intrinsic::assume);
+      B.CreateCall(FnAssume, condPtr(B, Lower, Upper, Ptr));
     } else if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
       IRBuilder<> B(SI);
-      Value *Ptr = SI->getPointerOperand();
-      SI->setOperand(1, guardPtr(B, Base, Ptr));
+
+
+
+      B.SetInsertPoint(LI->getParent(), ++BasicBlock::iterator(LI));
+      Function *FnAssume =
+          Intrinsic::getOrInsertDeclaration(LI->getModule(), Intrinsic::assume);
+      B.CreateCall(FnAssume, condPtr(B, Lower, Upper, LI->getPointerOperand()));
     }
   }
 

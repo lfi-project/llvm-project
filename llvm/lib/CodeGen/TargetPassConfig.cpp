@@ -978,8 +978,9 @@ void TargetPassConfig::addISelPrepare() {
   // Add both the safe stack and the stack protection passes: each of them will
   // only protect functions that have corresponding attributes.
   addPass(createSafeStackPass());
-  if (TM->getTargetTriple().isLFI())
+  if (TM->getTargetTriple().isLFI()) {
     addPass(createWeakLFIPass());
+  }
   addPass(createStackProtectorPass());
 
   if (PrintISelInput)
