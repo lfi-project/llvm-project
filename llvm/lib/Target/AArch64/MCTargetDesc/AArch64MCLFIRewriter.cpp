@@ -102,6 +102,16 @@ static bool isPACIASP(const MCInst &Inst) {
           Inst.getOperand(0).getImm() == 25);
 }
 
+static bool isDCZVA(const MCInst &Inst) {
+  // DC ZVA is encoded as SYSxt with op1=3, Cn=7, Cm=4, op2=1
+  if (Inst.getOpcode() != AArch64::SYSxt)
+    return false;
+  return Inst.getOperand(0).getImm() == 3 &&  // op1
+         Inst.getOperand(1).getImm() == 7 &&  // Cn
+         Inst.getOperand(2).getImm() == 4 &&  // Cm
+         Inst.getOperand(3).getImm() == 1;    // op2
+}
+
 } // anonymous namespace
 
 bool AArch64::AArch64MCLFIRewriter::mayModifyStack(const MCInst &Inst) const {
@@ -857,6 +867,26 @@ void AArch64::AArch64MCLFIRewriter::rewriteTLSWrite(const MCInst &Inst,
   emitInst(Store, Out, STI);
 }
 
+void AArch64::AArch64MCLFIRewriter::rewriteDCZVA(const MCInst &Inst,
+                                                  MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI) {
+  // dc zva, xN  =>  add x28, x27, wN, uxtw; dc zva, x28
+  MCRegister AddrReg = Inst.getOperand(4).getReg();
+
+  // Guard the address register.
+  emitAddMask(LFIAddrReg, AddrReg, Out, STI);
+
+  // Emit DC ZVA with x28.
+  MCInst NewInst;
+  NewInst.setOpcode(AArch64::SYSxt);
+  NewInst.addOperand(Inst.getOperand(0)); // op1
+  NewInst.addOperand(Inst.getOperand(1)); // Cn
+  NewInst.addOperand(Inst.getOperand(2)); // Cm
+  NewInst.addOperand(Inst.getOperand(3)); // op2
+  NewInst.addOperand(MCOperand::createReg(LFIAddrReg));
+  emitInst(NewInst, Out, STI);
+}
+
 // ADRP optimization.
 
 bool AArch64::AArch64MCLFIRewriter::rewriteMatchedAdrp(const MCInst &Inst,
@@ -931,6 +961,9 @@ void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
 
   if (isTLSWrite(Inst))
     return rewriteTLSWrite(Inst, Out, STI);
+
+  if (isDCZVA(Inst))
+    return rewriteDCZVA(Inst, Out, STI);
 
   // Authenticated PAC instructions are expanded to their component operations.
   if (isAuthenticatedReturn(Inst.getOpcode()))
