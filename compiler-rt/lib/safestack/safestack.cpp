@@ -308,7 +308,12 @@ void __safestack_init() {
     size = limit.rlim_cur;
 
   // Allocate unsafe stack for main thread
+#ifndef __LFI__
   void *addr = unsafe_stack_alloc(size, guard);
+#else
+  // LFI runtime should have allocated the unsafe stack at this point.
+  void *addr = __get_unsafe_stack_ptr();
+#endif
   unsafe_stack_setup(addr, size, guard);
 
   // Setup the cleanup handler
