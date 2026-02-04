@@ -25,6 +25,7 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
 
@@ -642,6 +643,19 @@ void X86TargetLowering::insertSSPDeclarations(Module &M) const {
 
 Value *
 X86TargetLowering::getSafeStackPointerLocation(IRBuilderBase &IRB) const {
+  // LFI stores the unsafe stack pointer at offset 8 in the context register
+  // (R15), which points to a virtual register file. We use inline assembly
+  // wrapped with .lfi_rewrite_disable/.lfi_rewrite_enable to prevent the LFI
+  // rewriter from modifying the access to %r15.
+  if (Subtarget.isLFI()) {
+    FunctionType *AsmFnTy = FunctionType::get(IRB.getPtrTy(), false);
+    InlineAsm *Asm = InlineAsm::get(
+        AsmFnTy,
+        ".lfi_rewrite_disable\n\tleaq 8(%r15), $0\n\t.lfi_rewrite_enable",
+        "=r", /*hasSideEffects=*/true, /*isAlignStack=*/false);
+    return IRB.CreateCall(AsmFnTy, Asm);
+  }
+
   // Android provides a fixed TLS slot for the SafeStack pointer. See the
   // definition of TLS_SLOT_SAFESTACK in
   // https://android.googlesource.com/platform/bionic/+/master/libc/private/bionic_tls.h
