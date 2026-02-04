@@ -481,6 +481,8 @@ def FeatureNoLFIStores : SubtargetFeature<"no-lfi-stores", "NoLFIStores", "true"
   "Disable LFI sandboxing for store instructions">;
 def FeatureNoLFISegue : SubtargetFeature<"no-lfi-segue", "NoLFISegue", "true",
   "Disable LFI use of GS segment for memory sandboxing">;
+def FeatureLFISafeStack : SubtargetFeature<"lfi-safestack", "LFISafeStack", "true",
+  "Make LFI compatible with SafeStack">;
 
 //===----------------------------------------------------------------------===//
 // X86 Subtarget Tuning features

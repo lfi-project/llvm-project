@@ -78,6 +78,11 @@ bool X86::X86MCLFIRewriter::hasNoLFIStores(const MCSubtargetInfo &STI) const {
   return hasFeature(FeatureBitset({X86::FeatureNoLFIStores}), STI);
 }
 
+// TODO: is there any way to detect if safestack has run?
+bool X86::X86MCLFIRewriter::hasSafeStack(const MCSubtargetInfo &STI) const {
+  return hasFeature(FeatureBitset({X86::FeatureLFISafeStack}), STI);
+}
+
 //===----------------------------------------------------------------------===//
 // Register conversion helpers
 //===----------------------------------------------------------------------===//
@@ -479,6 +484,14 @@ static void emitStackFixup(MCRegister StackReg, MCStreamer &Out,
   Out.emitInstruction(Lea, STI);
 }
 
+void X86::X86MCLFIRewriter::expandSafeStackModification(MCRegister StackReg,
+                                                     const MCInst &Inst,
+                                                     MCStreamer &Out,
+                                                     const MCSubtargetInfo &STI,
+                                                     bool EmitPrefixes) {
+  return;
+}
+
 void X86::X86MCLFIRewriter::expandStackModification(MCRegister StackReg,
                                                      const MCInst &Inst,
                                                      MCStreamer &Out,
@@ -487,6 +500,9 @@ void X86::X86MCLFIRewriter::expandStackModification(MCRegister StackReg,
   bool JumpsOnly = hasNoLFILoads(STI) && hasNoLFIStores(STI);
   if (JumpsOnly)
     return emitInstruction(Inst, Out, STI, EmitPrefixes);
+
+  if (hasSafeStack(STI))
+    return expandSafeStackModification(StackReg, Inst, Out, STI, EmitPrefixes);
 
   if (Inst.getOpcode() == X86::POP64r) {
     // Transform pop %rsp into:

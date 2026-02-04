@@ -52,6 +52,9 @@ private:
   /// Check if STI is in jumps-only mode (no load/store sandboxing).
   bool hasNoLFIStores(const MCSubtargetInfo &STI) const;
 
+  /// Check if STI has enabled SafeStack.
+  bool hasSafeStack(const MCSubtargetInfo &STI) const;
+
   /// Main dispatch function for instruction rewriting.
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI, bool EmitPrefixes);
@@ -94,6 +97,10 @@ private:
 
   /// Expand instructions that explicitly modify the stack pointer.
   void expandStackModification(MCRegister StackReg, const MCInst &Inst,
+                               MCStreamer &Out, const MCSubtargetInfo &STI,
+                               bool EmitPrefixes);
+
+  void expandSafeStackModification(MCRegister StackReg, const MCInst &Inst,
                                MCStreamer &Out, const MCSubtargetInfo &STI,
                                bool EmitPrefixes);
 
