@@ -651,7 +651,7 @@ X86TargetLowering::getSafeStackPointerLocation(IRBuilderBase &IRB) const {
     FunctionType *AsmFnTy = FunctionType::get(IRB.getPtrTy(), false);
     InlineAsm *Asm = InlineAsm::get(
         AsmFnTy,
-        ".lfi_rewrite_disable\n\tleaq 8(%r15), $0\n\t.lfi_rewrite_enable",
+        ".lfi_rewrite_disable\n\tmovq 8(%r15), $0\n\t.lfi_rewrite_enable",
         "=r", /*hasSideEffects=*/true, /*isAlignStack=*/false);
     return IRB.CreateCall(AsmFnTy, Asm);
   }
@@ -673,6 +673,35 @@ X86TargetLowering::getSafeStackPointerLocation(IRBuilderBase &IRB) const {
   }
 
   return TargetLowering::getSafeStackPointerLocation(IRB);
+}
+
+Value *
+X86TargetLowering::getSafeStackPointer(IRBuilderBase &IRB) const {
+  if (Subtarget.isLFI()) {
+    FunctionType *AsmFnTy = FunctionType::get(IRB.getPtrTy(), false);
+    InlineAsm *Asm = InlineAsm::get(
+        AsmFnTy,
+        ".lfi_rewrite_disable\n\tmovq 8(%r15), $0\n\t.lfi_rewrite_enable",
+        "=r", /*hasSideEffects=*/true, /*isAlignStack=*/false);
+    return IRB.CreateCall(AsmFnTy, Asm);
+  }
+  return nullptr;
+}
+
+Value *X86TargetLowering::setSafeStackPointer(IRBuilderBase &IRB, Value *Pointer) const {
+  if (Subtarget.isLFI()) {
+    FunctionType *AsmFnTy = FunctionType::get(
+        IRB.getVoidTy(),
+        {IRB.getPtrTy()},
+        false);
+    InlineAsm *Asm = InlineAsm::get(
+        AsmFnTy,
+        ".lfi_rewrite_disable\n\tmovq $0, 8(%r15)\n\t.lfi_rewrite_enable",
+        "r", /*hasSideEffects=*/true, /*isAlignStack=*/false);
+    IRB.CreateCall(AsmFnTy, Asm, {Pointer});
+    return Pointer;
+  }
+  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//

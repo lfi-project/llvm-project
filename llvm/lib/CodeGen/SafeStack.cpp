@@ -115,6 +115,7 @@ class SafeStack {
   Type *Int32Ty;
 
   Value *UnsafeStackPtr = nullptr;
+  bool UseDirectAccess = false;
 
   /// Unsafe stack alignment. Each stack frame must ensure that the stack is
   /// aligned to this value. We need to re-align the unsafe stack if the
@@ -448,7 +449,11 @@ SafeStack::createStackRestorePoints(IRBuilder<> &IRB, Function &F,
     IRB.SetInsertPoint(I->getNextNode());
     Value *CurrentTop =
         DynamicTop ? IRB.CreateLoad(StackPtrTy, DynamicTop) : StaticTop;
-    IRB.CreateStore(CurrentTop, UnsafeStackPtr);
+    if (UseDirectAccess)
+      TL.setSafeStackPointer(IRB, CurrentTop);
+    else
+      IRB.CreateStore(CurrentTop, UnsafeStackPtr);
+
   }
 
   return DynamicTop;
@@ -655,7 +660,10 @@ Value *SafeStack::moveStaticAllocasToUnsafeStack(
   Value *StaticTop =
       IRB.CreatePtrAdd(BasePointer, ConstantInt::get(Int32Ty, -FrameSize),
                        "unsafe_stack_static_top");
-  IRB.CreateStore(StaticTop, UnsafeStackPtr);
+  if (UseDirectAccess)
+    TL.setSafeStackPointer(IRB, StaticTop);
+  else
+    IRB.CreateStore(StaticTop, UnsafeStackPtr);
   return StaticTop;
 }
 
@@ -676,8 +684,10 @@ void SafeStack::moveDynamicAllocasToUnsafeStack(
     uint64_t TySize = DL.getTypeAllocSize(Ty);
     Value *Size = IRB.CreateMul(ArraySize, ConstantInt::get(IntPtrTy, TySize));
 
-    Value *SP = IRB.CreatePtrToInt(IRB.CreateLoad(StackPtrTy, UnsafeStackPtr),
-                                   IntPtrTy);
+    Value *CurrentStackPtr = UseDirectAccess ? TL.getSafeStackPointer(IRB)
+                                             : IRB.CreateLoad(StackPtrTy, UnsafeStackPtr);
+    Value *SP = IRB.CreatePtrToInt(CurrentStackPtr, IntPtrTy);
+
     SP = IRB.CreateSub(SP, Size);
 
     // Align the SP value to satisfy the AllocaInst, type and stack alignments.
@@ -690,7 +700,11 @@ void SafeStack::moveDynamicAllocasToUnsafeStack(
         StackPtrTy);
 
     // Save the stack pointer.
-    IRB.CreateStore(NewTop, UnsafeStackPtr);
+    if (UseDirectAccess)
+      TL.setSafeStackPointer(IRB, NewTop);
+    else
+      IRB.CreateStore(NewTop, UnsafeStackPtr);
+
     if (DynamicTop)
       IRB.CreateStore(NewTop, DynamicTop);
 
@@ -712,16 +726,28 @@ void SafeStack::moveDynamicAllocasToUnsafeStack(
 
       if (II->getIntrinsicID() == Intrinsic::stacksave) {
         IRBuilder<> IRB(II);
-        Instruction *LI = IRB.CreateLoad(StackPtrTy, UnsafeStackPtr);
-        LI->takeName(II);
-        II->replaceAllUsesWith(LI);
-        II->eraseFromParent();
+        Value *StackPtr;
+        if (UseDirectAccess) {
+          StackPtr = TL.getSafeStackPointer(IRB);
+          II->replaceAllUsesWith(StackPtr);
+          II->eraseFromParent();
+        } else {
+          Instruction *LI = IRB.CreateLoad(StackPtrTy, UnsafeStackPtr);
+          LI->takeName(II);
+          II->replaceAllUsesWith(LI);
+          II->eraseFromParent();
+        }
       } else if (II->getIntrinsicID() == Intrinsic::stackrestore) {
         IRBuilder<> IRB(II);
-        Instruction *SI = IRB.CreateStore(II->getArgOperand(0), UnsafeStackPtr);
-        SI->takeName(II);
-        assert(II->use_empty());
-        II->eraseFromParent();
+        if (UseDirectAccess) {
+          TL.setSafeStackPointer(IRB, II->getArgOperand(0));
+          II->eraseFromParent();
+        } else {
+          Instruction *SI = IRB.CreateStore(II->getArgOperand(0), UnsafeStackPtr);
+          SI->takeName(II);
+          assert(II->use_empty());
+          II->eraseFromParent();
+        }
       }
     }
   }
@@ -739,6 +765,8 @@ bool SafeStack::ShouldInlinePointerAddress(CallInst &CI) {
 }
 
 void SafeStack::TryInlinePointerAddress() {
+  if (!UnsafeStackPtr && UseDirectAccess)
+    return;
   auto *CI = dyn_cast<CallInst>(UnsafeStackPtr);
   if (!CI)
     return;
@@ -798,26 +826,40 @@ bool SafeStack::run() {
   if (DISubprogram *SP = F.getSubprogram())
     IRB.SetCurrentDebugLocation(
         DILocation::get(SP->getContext(), SP->getScopeLine(), 0, SP));
-  if (SafeStackUsePointerAddress) {
-    const char *SafestackPointerAddressName =
-        TL.getLibcallName(RTLIB::SAFESTACK_POINTER_ADDRESS);
-    if (!SafestackPointerAddressName) {
-      F.getContext().emitError(
-          "no libcall available for safestack pointer address");
-      return false;
+
+  Instruction *BasePointer = nullptr;
+  Value *DirectPtr = TL.getSafeStackPointer(IRB);
+  if (DirectPtr) {
+    // Direct access mode: get/setSafeStackPointer return/set values directly
+    UseDirectAccess = true;
+    BasePointer = cast<Instruction>(DirectPtr);
+    BasePointer->setName("unsafe_stack_ptr");
+  } else {
+    // Location-based mode: traditional approach
+    UseDirectAccess = false;
+
+    if (SafeStackUsePointerAddress) {
+      const char *SafestackPointerAddressName =
+          TL.getLibcallName(RTLIB::SAFESTACK_POINTER_ADDRESS);
+      if (!SafestackPointerAddressName) {
+        F.getContext().emitError(
+            "no libcall available for safestack pointer address");
+        return false;
+      }
+
+      FunctionCallee Fn = F.getParent()->getOrInsertFunction(
+          SafestackPointerAddressName, IRB.getPtrTy(0));
+      UnsafeStackPtr = IRB.CreateCall(Fn);
+    } else {
+      UnsafeStackPtr = TL.getSafeStackPointerLocation(IRB);
     }
 
-    FunctionCallee Fn = F.getParent()->getOrInsertFunction(
-        SafestackPointerAddressName, IRB.getPtrTy(0));
-    UnsafeStackPtr = IRB.CreateCall(Fn);
-  } else {
-    UnsafeStackPtr = TL.getSafeStackPointerLocation(IRB);
+    // Load the current stack pointer (we'll also use it as a base pointer).
+    // FIXME: use a dedicated register for it ?
+    BasePointer =
+        IRB.CreateLoad(StackPtrTy, UnsafeStackPtr, false, "unsafe_stack_ptr");
   }
 
-  // Load the current stack pointer (we'll also use it as a base pointer).
-  // FIXME: use a dedicated register for it ?
-  Instruction *BasePointer =
-      IRB.CreateLoad(StackPtrTy, UnsafeStackPtr, false, "unsafe_stack_ptr");
   assert(BasePointer->getType() == StackPtrTy);
 
   AllocaInst *StackGuardSlot = nullptr;
@@ -856,7 +898,10 @@ bool SafeStack::run() {
   // Restore the unsafe stack pointer before each return.
   for (Instruction *RI : Returns) {
     IRB.SetInsertPoint(RI);
-    IRB.CreateStore(BasePointer, UnsafeStackPtr);
+    if (UseDirectAccess)
+      TL.setSafeStackPointer(IRB, BasePointer);
+    else
+      IRB.CreateStore(BasePointer, UnsafeStackPtr);
   }
 
   TryInlinePointerAddress();

@@ -2170,6 +2170,9 @@ public:
   /// Returns the target-specific address of the unsafe stack pointer.
   virtual Value *getSafeStackPointerLocation(IRBuilderBase &IRB) const;
 
+  virtual Value *getSafeStackPointer(IRBuilderBase &IRB) const { return nullptr; }
+  virtual Value *setSafeStackPointer(IRBuilderBase &IRB, Value *Pointer) const { return nullptr; }
+
   /// Returns the name of the symbol used to emit stack probes or the empty
   /// string if not applicable.
   virtual bool hasStackProbeSymbol(const MachineFunction &MF) const { return false; }
