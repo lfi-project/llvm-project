@@ -489,7 +489,7 @@ void X86::X86MCLFIRewriter::expandSafeStackModification(MCRegister StackReg,
                                                      MCStreamer &Out,
                                                      const MCSubtargetInfo &STI,
                                                      bool EmitPrefixes) {
-  return;
+  return emitInstruction(Inst, Out, STI, EmitPrefixes);
 }
 
 void X86::X86MCLFIRewriter::expandStackModification(MCRegister StackReg,
