@@ -128,7 +128,18 @@ inline void unsafe_stack_setup(void *start, size_t size, size_t guard) {
   void *stack_ptr = (char *)start + size;
   SFS_CHECK((((size_t)stack_ptr) & (kStackAlign - 1)) == 0);
 
+#ifdef __LFI__
+  // Write unsafe stack pointer to ctxreg[1] at offset 8 from r15
+  // This is thread-local because each thread has its own r15 pointing to its ctxreg
+  __asm__ volatile(
+      ".lfi_rewrite_disable\n\t"
+      "movq %0, 8(%%r15)\n\t"
+      ".lfi_rewrite_enable"
+      :: "r"(stack_ptr) : "memory");
+#else
   __safestack_unsafe_stack_ptr = stack_ptr;
+#endif
+
   unsafe_stack_start = start;
   unsafe_stack_size = size;
   unsafe_stack_guard = guard;
@@ -307,14 +318,35 @@ void __safestack_init() {
   if (getrlimit(RLIMIT_STACK, &limit) == 0 && limit.rlim_cur != RLIM_INFINITY)
     size = limit.rlim_cur;
 
+  void *addr = nullptr;
+
   // Allocate unsafe stack for main thread
-#ifndef __LFI__
-  void *addr = unsafe_stack_alloc(size, guard);
+#ifdef __LFI__
+  // For main thread: LFI runtime pre-allocates unsafe stack before program entry
+  // (because musl init code may be SafeStack-instrumented)
+  // Check if already allocated by reading from ctxreg[1]
+  __asm__ volatile(
+      ".lfi_rewrite_disable\n\t"
+      "movq 8(%%r15), %0\n\t"
+      ".lfi_rewrite_enable"
+      : "=r"(addr) :: "memory");
+
+  if (addr != nullptr) {
+    // LFI runtime pre-allocated - just update metadata
+    // TODO: match the exact size/guard with LFI runtime
+    guard = 1 << 12;
+    size = 1 << 20;
+    unsafe_stack_setup(addr, size, guard);
+  } else {
+    // Fallback: allocate ourselves if runtime didn't do it
+    // This shouldn't happen for main thread, but provides safety
+    addr = unsafe_stack_alloc(size, guard);
+    unsafe_stack_setup(addr, size, guard);
+  }
 #else
-  // LFI runtime should have allocated the unsafe stack at this point.
-  void *addr = __get_unsafe_stack_ptr();
-#endif
+  addr = unsafe_stack_alloc(size, guard);
   unsafe_stack_setup(addr, size, guard);
+#endif
 
   // Setup the cleanup handler
   pthread_key_create(&thread_cleanup_key, thread_cleanup_handler);
