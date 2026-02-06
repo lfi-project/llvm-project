@@ -17,15 +17,15 @@ movq %rax, -8(%rsp)
 // Move to RSP
 movq %rdi, %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: and $0xfffffffffff00000, %rsp
-// CHECK-NEXT: and $0xfffff, %rdi
+// CHECK-NEXT: andq $-1048576, %rsp
+// CHECK-NEXT: andq $1048575, %rdi
 // CHECK-NEXT: addq %rdi, %rsp
 // CHECK-NEXT: .bundle_unlock
 
 movq %rax, %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: and $0xfffffffffff00000, %rsp
-// CHECK-NEXT: and $0xfffff, %rax
+// CHECK-NEXT: andq $-1048576, %rsp
+// CHECK-NEXT: andq $1048575, %rax
 // CHECK-NEXT: addq %rax, %rsp
 // CHECK-NEXT: .bundle_unlock
 
@@ -33,59 +33,59 @@ movq %rax, %rsp
 addq %rax, %rsp
 // CHECK:      .bundle_lock
 // CHECK-NEXT: movq %rsp, %r11
-// CHECK-NEXT: andq $0xfffffffffff00000, %r11
+// CHECK-NEXT: andq $-1048576, %r11
 // CHECK-NEXT: addq %rax, %rsp
-// CHECK-NEXT: andq $0xfffff, %rsp
+// CHECK-NEXT: andq $1048575, %rsp
 // CHECK-NEXT: leaq (%rsp,%r11), %rsp
 // CHECK-NEXT: .bundle_unlock
 
 addq %rcx, %rsp
 // CHECK:      .bundle_lock
 // CHECK-NEXT: movq %rsp, %r11
-// CHECK-NEXT: andq $0xfffffffffff00000, %r11
+// CHECK-NEXT: andq $-1048576, %r11
 // CHECK-NEXT: addq %rcx, %rsp
-// CHECK-NEXT: andq $0xfffff, %rsp
+// CHECK-NEXT: andq $1048575, %rsp
 // CHECK-NEXT: leaq (%rsp,%r11), %rsp
 // CHECK-NEXT: .bundle_unlock
 
 // Add immediate to RSP
 addq $8, %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: addq $8, $rsp
+// CHECK-NEXT: addq $8, %rsp
 // CHECK-NEXT: movq (%rsp), %r11
 // CHECK-NEXT: .bundle_unlock
 
 addq $16, %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: addq $16, $rsp
+// CHECK-NEXT: addq $16, %rsp
 // CHECK-NEXT: movq (%rsp), %r11
 // CHECK-NEXT: .bundle_unlock
 
 addq $128, %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: addq $128, $rsp
+// CHECK-NEXT: addq $128, %rsp
 // CHECK-NEXT: movq (%rsp), %r11
 // CHECK-NEXT: .bundle_unlock
 
 // Sub from RSP
 subq $8, %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: subq $8, $rsp
+// CHECK-NEXT: subq $8, %rsp
 // CHECK-NEXT: movq (%rsp), %r11
 // CHECK-NEXT: .bundle_unlock
 
 subq $16, %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: subq $16, $rsp
+// CHECK-NEXT: subq $16, %rsp
 // CHECK-NEXT: movq (%rsp), %r11
 // CHECK-NEXT: .bundle_unlock
 
 subq %rax, %rsp
 // CHECK:      .bundle_lock
 // CHECK-NEXT: movq %rsp, %r11
-// CHECK-NEXT: andq $0xfffffffffff00000, %r11
+// CHECK-NEXT: andq $-1048576, %r11
 // CHECK-NEXT: subq %rax, %rsp
-// CHECK-NEXT: andq $0xfffff, %rsp
+// CHECK-NEXT: andq $1048575, %rsp
 // CHECK-NEXT: leaq (%rsp,%r11), %rsp
 // CHECK-NEXT: .bundle_unlock
 
@@ -93,9 +93,9 @@ subq %rax, %rsp
 andq $-16, %rsp
 // CHECK:      .bundle_lock
 // CHECK-NEXT: movq %rsp, %r11
-// CHECK-NEXT: andq $0xfffffffffff00000, %r11
+// CHECK-NEXT: andq $-1048576, %r11
 // CHECK-NEXT: andq $-16, %rsp
-// CHECK-NEXT: andq $0xfffff, %rsp
+// CHECK-NEXT: andq $1048575, %rsp
 // CHECK-NEXT: leaq (%rsp,%r11), %rsp
 // CHECK-NEXT: .bundle_unlock
 
@@ -103,26 +103,26 @@ andq $-16, %rsp
 orq $8, %rsp
 // CHECK:      .bundle_lock
 // CHECK-NEXT: movq %rsp, %r11
-// CHECK-NEXT: andq $0xfffffffffff00000, %r11
-// CHECK-NEXT: orl $8, %rsp
-// CHECK-NEXT: andq $0xfffff, %rsp
+// CHECK-NEXT: andq $-1048576, %r11
+// CHECK-NEXT: orq $8, %rsp
+// CHECK-NEXT: andq $1048575, %rsp
 // CHECK-NEXT: leaq (%rsp,%r11), %rsp
 // CHECK-NEXT: .bundle_unlock
 
 // LEA into RSP
 leaq 8(%rax), %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: andq $0xfffffffffff00000, %rsp
+// CHECK-NEXT: andq $-1048576, %rsp
 // CHECK-NEXT: leaq 8(%rax), %r11
-// CHECK-NEXT: andq $0xfffff, %r11
+// CHECK-NEXT: andq $1048575, %r11
 // CHECK-NEXT: addq %r11, %rsp
 // CHECK-NEXT: .bundle_unlock
 
 leaq (%rax,%rcx), %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: andq $0xfffffffffff00000, %rsp
+// CHECK-NEXT: andq $-1048576, %rsp
 // CHECK-NEXT: leaq (%rax,%rcx), %r11
-// CHECK-NEXT: andq $0xfffff, %r11
+// CHECK-NEXT: andq $1048575, %r11
 // CHECK-NEXT: addq %r11, %rsp
 // CHECK-NEXT: .bundle_unlock
 
@@ -130,8 +130,8 @@ leaq (%rax,%rcx), %rsp
 popq %rsp
 // CHECK:      popq %r11
 // CHECK-NEXT: .bundle_lock
-// CHECK-NEXT: andq $0xfffffffffff00000, %rsp
-// CHECK-NEXT: andq $0xfffff, %r11
+// CHECK-NEXT: andq $-1048576, %rsp
+// CHECK-NEXT: andq $1048575, %r11
 // CHECK-NEXT: addq %r11, %rsp
 // CHECK-NEXT: .bundle_unlock
 
@@ -154,4 +154,3 @@ xchgq %rax, %rsp
 leave
 
 ret
-

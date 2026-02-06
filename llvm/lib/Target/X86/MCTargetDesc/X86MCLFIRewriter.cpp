@@ -489,7 +489,216 @@ void X86::X86MCLFIRewriter::expandSafeStackModification(MCRegister StackReg,
                                                      MCStreamer &Out,
                                                      const MCSubtargetInfo &STI,
                                                      bool EmitPrefixes) {
-  return emitInstruction(Inst, Out, STI, EmitPrefixes);
+  // SafeStack assumes a 1MB stack region (20-bit offset).
+  static const int32_t BaseMask = -1048576;   // 0xFFF00000 sign-ext to upper bits
+  static const int32_t OffsetMask = 1048575;  // 0x000FFFFF = lower 20 bits
+
+  unsigned Opcode = Inst.getOpcode();
+
+  // --- POP64r (popq %rsp): pop into scratch, then arbitrary-modify pattern ---
+  if (Opcode == X86::POP64r) {
+    // popq %r11
+    MCInst Pop;
+    Pop.setOpcode(X86::POP64r);
+    Pop.addOperand(MCOperand::createReg(LFIScratchReg));
+    Out.emitInstruction(Pop, STI);
+
+    Out.emitBundleLock(false, STI);
+
+    // andq $BaseMask, %rsp  (keep region base)
+    {
+      MCInst And;
+      And.setOpcode(X86::AND64ri32);
+      And.addOperand(MCOperand::createReg(X86::RSP));
+      And.addOperand(MCOperand::createReg(X86::RSP));
+      And.addOperand(MCOperand::createImm(BaseMask));
+      Out.emitInstruction(And, STI);
+    }
+
+    // andq $OffsetMask, %r11  (keep offset from popped value)
+    {
+      MCInst And;
+      And.setOpcode(X86::AND64ri32);
+      And.addOperand(MCOperand::createReg(LFIScratchReg));
+      And.addOperand(MCOperand::createReg(LFIScratchReg));
+      And.addOperand(MCOperand::createImm(OffsetMask));
+      Out.emitInstruction(And, STI);
+    }
+
+    // addq %r11, %rsp  (combine base + offset)
+    {
+      MCInst Add;
+      Add.setOpcode(X86::ADD64rr);
+      Add.addOperand(MCOperand::createReg(X86::RSP));
+      Add.addOperand(MCOperand::createReg(X86::RSP));
+      Add.addOperand(MCOperand::createReg(LFIScratchReg));
+      Out.emitInstruction(Add, STI);
+    }
+
+    Out.emitBundleUnlock(STI);
+    return;
+  }
+
+  // --- MOV64rr (movq %rN, %rsp): arbitrary register move to RSP ---
+  // NOTE: This clobbers the source register.
+  if (Opcode == X86::MOV64rr) {
+    MCRegister SrcReg = Inst.getOperand(1).getReg();
+
+    Out.emitBundleLock(false, STI);
+
+    // andq $BaseMask, %rsp  (keep region base)
+    {
+      MCInst And;
+      And.setOpcode(X86::AND64ri32);
+      And.addOperand(MCOperand::createReg(X86::RSP));
+      And.addOperand(MCOperand::createReg(X86::RSP));
+      And.addOperand(MCOperand::createImm(BaseMask));
+      Out.emitInstruction(And, STI);
+    }
+
+    // andq $OffsetMask, %rSrc  (derive new offset)
+    {
+      MCInst And;
+      And.setOpcode(X86::AND64ri32);
+      And.addOperand(MCOperand::createReg(SrcReg));
+      And.addOperand(MCOperand::createReg(SrcReg));
+      And.addOperand(MCOperand::createImm(OffsetMask));
+      Out.emitInstruction(And, STI);
+    }
+
+    // addq %rSrc, %rsp  (combine base + offset)
+    {
+      MCInst Add;
+      Add.setOpcode(X86::ADD64rr);
+      Add.addOperand(MCOperand::createReg(X86::RSP));
+      Add.addOperand(MCOperand::createReg(X86::RSP));
+      Add.addOperand(MCOperand::createReg(SrcReg));
+      Out.emitInstruction(Add, STI);
+    }
+
+    Out.emitBundleUnlock(STI);
+    return;
+  }
+
+  // --- ADD/SUB with immediate: small constant, rely on guard pages ---
+  if (Opcode == X86::ADD64ri8 || Opcode == X86::ADD64ri32 ||
+      Opcode == X86::SUB64ri8 || Opcode == X86::SUB64ri32) {
+    Out.emitBundleLock(false, STI);
+
+    emitInstruction(Inst, Out, STI, EmitPrefixes);
+
+    // Guard page probe: movq (%rsp), %r11
+    {
+      MCInst Probe;
+      Probe.setOpcode(X86::MOV64rm);
+      Probe.addOperand(MCOperand::createReg(LFIScratchReg));
+      Probe.addOperand(MCOperand::createReg(X86::RSP));
+      Probe.addOperand(MCOperand::createImm(1));
+      Probe.addOperand(MCOperand::createReg(X86::NoRegister));
+      Probe.addOperand(MCOperand::createImm(0));
+      Probe.addOperand(MCOperand::createReg(X86::NoRegister));
+      Out.emitInstruction(Probe, STI);
+    }
+
+    Out.emitBundleUnlock(STI);
+    return;
+  }
+
+  // --- LEA64r (leaq X, %rsp): compute into scratch, then set RSP ---
+  if (Opcode == X86::LEA64r) {
+    Out.emitBundleLock(false, STI);
+
+    // andq $BaseMask, %rsp  (keep region base)
+    {
+      MCInst And;
+      And.setOpcode(X86::AND64ri32);
+      And.addOperand(MCOperand::createReg(X86::RSP));
+      And.addOperand(MCOperand::createReg(X86::RSP));
+      And.addOperand(MCOperand::createImm(BaseMask));
+      Out.emitInstruction(And, STI);
+    }
+
+    // leaq X, %r11  (compute effective address into scratch)
+    {
+      MCInst Lea(Inst);
+      Lea.getOperand(0).setReg(LFIScratchReg);
+      Out.emitInstruction(Lea, STI);
+    }
+
+    // andq $OffsetMask, %r11  (mask to offset)
+    {
+      MCInst And;
+      And.setOpcode(X86::AND64ri32);
+      And.addOperand(MCOperand::createReg(LFIScratchReg));
+      And.addOperand(MCOperand::createReg(LFIScratchReg));
+      And.addOperand(MCOperand::createImm(OffsetMask));
+      Out.emitInstruction(And, STI);
+    }
+
+    // addq %r11, %rsp  (combine base + offset)
+    {
+      MCInst Add;
+      Add.setOpcode(X86::ADD64rr);
+      Add.addOperand(MCOperand::createReg(X86::RSP));
+      Add.addOperand(MCOperand::createReg(X86::RSP));
+      Add.addOperand(MCOperand::createReg(LFIScratchReg));
+      Out.emitInstruction(Add, STI);
+    }
+
+    Out.emitBundleUnlock(STI);
+    return;
+  }
+
+  // --- General case (add/sub register, and, or, xchg, etc.) ---
+  // Save region base, do operation, mask result to offset, recombine.
+  Out.emitBundleLock(false, STI);
+
+  // movq %rsp, %r11  (save current RSP)
+  {
+    MCInst Mov;
+    Mov.setOpcode(X86::MOV64rr);
+    Mov.addOperand(MCOperand::createReg(LFIScratchReg));
+    Mov.addOperand(MCOperand::createReg(X86::RSP));
+    Out.emitInstruction(Mov, STI);
+  }
+
+  // andq $BaseMask, %r11  (extract region base)
+  {
+    MCInst And;
+    And.setOpcode(X86::AND64ri32);
+    And.addOperand(MCOperand::createReg(LFIScratchReg));
+    And.addOperand(MCOperand::createReg(LFIScratchReg));
+    And.addOperand(MCOperand::createImm(BaseMask));
+    Out.emitInstruction(And, STI);
+  }
+
+  // <original instruction>
+  emitInstruction(Inst, Out, STI, EmitPrefixes);
+
+  // andq $OffsetMask, %rsp  (mask RSP to offset within region)
+  {
+    MCInst And;
+    And.setOpcode(X86::AND64ri32);
+    And.addOperand(MCOperand::createReg(X86::RSP));
+    And.addOperand(MCOperand::createReg(X86::RSP));
+    And.addOperand(MCOperand::createImm(OffsetMask));
+    Out.emitInstruction(And, STI);
+  }
+
+  // leaq (%rsp,%r11), %rsp  (recombine base + offset)
+  {
+    MCInst Lea;
+    Lea.setOpcode(X86::LEA64r);
+    Lea.addOperand(MCOperand::createReg(X86::RSP));
+    Lea.addOperand(MCOperand::createReg(X86::RSP));
+    Lea.addOperand(MCOperand::createImm(1));
+    Lea.addOperand(MCOperand::createReg(LFIScratchReg));
+    Lea.addOperand(MCOperand::createImm(0));
+    Lea.addOperand(MCOperand::createReg(X86::NoRegister));
+    Out.emitInstruction(Lea, STI);
+  }
+
+  Out.emitBundleUnlock(STI);
 }
 
 void X86::X86MCLFIRewriter::expandStackModification(MCRegister StackReg,
