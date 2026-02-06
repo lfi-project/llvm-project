@@ -1,4 +1,4 @@
-// RUN: llvm-mc -filetype asm -triple aarch64_lfi %s | FileCheck %s
+// RUN: llvm-mc -filetype asm -triple aarch64_lfi --aarch64-lfi-rtcall-tls=false %s | FileCheck %s
 
 // TLS read: mrs xN, tpidr_el0 -> ldr xN, [x25, #32]
 mrs x0, tpidr_el0
