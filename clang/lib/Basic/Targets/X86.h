@@ -754,6 +754,8 @@ public:
   }
 
   BuiltinVaListKind getBuiltinVaListKind() const override {
+    if (getTriple().isLFI())
+      return TargetInfo::CharPtrBuiltinVaList;
     return TargetInfo::X86_64ABIBuiltinVaList;
   }
 

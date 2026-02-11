@@ -3052,6 +3052,13 @@ static Address EmitX86_64VAArgFromMemory(CodeGenFunction &CGF,
 
 RValue X86_64ABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
                                 QualType Ty, AggValueSlot Slot) const {
+  if (getTarget().getTriple().isLFI()) {
+    return emitVoidPtrVAArg(CGF, VAListAddr, Ty, /*IsIndirect=*/false,
+        CGF.getContext().getTypeInfoInChars(Ty),
+        CharUnits::fromQuantity(8),
+        /*AllowHigherAlign=*/false, Slot);
+  }
+
   // Assume that va_list type is correct; should be pointer to LLVM type:
   // struct {
   //   i32 gp_offset;

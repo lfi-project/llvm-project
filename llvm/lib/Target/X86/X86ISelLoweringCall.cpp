@@ -1577,7 +1577,7 @@ void VarArgsLoweringHelper::createVarArgAreaAndStoreRegisters(
 
   // 64-bit calling conventions support varargs and register parameters, so we
   // have to do extra work to spill them in the prologue.
-  if (is64Bit()) {
+  if (is64Bit() && !Subtarget.isLFI()) {
     // Find the first unallocated argument registers.
     ArrayRef<MCPhysReg> ArgGPRs = get64BitArgumentGPRs(CallConv, Subtarget);
     ArrayRef<MCPhysReg> ArgXMMs =
@@ -1759,7 +1759,14 @@ SDValue X86TargetLowering::LowerFormalArguments(
   if (IsWin64)
     CCInfo.AllocateStack(32, Align(8));
 
-  CCInfo.AnalyzeArguments(Ins, CC_X86);
+  if (Subtarget.isLFI() && IsVarArg) {
+    // Only fixed args come in registers; variadic args are on stack.
+    SmallVector<ISD::InputArg, 16> FixedIns(Ins.begin(), Ins.begin() + F.getFunctionType()->getNumParams());
+    CCInfo.AnalyzeArguments(FixedIns, CC_X86);
+    // Variadic args handled via va_start/va_arg from VarArgsFrameIndex
+  } else {
+    CCInfo.AnalyzeArguments(Ins, CC_X86);
+  }
 
   // In vectorcall calling convention a second pass is required for the HVA
   // types.
@@ -2111,7 +2118,25 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   if (IsWin64)
     CCInfo.AllocateStack(32, Align(8));
 
-  CCInfo.AnalyzeArguments(Outs, CC_X86);
+  if (Subtarget.isLFI() && isVarArg) {
+    // Phase 1: Analyze only the fixed (named) arguments through CC_X86
+    // These go in registers as normal.
+    SmallVector<ISD::OutputArg, 16> FixedOuts(Outs.begin(),
+        Outs.begin() + CLI.NumFixedArgs);
+    CCInfo.AnalyzeArguments(FixedOuts, CC_X86);
+
+    // Phase 2: Force all variadic arguments to stack slots
+    for (unsigned i = CLI.NumFixedArgs, e = Outs.size(); i != e; ++i) {
+      MVT ArgVT = Outs[i].VT;
+      unsigned Size = ArgVT.getStoreSize();
+      Align ArgAlign = Align(std::max(8u, Size)); // 8-byte minimum alignment
+      unsigned Offset = CCInfo.AllocateStack(Size, ArgAlign);
+      CCInfo.addLoc(CCValAssign::getMem(i, ArgVT, Offset, ArgVT,
+            CCValAssign::Full));
+    }
+  } else {
+    CCInfo.AnalyzeArguments(Outs, CC_X86);
+  }
 
   // In vectorcall calling convention a second pass is required for the HVA
   // types.
