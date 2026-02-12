@@ -14,13 +14,17 @@
 #include "X86MCLFIRewriter.h"
 #include "X86BaseInfo.h"
 #include "X86MCTargetDesc.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCLFI.h"
+#include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
@@ -36,6 +40,23 @@ static const MCRegister LFIBaseSeg = X86::GS;
 // Byte offset into the virtual register file (pointed to by R15) where the
 // thread pointer is stored.
 static const int TPOffset = 32;
+
+// Shadow call stack pointer offset in the virtual register file (R15).
+static const int SCSOffset = 16;
+
+// Temporary save slot offset in the virtual register file (R15).
+static const int SCSTempOffset = 24;
+
+
+static cl::opt<bool>
+    X86LFIJumpsOnly("x86-lfi-jumps-only",
+                     cl::desc("Only rewrite control flow and syscalls, skip "
+                              "memory sandboxing (equivalent to "
+                              "+no-lfi-loads,+no-lfi-stores)"),
+                     cl::init(false));
+
+// The expected encoding of endbr64 (f3 0f 1e fa) as a 32-bit LE value.
+static const int32_t ENDBR64Encoding = static_cast<int32_t>(0xfa1e0ff3);
 
 // Forward declarations for helper functions.
 static MCRegister getReg64(MCRegister Reg);
@@ -71,11 +92,13 @@ bool X86::X86MCLFIRewriter::hasSegue(const MCSubtargetInfo &STI) const {
 }
 
 bool X86::X86MCLFIRewriter::hasNoLFILoads(const MCSubtargetInfo &STI) const {
-  return hasFeature(FeatureBitset({X86::FeatureNoLFILoads}), STI);
+  return X86LFIJumpsOnly ||
+         hasFeature(FeatureBitset({X86::FeatureNoLFILoads}), STI);
 }
 
 bool X86::X86MCLFIRewriter::hasNoLFIStores(const MCSubtargetInfo &STI) const {
-  return hasFeature(FeatureBitset({X86::FeatureNoLFIStores}), STI);
+  return X86LFIJumpsOnly ||
+         hasFeature(FeatureBitset({X86::FeatureNoLFIStores}), STI);
 }
 
 //===----------------------------------------------------------------------===//
@@ -198,6 +221,46 @@ static bool isHighReg(MCRegister Reg) {
 // Instruction emission helpers
 //===----------------------------------------------------------------------===//
 
+/// Emit: movq %SrcReg, Offset(%r15)
+static void emitMovToR15Slot(MCRegister SrcReg, int Offset, MCStreamer &Out,
+                              const MCSubtargetInfo &STI) {
+  MCInst Mov;
+  Mov.setOpcode(X86::MOV64mr);
+  Mov.addOperand(MCOperand::createReg(X86::R15));
+  Mov.addOperand(MCOperand::createImm(1));
+  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
+  Mov.addOperand(MCOperand::createImm(Offset));
+  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
+  Mov.addOperand(MCOperand::createReg(SrcReg));
+  Out.emitInstruction(Mov, STI);
+}
+
+/// Emit: movq Offset(%r15), %DstReg
+static void emitMovFromR15Slot(MCRegister DstReg, int Offset, MCStreamer &Out,
+                                const MCSubtargetInfo &STI) {
+  MCInst Mov;
+  Mov.setOpcode(X86::MOV64rm);
+  Mov.addOperand(MCOperand::createReg(DstReg));
+  Mov.addOperand(MCOperand::createReg(X86::R15));
+  Mov.addOperand(MCOperand::createImm(1));
+  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
+  Mov.addOperand(MCOperand::createImm(Offset));
+  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
+  Out.emitInstruction(Mov, STI);
+}
+
+static void maybeEmitBundleLock(bool AlignToEnd, MCStreamer &Out,
+                                 const MCSubtargetInfo &STI) {
+  if (FlagX86LFIBundling)
+    Out.emitBundleLock(AlignToEnd, STI);
+}
+
+static void maybeEmitBundleUnlock(MCStreamer &Out,
+                                   const MCSubtargetInfo &STI) {
+  if (FlagX86LFIBundling)
+    Out.emitBundleUnlock(STI);
+}
+
 void X86::X86MCLFIRewriter::emitInstruction(const MCInst &Inst, MCStreamer &Out,
                                             const MCSubtargetInfo &STI,
                                             bool EmitPrefixes) {
@@ -213,9 +276,57 @@ void X86::X86MCLFIRewriter::emitInstruction(const MCInst &Inst, MCStreamer &Out,
 // Control flow rewriting
 //===----------------------------------------------------------------------===//
 
+MCSymbol *
+X86::X86MCLFIRewriter::getOrEmitTrapSymbol(MCStreamer &Out,
+                                             const MCSubtargetInfo &STI) {
+  if (LFITrapSymbol)
+    return LFITrapSymbol;
+
+  LFITrapSymbol = Out.getContext().getOrCreateSymbol("_lfi_trap");
+
+  Out.pushSection();
+  MCSection *TrapSec = Out.getContext().getELFSection(
+      ".text_lfi_trap", ELF::SHT_PROGBITS,
+      ELF::SHF_ALLOC | ELF::SHF_EXECINSTR | ELF::SHF_GROUP,
+      0, "_lfi_trap", /*IsComdat=*/true);
+  Out.switchSection(TrapSec);
+  Out.emitSymbolAttribute(LFITrapSymbol, MCSA_Weak);
+  Out.emitLabel(LFITrapSymbol);
+  // ud2
+  Out.emitBytes(StringRef("\x0f\x0b", 2));
+  Out.popSection();
+
+  return LFITrapSymbol;
+}
+
+void X86::X86MCLFIRewriter::emitCFICheck(MCRegister Reg, MCStreamer &Out,
+                                           const MCSubtargetInfo &STI) {
+  MCSymbol *TrapSym = getOrEmitTrapSymbol(Out, STI);
+
+  // cmpl $0xfa1e0ff3, (%r14, %rX)
+  MCInst Cmp;
+  Cmp.setOpcode(X86::CMP32mi);
+  Cmp.addOperand(MCOperand::createReg(LFIBaseReg));        // Base = %r14
+  Cmp.addOperand(MCOperand::createImm(1));                  // Scale = 1
+  Cmp.addOperand(MCOperand::createReg(getReg64(Reg)));     // Index = %rX
+  Cmp.addOperand(MCOperand::createImm(0));                  // Disp = 0
+  Cmp.addOperand(MCOperand::createReg(X86::NoRegister));   // Segment
+  Cmp.addOperand(MCOperand::createImm(ENDBR64Encoding));   // Immediate
+  Out.emitInstruction(Cmp, STI);
+
+  // jne _lfi_trap
+  MCInst Jne;
+  Jne.setOpcode(X86::JCC_1);
+  Jne.addOperand(MCOperand::createExpr(
+      MCSymbolRefExpr::create(TrapSym, Out.getContext())));
+  Jne.addOperand(MCOperand::createImm(X86::COND_NE));
+  Out.emitInstruction(Jne, STI);
+}
+
 void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
                                                   MCStreamer &Out,
-                                                  const MCSubtargetInfo &STI) {
+                                                  const MCSubtargetInfo &STI,
+                                                  bool CheckCFI) {
   // andl $-32, %eX
   MCInst AndInst;
   AndInst.setOpcode(X86::AND32ri8);
@@ -224,6 +335,10 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
   AndInst.addOperand(Target32);
   AndInst.addOperand(MCOperand::createImm(-BundleSize));
   Out.emitInstruction(AndInst, STI);
+
+  // Forward-edge CFI: check for endbr64 at the aligned target.
+  if (!FlagX86LFIBundling && CheckCFI)
+    emitCFICheck(Reg, Out, STI);
 
   // addq %r14, %rX
   MCInst Add;
@@ -236,42 +351,128 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
 }
 
 void X86::X86MCLFIRewriter::emitIndirectJumpReg(MCRegister Reg, MCStreamer &Out,
-                                                 const MCSubtargetInfo &STI) {
-  Out.emitBundleLock(false, STI);
-  emitSandboxBranchReg(Reg, Out, STI);
+                                                 const MCSubtargetInfo &STI,
+                                                 bool CheckCFI) {
+  maybeEmitBundleLock(false, Out, STI);
+  emitSandboxBranchReg(Reg, Out, STI, CheckCFI);
 
   MCInst Jmp;
   Jmp.setOpcode(X86::JMP64r);
   Jmp.addOperand(MCOperand::createReg(getReg64(Reg)));
   Out.emitInstruction(Jmp, STI);
 
-  Out.emitBundleUnlock(STI);
+  maybeEmitBundleUnlock(Out, STI);
 }
 
 void X86::X86MCLFIRewriter::emitIndirectCallReg(MCRegister Reg, MCStreamer &Out,
-                                                 const MCSubtargetInfo &STI) {
-  Out.emitBundleLock(true, STI);
-  emitSandboxBranchReg(Reg, Out, STI);
+                                                 const MCSubtargetInfo &STI,
+                                                 bool CheckCFI) {
+  maybeEmitBundleLock(true, Out, STI);
+  emitSandboxBranchReg(Reg, Out, STI, CheckCFI);
 
   MCInst Call;
   Call.setOpcode(X86::CALL64r);
   Call.addOperand(MCOperand::createReg(getReg64(Reg)));
   Out.emitInstruction(Call, STI);
 
-  Out.emitBundleUnlock(STI);
+  maybeEmitBundleUnlock(Out, STI);
+}
+
+MCSymbol *
+X86::X86MCLFIRewriter::emitShadowCallPrologue(MCStreamer &Out,
+                                                const MCSubtargetInfo &STI) {
+  MCSymbol *RetLabel = Out.getContext().createTempSymbol();
+
+  // movq %rsp, SCSTempOffset(%r15) - save rsp to temp slot
+  emitMovToR15Slot(X86::RSP, SCSTempOffset, Out, STI);
+
+  // movq SCSOffset(%r15), %rsp - load shadow call stack pointer
+  emitMovFromR15Slot(X86::RSP, SCSOffset, Out, STI);
+
+  // leaq RetLabel(%rip), %r11 - compute return address
+  MCInst Lea;
+  Lea.setOpcode(X86::LEA64r);
+  Lea.addOperand(MCOperand::createReg(LFIScratchReg));
+  Lea.addOperand(MCOperand::createReg(X86::RIP));
+  Lea.addOperand(MCOperand::createImm(1));
+  Lea.addOperand(MCOperand::createReg(X86::NoRegister));
+  Lea.addOperand(MCOperand::createExpr(
+      MCSymbolRefExpr::create(RetLabel, Out.getContext())));
+  Lea.addOperand(MCOperand::createReg(X86::NoRegister));
+  Out.emitInstruction(Lea, STI);
+
+  // pushq %r11 - push return address onto shadow call stack
+  MCInst Push;
+  Push.setOpcode(X86::PUSH64r);
+  Push.addOperand(MCOperand::createReg(LFIScratchReg));
+  Out.emitInstruction(Push, STI);
+
+  // movq %rsp, SCSOffset(%r15) - save updated shadow call stack pointer
+  emitMovToR15Slot(X86::RSP, SCSOffset, Out, STI);
+
+  // movq SCSTempOffset(%r15), %rsp - restore real rsp
+  emitMovFromR15Slot(X86::RSP, SCSTempOffset, Out, STI);
+
+  return RetLabel;
+}
+
+void X86::X86MCLFIRewriter::emitShadowCallEpilogue(MCSymbol *RetLabel,
+                                                     MCStreamer &Out,
+                                                     const MCSubtargetInfo &STI,
+                                                     bool ReturnsTwice) {
+  // For returns_twice calls (e.g. setjmp), align RetLabel to 32 bytes and
+  // insert ENDBR64 so that longjmp can reach it via an indirect jump that
+  // passes the forward-edge CFI check.
+  if (ReturnsTwice)
+    Out.emitCodeAlignment(llvm::Align(32), &STI);
+
+  // RetLabel:
+  Out.emitLabel(RetLabel);
+
+  if (ReturnsTwice) {
+    MCInst Endbr;
+    Endbr.setOpcode(X86::ENDBR64);
+    Out.emitInstruction(Endbr, STI);
+  }
+
+  // movq %rsp, SCSOffset(%r15) - save shadow stack ptr (updated by callee's ret)
+  emitMovToR15Slot(X86::RSP, SCSOffset, Out, STI);
+
+  // movq SCSTempOffset(%r15), %rsp - restore real rsp (saved by callee's ret)
+  emitMovFromR15Slot(X86::RSP, SCSTempOffset, Out, STI);
+
+  // popq %r11 - pop the return address that callq pushed on the real stack
+  MCInst Pop;
+  Pop.setOpcode(X86::POP64r);
+  Pop.addOperand(MCOperand::createReg(LFIScratchReg));
+  Out.emitInstruction(Pop, STI);
 }
 
 void X86::X86MCLFIRewriter::expandDirectCall(const MCInst &Inst,
                                               MCStreamer &Out,
                                               const MCSubtargetInfo &STI) {
-  Out.emitBundleLock(true, STI);
+  MCSymbol *RetLabel = nullptr;
+  bool ReturnsTwice = Inst.getFlags() & X86::IP_LFI_RETURNS_TWICE;
+  if (!FlagX86LFIBundling)
+    RetLabel = emitShadowCallPrologue(Out, STI);
+
+  maybeEmitBundleLock(true, Out, STI);
   Out.emitInstruction(Inst, STI);
-  Out.emitBundleUnlock(STI);
+  maybeEmitBundleUnlock(Out, STI);
+
+  if (!FlagX86LFIBundling)
+    emitShadowCallEpilogue(RetLabel, Out, STI, ReturnsTwice);
 }
 
 void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
                                                   MCStreamer &Out,
                                                   const MCSubtargetInfo &STI) {
+  // Emit shadow call stack prologue before loading the target, since the
+  // prologue uses and frees r11 before the target load may need it.
+  MCSymbol *RetLabel = nullptr;
+  if (!FlagX86LFIBundling && isCall(Inst))
+    RetLabel = emitShadowCallPrologue(Out, STI);
+
   MCRegister Target;
   if (mayLoad(Inst)) {
     // Indirect jmp/call through memory - load address first.
@@ -294,10 +495,40 @@ void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
     emitIndirectCallReg(Target, Out, STI);
   else
     emitIndirectJumpReg(Target, Out, STI);
+
+  if (!FlagX86LFIBundling && isCall(Inst))
+    emitShadowCallEpilogue(RetLabel, Out, STI);
 }
 
 void X86::X86MCLFIRewriter::expandReturn(const MCInst &Inst, MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
+  if (!FlagX86LFIBundling) {
+    // Handle ret with immediate - adjust rsp before saving to temp.
+    if (Inst.getNumOperands() > 0) {
+      if (Inst.getOpcode() == X86::RETI32 || Inst.getOpcode() == X86::RETI64) {
+        MCInst Add;
+        Add.setOpcode(X86::ADD64ri32);
+        MCOperand StackPointer = MCOperand::createReg(X86::RSP);
+        Add.addOperand(StackPointer);
+        Add.addOperand(StackPointer);
+        Add.addOperand(Inst.getOperand(0));
+        doRewriteInst(Add, Out, STI, false);
+      }
+    }
+
+    // movq %rsp, SCSTempOffset(%r15) - save rsp to temp slot
+    emitMovToR15Slot(X86::RSP, SCSTempOffset, Out, STI);
+
+    // movq SCSOffset(%r15), %rsp - load shadow call stack pointer
+    emitMovFromR15Slot(X86::RSP, SCSOffset, Out, STI);
+
+    // ret - return via shadow call stack
+    MCInst Ret;
+    Ret.setOpcode(X86::RET64);
+    Out.emitInstruction(Ret, STI);
+    return;
+  }
+
   // pop %r11
   MCInst Pop;
   Pop.setOpcode(X86::POP64r);
@@ -317,7 +548,7 @@ void X86::X86MCLFIRewriter::expandReturn(const MCInst &Inst, MCStreamer &Out,
     }
   }
 
-  emitIndirectJumpReg(LFIScratchReg, Out, STI);
+  emitIndirectJumpReg(LFIScratchReg, Out, STI, /*CheckCFI=*/false);
 }
 
 //===----------------------------------------------------------------------===//
@@ -326,7 +557,7 @@ void X86::X86MCLFIRewriter::expandReturn(const MCInst &Inst, MCStreamer &Out,
 
 void X86::X86MCLFIRewriter::emitLFICall(LFICallType CallType, MCStreamer &Out,
                                          const MCSubtargetInfo &STI) {
-  Out.emitBundleLock(false, STI);
+  maybeEmitBundleLock(false, Out, STI);
 
   MCSymbol *Symbol = Out.getContext().createTempSymbol();
 
@@ -366,7 +597,7 @@ void X86::X86MCLFIRewriter::emitLFICall(LFICallType CallType, MCStreamer &Out,
   Out.emitInstruction(Jmp, STI);
 
   Out.emitLabel(Symbol);
-  Out.emitBundleUnlock(STI);
+  maybeEmitBundleUnlock(Out, STI);
 }
 
 void X86::X86MCLFIRewriter::expandSyscall(const MCInst &Inst, MCStreamer &Out,
@@ -429,7 +660,7 @@ void X86::X86MCLFIRewriter::expandStringOperation(const MCInst &Inst,
   bool JumpsOnly = hasNoLFILoads(STI) && hasNoLFIStores(STI);
   bool StoresOnly = hasNoLFILoads(STI) && !hasNoLFIStores(STI);
 
-  Out.emitBundleLock(false, STI);
+  maybeEmitBundleLock(false, Out, STI);
 
   switch (Inst.getOpcode()) {
   case X86::CMPSB:
@@ -458,7 +689,7 @@ void X86::X86MCLFIRewriter::expandStringOperation(const MCInst &Inst,
   }
 
   emitInstruction(Inst, Out, STI, EmitPrefixes);
-  Out.emitBundleUnlock(STI);
+  maybeEmitBundleUnlock(Out, STI);
 }
 
 //===----------------------------------------------------------------------===//
@@ -500,7 +731,7 @@ void X86::X86MCLFIRewriter::expandStackModification(MCRegister StackReg,
     PopR11.addOperand(MCOperand::createReg(LFIScratchReg));
     Out.emitInstruction(PopR11, STI);
 
-    Out.emitBundleLock(false, STI);
+    maybeEmitBundleLock(false, Out, STI);
 
     MCInst MovR11ToESP;
     MovR11ToESP.setOpcode(X86::MOV32rr);
@@ -510,7 +741,7 @@ void X86::X86MCLFIRewriter::expandStackModification(MCRegister StackReg,
 
     emitStackFixup(StackReg, Out, STI);
 
-    Out.emitBundleUnlock(STI);
+    maybeEmitBundleUnlock(Out, STI);
     return;
   }
 
@@ -521,14 +752,14 @@ void X86::X86MCLFIRewriter::expandStackModification(MCRegister StackReg,
   bool MemSandboxed =
       emitSandboxMemOps(SandboxedInst, X86::R11D, Out, STI, true);
 
-  Out.emitBundleLock(false, STI);
+  maybeEmitBundleLock(false, Out, STI);
 
   emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
   if (MemSandboxed)
-    Out.emitBundleUnlock(STI);
+    maybeEmitBundleUnlock(Out, STI);
   emitStackFixup(StackReg, Out, STI);
 
-  Out.emitBundleUnlock(STI);
+  maybeEmitBundleUnlock(Out, STI);
 }
 
 //===----------------------------------------------------------------------===//
@@ -745,7 +976,7 @@ bool X86::X86MCLFIRewriter::emitSandboxMemOps(MCInst &Inst,
           return true;
 
         if (!hasSegue(STI)) {
-          Out.emitBundleLock(false, STI);
+          maybeEmitBundleLock(false, Out, STI);
           AnyInstsEmitted = true;
         }
       }
@@ -842,7 +1073,7 @@ void X86::X86MCLFIRewriter::expandLoadStore(const MCInst &Inst, MCStreamer &Out,
   bool BundleLock = emitSandboxMemOps(SandboxedInst, ScratchReg, Out, STI, true);
   emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
   if (BundleLock)
-    Out.emitBundleUnlock(STI);
+    maybeEmitBundleUnlock(Out, STI);
 
   if (RotateRegister != X86::NoRegister) {
     MCInst RotateLtoH;
@@ -1415,6 +1646,11 @@ bool X86::X86MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
   if (Guard)
     return false;
   Guard = true;
+
+  // Eagerly emit the trap symbol on first use when CFI is enabled,
+  // so the section switch doesn't happen inside a bundle lock.
+  if (!FlagX86LFIBundling && !LFITrapSymbol)
+    getOrEmitTrapSymbol(Out, STI);
 
   doRewriteInst(Inst, Out, STI, true);
 

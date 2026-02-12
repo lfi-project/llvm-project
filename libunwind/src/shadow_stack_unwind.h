@@ -57,7 +57,41 @@
 
 #endif
 
+// LFI software shadow call stack. The SCS pointer is stored at 16(%r15).
+// During unwinding, we need to pop entries from the SCS to keep it in sync.
+// This is done via a runtime call that adjusts the SCS pointer.
+#if defined(__LFI__) && defined(_LIBUNWIND_TARGET_X86_64)
+#define _LIBUNWIND_USE_LFI_SCS 1
+
+// LFI runtime call offsets from base register (%r14):
+//   32: SCS save    — saves current SCS pointer, returns index in %rax
+//   40: SCS restore — restores SCS pointer from index in %edi
+//   48: SCS unwind  — pops n entries from SCS (n in %edi)
+
+// Pops `n` entries from the LFI shadow call stack by calling the runtime's
+// SCS unwind entry point at offset 48 from the LFI base register (%r14).
+static void _lfi_scs_unwind(unsigned int n) {
+  __asm__ volatile(".lfi_rewrite_disable\n\t"
+                   "leaq 1f(%%rip), %%r11\n\t"
+                   "jmpq *48(%%r14)\n\t"
+                   "1:\n\t"
+                   ".lfi_rewrite_enable\n\t"
+                   :
+                   : "D"(n)
+                   : "r11", "memory");
+}
+
+#define _LIBUNWIND_POP_SHSTK_SSP(x)                                           \
+  do {                                                                         \
+    unsigned int _n = (x);                                                     \
+    if (_n > 0)                                                                \
+      _lfi_scs_unwind(_n);                                                     \
+  } while (0)
+#endif
+
+#if defined(_LIBUNWIND_USE_CET) || defined(_LIBUNWIND_USE_GCS) || defined(_LIBUNWIND_USE_LFI_SCS)
 extern void *__libunwind_shstk_get_registers(unw_cursor_t *);
 extern void *__libunwind_shstk_get_jump_target(void);
+#endif
 
 #endif

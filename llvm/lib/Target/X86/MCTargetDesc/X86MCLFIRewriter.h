@@ -24,6 +24,7 @@ namespace llvm {
 class MCContext;
 class MCStreamer;
 class MCSubtargetInfo;
+class MCSymbol;
 
 namespace X86 {
 
@@ -43,6 +44,9 @@ private:
   /// Accumulated prefix instructions to emit with the next instruction.
   SmallVector<MCInst, 4> Prefixes;
 
+  /// Trap symbol for forward-edge CFI checks. Created lazily on first use.
+  MCSymbol *LFITrapSymbol = nullptr;
+
   /// Check if STI has the no-lfi-segue feature (disables GS segment use).
   bool hasSegue(const MCSubtargetInfo &STI) const;
 
@@ -61,16 +65,39 @@ private:
                        const MCSubtargetInfo &STI, bool EmitPrefixes);
 
   /// Emit sandboxing code for a branch target register.
+  /// If CheckCFI is false, skips the forward-edge CFI check (used for returns).
   void emitSandboxBranchReg(MCRegister Reg, MCStreamer &Out,
-                            const MCSubtargetInfo &STI);
+                            const MCSubtargetInfo &STI,
+                            bool CheckCFI = true);
 
   /// Emit an indirect jump through a register.
   void emitIndirectJumpReg(MCRegister Reg, MCStreamer &Out,
-                           const MCSubtargetInfo &STI);
+                           const MCSubtargetInfo &STI,
+                           bool CheckCFI = true);
 
   /// Emit an indirect call through a register.
   void emitIndirectCallReg(MCRegister Reg, MCStreamer &Out,
-                           const MCSubtargetInfo &STI);
+                           const MCSubtargetInfo &STI,
+                           bool CheckCFI = true);
+
+  /// Get or lazily emit the ._lfi_trap symbol and its ud2 instruction.
+  MCSymbol *getOrEmitTrapSymbol(MCStreamer &Out, const MCSubtargetInfo &STI);
+
+  /// Emit a forward-edge CFI check: cmpl + jne to trap.
+  void emitCFICheck(MCRegister Reg, MCStreamer &Out,
+                    const MCSubtargetInfo &STI);
+
+  /// Emit the shadow call stack prologue before a call instruction.
+  /// Returns the label to be placed after the call for the epilogue.
+  MCSymbol *emitShadowCallPrologue(MCStreamer &Out,
+                                    const MCSubtargetInfo &STI);
+
+  /// Emit the shadow call stack epilogue after a call instruction.
+  /// If ReturnsTwice is true, aligns and inserts ENDBR64 at the return
+  /// label so longjmp can reach it via an indirect jump.
+  void emitShadowCallEpilogue(MCSymbol *RetLabel, MCStreamer &Out,
+                               const MCSubtargetInfo &STI,
+                               bool ReturnsTwice = false);
 
   /// Expand a direct call instruction (align to end of bundle).
   void expandDirectCall(const MCInst &Inst, MCStreamer &Out,

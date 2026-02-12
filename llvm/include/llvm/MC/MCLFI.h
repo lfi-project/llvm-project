@@ -16,6 +16,8 @@ class MCContext;
 class MCStreamer;
 class Triple;
 
+extern cl::opt<bool> FlagX86LFIBundling;
+
 void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
                              const Triple &TheTriple);
 

@@ -18,6 +18,8 @@
 #if defined(__CET__)
 #include <cet.h>
 #define _LIBUNWIND_CET_ENDBR _CET_ENDBR
+#elif defined(__LFI__)
+#define _LIBUNWIND_CET_ENDBR endbr64
 #else
 #define _LIBUNWIND_CET_ENDBR
 #endif

@@ -34,6 +34,7 @@
 #include "llvm/CodeGen/StackMaps.h"
 #include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -457,6 +458,11 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
   case X86::CALL64r:
   case X86::CALL64pcrel32:
     assert(OutMI.getNumOperands() == 1 && "Unexpected number of operands!");
+    // Propagate returns_twice attribute to MCInst for LFI SCS support.
+    if (MI->getOperand(0).isGlobal())
+      if (auto *CalleeFn = dyn_cast<Function>(MI->getOperand(0).getGlobal()))
+        if (CalleeFn->getAttributes().hasFnAttr(Attribute::ReturnsTwice))
+          OutMI.setFlags(OutMI.getFlags() | X86::IP_LFI_RETURNS_TWICE);
     break;
   case X86::EH_RETURN:
   case X86::EH_RETURN64: {

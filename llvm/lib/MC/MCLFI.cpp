@@ -26,6 +26,10 @@ cl::opt<bool> FlagEnableRewriting("lfi-enable-rewriter",
                                   cl::desc("Don't enable rewriting for LFI."),
                                   cl::init(true));
 
+cl::opt<bool> FlagX86LFIBundling("x86-lfi-bundling",
+                                  cl::desc("Enable bundle alignment for X86 LFI"),
+                                  cl::init(false));
+
 void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
                              const Triple &TheTriple) {
   assert(TheTriple.isLFI());
@@ -58,7 +62,7 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
         std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo()));
   }
 
-  if (BundleAlign != Align(1))
+  if (FlagX86LFIBundling && BundleAlign != Align(1))
     Streamer.emitBundleAlignMode(BundleAlign);
 
   // Emit an ELF Note section in its own COMDAT group which identifies LFI

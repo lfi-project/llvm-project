@@ -276,7 +276,7 @@ inline void Registers_x86::setVectorRegister(int, v128) {
 class _LIBUNWIND_HIDDEN Registers_x86_64;
 extern "C" void __libunwind_Registers_x86_64_jumpto(Registers_x86_64 *);
 
-#if defined(_LIBUNWIND_USE_CET)
+#if defined(_LIBUNWIND_USE_CET) || defined(_LIBUNWIND_USE_LFI_SCS)
 extern "C" void *__libunwind_shstk_get_jump_target() {
   return reinterpret_cast<void *>(&__libunwind_Registers_x86_64_jumpto);
 }

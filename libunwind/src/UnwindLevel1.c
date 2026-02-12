@@ -47,7 +47,16 @@
 // instructions, so for these architectures, normal function calls should be
 // avoided when invoking the `jumpto()` function. To do this, we use inline
 // assemblies to "goto" the `jumpto()` for these architectures.
-#if !defined(_LIBUNWIND_USE_CET) && !defined(_LIBUNWIND_USE_GCS)
+#if defined(_LIBUNWIND_USE_LFI_SCS)
+#define __unw_phase2_resume(cursor, payload)                                   \
+  do {                                                                         \
+    _LIBUNWIND_POP_SHSTK_SSP((payload));                                       \
+    void *shstkRegContext = __libunwind_shstk_get_registers((cursor));         \
+    void *shstkJumpAddress = __libunwind_shstk_get_jump_target();              \
+    __asm__ volatile("jmpq *%%rdx\n\t" ::"D"(shstkRegContext),                 \
+                     "d"(shstkJumpAddress));                                   \
+  } while (0)
+#elif !defined(_LIBUNWIND_USE_CET) && !defined(_LIBUNWIND_USE_GCS)
 #define __unw_phase2_resume(cursor, payload)                                   \
   do {                                                                         \
     __unw_resume_with_frames_walked((cursor), (payload));                      \
