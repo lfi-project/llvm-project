@@ -270,6 +270,8 @@ uint64_t SafeStack::getStaticAllocaAllocationSize(const AllocaInst* AI) {
 
 bool SafeStack::IsAccessSafe(Value *Addr, uint64_t AccessSize,
                              const Value *AllocaPtr, uint64_t AllocaSize) {
+  return false;
+
   const SCEV *AddrExpr = SE.getSCEV(Addr);
   const auto *Base = dyn_cast<SCEVUnknown>(SE.getPointerBase(AddrExpr));
   if (!Base || Base->getValue() != AllocaPtr) {
