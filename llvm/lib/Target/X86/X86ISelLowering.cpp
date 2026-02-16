@@ -26202,12 +26202,22 @@ SDValue X86TargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
 
   if (!Subtarget.is64Bit() ||
-      Subtarget.isCallingConvWin64(MF.getFunction().getCallingConv()) ||
-      Subtarget.isLFI()) {
+      Subtarget.isCallingConvWin64(MF.getFunction().getCallingConv())) {
     // vastart just stores the address of the VarArgsFrameIndex slot into the
     // memory location argument.
     SDValue FR = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
     return DAG.getStore(Op.getOperand(0), DL, FR, Ptr, MachinePointerInfo(SV));
+  }
+
+  if (Subtarget.isLFI()) {
+    // VarArgsFrameIndex holds the hidden pointer (saved from LowerFormalArguments).
+    // Load it, then store the pointer value into va_list.
+    SDValue FI = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
+    SDValue HiddenPtr = DAG.getLoad(PtrVT, DL, Op.getOperand(0), FI,
+        MachinePointerInfo());
+    return DAG.getStore(HiddenPtr.getValue(1), DL, HiddenPtr, Ptr,
+        MachinePointerInfo(SV));
+
   }
 
   // __va_list_tag:
@@ -26314,7 +26324,7 @@ static SDValue LowerVACOPY(SDValue Op, const X86Subtarget &Subtarget,
   // where a va_list is still an i8*.
   assert(Subtarget.is64Bit() && "This code only handles 64-bit va_copy!");
   if (Subtarget.isCallingConvWin64(
-        DAG.getMachineFunction().getFunction().getCallingConv()))
+        DAG.getMachineFunction().getFunction().getCallingConv()) || Subtarget.isLFI())
     // Probably a Win64 va_copy.
     return DAG.expandVACopy(Op.getNode());
 

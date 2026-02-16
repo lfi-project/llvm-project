@@ -196,6 +196,67 @@ public:
   bool run();
 };
 
+static void findVACalls(Function &F,
+                          SmallVectorImpl<CallBase *> &VACalls) {
+  for (Instruction &I : instructions(&F)) {
+    if (auto CB = dyn_cast<CallBase>(&I))
+      if (CB->getFunctionType()->isVarArg()) {
+        VACalls.push_back(CB);
+      }
+  }
+}
+
+static void TransformVACallSite(CallBase *CB, Function &F) {
+  const DataLayout &DL = F.getDataLayout();
+  LLVMContext &Ctx = F.getContext();
+  Type *Int8Ty = Type::getInt8Ty(Ctx);
+
+  FunctionType *FTy = CB->getFunctionType();
+  unsigned NumFixed = FTy->getNumParams();
+  if (CB->arg_size() <= NumFixed)
+    return;
+
+  // Compute total size of variadic args
+  unsigned TotalSize = 0;
+  for (unsigned i = NumFixed; i < CB->arg_size(); ++i)
+    TotalSize += alignTo(DL.getTypeStoreSize(CB->getArgOperand(i)->getType()), 8);
+
+  // Create alloca in entry block (static alloca)
+  IRBuilder<> AllocaIRB(&F.getEntryBlock(), F.getEntryBlock().getFirstInsertionPt());
+  AllocaInst *Packed = AllocaIRB.CreateAlloca(
+      ArrayType::get(Int8Ty, TotalSize), nullptr, "va_args");
+  Packed->setAlignment(Align(16));
+
+  // Store each variadic arg before the call
+  IRBuilder<> IRB(CB);
+  unsigned Offset = 0;
+  for (unsigned i = NumFixed; i < CB->arg_size(); ++i) {
+    Value *Addr = IRB.CreateConstGEP1_64(Int8Ty, Packed, Offset);
+    IRB.CreateStore(CB->getArgOperand(i), Addr);
+    Offset += alignTo(DL.getTypeStoreSize(CB->getArgOperand(i)->getType()), 8);
+  }
+
+  // Replace call: fixed args + hidden pointer
+  SmallVector<Value *, 8> NewArgs(CB->arg_begin(), CB->arg_begin() + NumFixed);
+  NewArgs.push_back(Packed);
+  SmallVector<OperandBundleDef, 1> OpBundles;
+  CB->getOperandBundlesAsDefs(OpBundles);
+
+  CallBase *NewCB;
+  if (auto *II = dyn_cast<InvokeInst>(CB)) {
+    NewCB = InvokeInst::Create(FTy, CB->getCalledOperand(),
+        II->getNormalDest(), II->getUnwindDest(),
+        NewArgs, OpBundles, "", CB->getIterator());
+  } else {
+    NewCB = CallInst::Create(FTy, CB->getCalledOperand(),
+        NewArgs, OpBundles, "", CB->getIterator());
+  }
+  NewCB->setCallingConv(CB->getCallingConv());
+  NewCB->setDebugLoc(CB->getDebugLoc());
+  CB->replaceAllUsesWith(NewCB);
+  CB->eraseFromParent();
+}
+
 uint64_t SafeStack::getStaticAllocaAllocationSize(const AllocaInst* AI) {
   uint64_t Size = DL.getTypeAllocSize(AI->getAllocatedType());
   if (AI->isArrayAllocation()) {
@@ -930,16 +991,25 @@ public:
   bool runOnFunction(Function &F) override {
     LLVM_DEBUG(dbgs() << "[SafeStack] Function: " << F.getName() << "\n");
 
+    bool Changed = false;
+    if (F.getParent()->getTargetTriple().isLFI() && !F.isDeclaration()) {
+      SmallVector<CallBase *, 4> VACalls;
+      findVACalls(F, VACalls);
+      for (auto *CB : VACalls)
+          TransformVACallSite(CB, F);
+      Changed = !VACalls.empty();
+    }
+
     if (!F.hasFnAttribute(Attribute::SafeStack)) {
       LLVM_DEBUG(dbgs() << "[SafeStack]     safestack is not requested"
                            " for this function\n");
-      return false;
+      return Changed;
     }
 
     if (F.isDeclaration()) {
       LLVM_DEBUG(dbgs() << "[SafeStack]     function definition"
                            " is not available\n");
-      return false;
+      return Changed;
     }
 
     TM = &getAnalysis<TargetPassConfig>().getTM<TargetMachine>();

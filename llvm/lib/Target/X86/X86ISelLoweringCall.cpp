@@ -1759,13 +1759,22 @@ SDValue X86TargetLowering::LowerFormalArguments(
   if (IsWin64)
     CCInfo.AllocateStack(32, Align(8));
 
+  CCInfo.AnalyzeArguments(Ins, CC_X86);
+
+  // handle a hidden pointer instead of vaargs
   if (Subtarget.isLFI() && IsVarArg) {
-    // Only fixed args come in registers; variadic args are on stack.
-    SmallVector<ISD::InputArg, 16> FixedIns(Ins.begin(), Ins.begin() + F.getFunctionType()->getNumParams());
-    CCInfo.AnalyzeArguments(FixedIns, CC_X86);
-    // Variadic args handled via va_start/va_arg from VarArgsFrameIndex
-  } else {
-    CCInfo.AnalyzeArguments(Ins, CC_X86);
+    // Expect the hidden pointer in the next available GPR
+    ArrayRef<MCPhysReg> ArgGPRs = get64BitArgumentGPRs(CallConv, Subtarget);
+    unsigned NextGPR = CCInfo.getFirstUnallocated(ArgGPRs);
+    Register VReg = MF.addLiveIn(ArgGPRs[NextGPR], &X86::GR64RegClass);
+    SDValue HiddenPtr = DAG.getCopyFromReg(Chain, dl, VReg, MVT::i64);
+
+    // Store to a stack slot so LowerVASTART can find it
+    int FI = MFI.CreateStackObject(8, Align(8), false);
+    Chain = DAG.getStore(Chain, dl, HiddenPtr,
+        DAG.getFrameIndex(FI, MVT::i64),
+        MachinePointerInfo::getFixedStack(MF, FI));
+    FuncInfo->setVarArgsFrameIndex(FI);
   }
 
   // In vectorcall calling convention a second pass is required for the HVA
@@ -1928,7 +1937,7 @@ SDValue X86TargetLowering::LowerFormalArguments(
                          MF.getTarget().Options.GuaranteedTailCallOpt))
     StackSize = GetAlignedArgumentStackSize(StackSize, DAG);
 
-  if (IsVarArg)
+  if (IsVarArg && !(Subtarget.isLFI()))
     VarArgsLoweringHelper(FuncInfo, dl, DAG, Subtarget, CallConv, CCInfo)
         .lowerVarArgsParameters(Chain, StackSize);
 
@@ -2118,25 +2127,47 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   if (IsWin64)
     CCInfo.AllocateStack(32, Align(8));
 
-  if (Subtarget.isLFI() && isVarArg) {
-    // Phase 1: Analyze only the fixed (named) arguments through CC_X86
-    // These go in registers as normal.
-    SmallVector<ISD::OutputArg, 16> FixedOuts(Outs.begin(),
-        Outs.begin() + CLI.NumFixedArgs);
-    CCInfo.AnalyzeArguments(FixedOuts, CC_X86);
+  // pack the vaargs, and replce them with a new pointer arg for vastart
+  // if SafeStack is enabled, packaging is done by SafeStack::TransformVACallSite.
+  /*
+  if (Subtarget.isLFI() && isVarArg && CLI.NumFixedArgs < Outs.size() &&
+      !MF.getFunction().hasFnAttribute(Attribute::SafeStack)) {
+    unsigned TotalSize = 0;
+    for (unsigned i = CLI.NumFixedArgs; i < Outs.size(); ++i)
+      TotalSize += alignTo(Outs[i].VT.getStoreSize(), 8);
 
-    // Phase 2: Force all variadic arguments to stack slots
-    for (unsigned i = CLI.NumFixedArgs, e = Outs.size(); i != e; ++i) {
-      MVT ArgVT = Outs[i].VT;
-      unsigned Size = ArgVT.getStoreSize();
-      Align ArgAlign = Align(std::max(8u, Size)); // 8-byte minimum alignment
-      unsigned Offset = CCInfo.AllocateStack(Size, ArgAlign);
-      CCInfo.addLoc(CCValAssign::getMem(i, ArgVT, Offset, ArgVT,
-            CCValAssign::Full));
+    // Create frame object for packed args
+    auto &MFI = MF.getFrameInfo();
+    int FI = MFI.CreateStackObject(TotalSize, Align(16), false);
+    auto PtrVT = getPointerTy(DAG.getDataLayout());
+    SDValue Base = DAG.getFrameIndex(FI, PtrVT);
+
+    // Push each variadic arg to stack
+    SmallVector<SDValue, 8> Stores;
+    unsigned Offset = 0;
+    for (unsigned i = CLI.NumFixedArgs; i < Outs.size(); ++i) {
+      SDValue Addr = DAG.getNode(ISD::ADD, dl, PtrVT, Base,
+          DAG.getConstant(Offset, dl, PtrVT));
+      Stores.push_back(DAG.getStore(Chain, dl, OutVals[i], Addr,
+            MachinePointerInfo::getFixedStack(MF, FI, Offset)));
+      Offset += alignTo(Outs[i].VT.getStoreSize(), 8);
     }
-  } else {
-    CCInfo.AnalyzeArguments(Outs, CC_X86);
+    Chain = DAG.getNode(ISD::TokenFactor, dl, MVT::Other, Stores);
+
+    // Replace variadic args with hidden pointer
+    Outs.truncate(CLI.NumFixedArgs);
+    OutVals.truncate(CLI.NumFixedArgs);
+
+    ISD::OutputArg PtrArg(ISD::ArgFlagsTy(), MVT::i64, EVT(MVT::i64),
+        PointerType::getUnqual(MF.getFunction().getContext()),
+        CLI.NumFixedArgs, 0);
+
+    Outs.push_back(PtrArg);
+    OutVals.push_back(Base);
   }
+  */
+
+  CCInfo.AnalyzeArguments(Outs, CC_X86);
 
   // In vectorcall calling convention a second pass is required for the HVA
   // types.
