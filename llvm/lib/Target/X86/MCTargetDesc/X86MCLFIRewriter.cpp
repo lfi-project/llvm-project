@@ -55,6 +55,18 @@ static cl::opt<bool>
                               "+no-lfi-loads,+no-lfi-stores)"),
                      cl::init(false));
 
+static cl::opt<bool>
+    X86LFIHwShstk("x86-lfi-hw-shstk",
+                   cl::desc("Hardware shadow call stack is available; skip "
+                            "software SCS rewrites"),
+                   cl::init(true));
+
+static cl::opt<bool>
+    X86LFIHwEndbr("x86-lfi-hw-endbr",
+                   cl::desc("Hardware endbr CFI is available; skip software "
+                            "endbr comparison checks at indirect branches"),
+                   cl::init(false));
+
 // The expected encoding of endbr64 (f3 0f 1e fa) as a 32-bit LE value.
 static const int32_t ENDBR64Encoding = static_cast<int32_t>(0xfa1e0ff3);
 
@@ -337,7 +349,7 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
   Out.emitInstruction(AndInst, STI);
 
   // Forward-edge CFI: check for endbr64 at the aligned target.
-  if (!FlagX86LFIBundling && CheckCFI)
+  if (!FlagX86LFIBundling && !X86LFIHwEndbr && CheckCFI)
     emitCFICheck(Reg, Out, STI);
 
   // addq %r14, %rX
@@ -453,14 +465,14 @@ void X86::X86MCLFIRewriter::expandDirectCall(const MCInst &Inst,
                                               const MCSubtargetInfo &STI) {
   MCSymbol *RetLabel = nullptr;
   bool ReturnsTwice = Inst.getFlags() & X86::IP_LFI_RETURNS_TWICE;
-  if (!FlagX86LFIBundling)
+  if (!FlagX86LFIBundling && !X86LFIHwShstk)
     RetLabel = emitShadowCallPrologue(Out, STI);
 
   maybeEmitBundleLock(true, Out, STI);
   Out.emitInstruction(Inst, STI);
   maybeEmitBundleUnlock(Out, STI);
 
-  if (!FlagX86LFIBundling)
+  if (!FlagX86LFIBundling && !X86LFIHwShstk)
     emitShadowCallEpilogue(RetLabel, Out, STI, ReturnsTwice);
 }
 
@@ -470,7 +482,7 @@ void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
   // Emit shadow call stack prologue before loading the target, since the
   // prologue uses and frees r11 before the target load may need it.
   MCSymbol *RetLabel = nullptr;
-  if (!FlagX86LFIBundling && isCall(Inst))
+  if (!FlagX86LFIBundling && !X86LFIHwShstk && isCall(Inst))
     RetLabel = emitShadowCallPrologue(Out, STI);
 
   MCRegister Target;
@@ -496,13 +508,19 @@ void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
   else
     emitIndirectJumpReg(Target, Out, STI);
 
-  if (!FlagX86LFIBundling && isCall(Inst))
+  if (!FlagX86LFIBundling && !X86LFIHwShstk && isCall(Inst))
     emitShadowCallEpilogue(RetLabel, Out, STI);
 }
 
 void X86::X86MCLFIRewriter::expandReturn(const MCInst &Inst, MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
   if (!FlagX86LFIBundling) {
+    if (X86LFIHwShstk) {
+      // Hardware shadow stack handles backward-edge CFI; emit ret as-is.
+      Out.emitInstruction(Inst, STI);
+      return;
+    }
+
     // Handle ret with immediate - adjust rsp before saving to temp.
     if (Inst.getNumOperands() > 0) {
       if (Inst.getOpcode() == X86::RETI32 || Inst.getOpcode() == X86::RETI64) {
@@ -1647,9 +1665,9 @@ bool X86::X86MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
     return false;
   Guard = true;
 
-  // Eagerly emit the trap symbol on first use when CFI is enabled,
+  // Eagerly emit the trap symbol on first use when software CFI is enabled,
   // so the section switch doesn't happen inside a bundle lock.
-  if (!FlagX86LFIBundling && !LFITrapSymbol)
+  if (!FlagX86LFIBundling && !X86LFIHwEndbr && !LFITrapSymbol)
     getOrEmitTrapSymbol(Out, STI);
 
   doRewriteInst(Inst, Out, STI, true);
