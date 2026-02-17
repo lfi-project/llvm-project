@@ -1763,19 +1763,28 @@ SDValue X86TargetLowering::LowerFormalArguments(
 
   // handle a hidden pointer instead of vaargs
   if (Subtarget.isLFI() && IsVarArg) {
-    // Expect the hidden pointer in the next available GPR
     ArrayRef<MCPhysReg> ArgGPRs = get64BitArgumentGPRs(CallConv, Subtarget);
     unsigned NextGPR = CCInfo.getFirstUnallocated(ArgGPRs);
-    Register VReg = MF.addLiveIn(ArgGPRs[NextGPR], &X86::GR64RegClass);
-    SDValue HiddenPtr = DAG.getCopyFromReg(Chain, dl, VReg, MVT::i64);
 
-    // Store to a stack slot so LowerVASTART can find it
-    int FI = MFI.CreateStackObject(8, Align(8), false);
-    Chain = DAG.getStore(Chain, dl, HiddenPtr,
-        DAG.getFrameIndex(FI, MVT::i64),
-        MachinePointerInfo::getFixedStack(MF, FI));
-    FuncInfo->setVarArgsFrameIndex(FI);
+    if (NextGPR < ArgGPRs.size()) {
+      // Hidden pointer passed in the next available GPR
+      Register VReg = MF.addLiveIn(ArgGPRs[NextGPR], &X86::GR64RegClass);
+      SDValue HiddenPtr = DAG.getCopyFromReg(Chain, dl, VReg, MVT::i64);
+
+      int FI = MFI.CreateStackObject(8, Align(8), false);
+      Chain = DAG.getStore(Chain, dl, HiddenPtr,
+          DAG.getFrameIndex(FI, MVT::i64),
+          MachinePointerInfo::getFixedStack(MF, FI));
+      FuncInfo->setVarArgsFrameIndex(FI);
+    } else {
+      // All GPRs exhausted — hidden pointer is on the stack,
+      // right after the last fixed stack arg.
+      unsigned StackSize = CCInfo.getStackSize();
+      int FI = MFI.CreateFixedObject(8, StackSize, true);
+      FuncInfo->setVarArgsFrameIndex(FI);
+    }
   }
+
 
   // In vectorcall calling convention a second pass is required for the HVA
   // types.

@@ -26266,7 +26266,7 @@ SDValue X86TargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) const {
   assert(Op.getNumOperands() == 4);
 
   MachineFunction &MF = DAG.getMachineFunction();
-  if (Subtarget.isCallingConvWin64(MF.getFunction().getCallingConv()))
+  if (Subtarget.isCallingConvWin64(MF.getFunction().getCallingConv()) || Subtarget.isLFI())
     // The Win64 ABI uses char* instead of a structure.
     return DAG.expandVAArg(Op.getNode());
 
