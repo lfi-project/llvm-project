@@ -1235,10 +1235,8 @@ static unsigned convertRoXToRoW(unsigned Op, unsigned &Shift) {
     Shift = 4;
     return AArch64::LDRQroW;
   case AArch64::LDRSBWroX:
-    Shift = 1;
     return AArch64::LDRSBWroW;
   case AArch64::LDRSBXroX:
-    Shift = 1;
     return AArch64::LDRSBXroW;
   case AArch64::LDRSHWroX:
     Shift = 1;
@@ -1313,10 +1311,8 @@ static unsigned convertRoWToRoW(unsigned Op, unsigned &Shift) {
     Shift = 4;
     return AArch64::LDRQroW;
   case AArch64::LDRSBWroW:
-    Shift = 1;
     return AArch64::LDRSBWroW;
   case AArch64::LDRSBXroW:
-    Shift = 1;
     return AArch64::LDRSBXroW;
   case AArch64::LDRSHWroW:
     Shift = 1;

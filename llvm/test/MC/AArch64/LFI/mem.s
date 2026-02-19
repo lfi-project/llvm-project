@@ -374,6 +374,26 @@ ldrh w0, [x1, w2, uxtw #1]
 ldr w0, [x1, w2, sxtw #2]
 // CHECK:      add x26, x1, w2, sxtw #2
 // CHECK-NEXT: ldr w0, [x27, w26, uxtw]
+
+// Byte sign-extending loads with register offset and explicit shift.
+// For byte loads, the shift amount is always 0 (log2(1) = 0), so the
+// generated add should not have a shift amount.
+ldrsb x0, [x1, x2, sxtx #0]
+// CHECK:      add x26, x1, x2, sxtx{{$}}
+// CHECK-NEXT: ldrsb x0, [x27, w26, uxtw]
+
+ldrsb w0, [x1, x2, sxtx #0]
+// CHECK:      add x26, x1, x2, sxtx{{$}}
+// CHECK-NEXT: ldrsb w0, [x27, w26, uxtw]
+
+ldrsb w0, [x1, w2, sxtw #0]
+// CHECK:      add x26, x1, w2, sxtw{{$}}
+// CHECK-NEXT: ldrsb w0, [x27, w26, uxtw]
+
+ldrsb x0, [x1, w2, uxtw #0]
+// CHECK:      add x26, x1, w2, uxtw{{$}}
+// CHECK-NEXT: ldrsb x0, [x27, w26, uxtw]
+
 // 32-bit pair pre/post-index
 ldp w0, w1, [x2], #8
 // CHECK:      add x28, x27, w2, uxtw
