@@ -91,9 +91,18 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
 #endif
 
   _LIBUNWIND_CET_ENDBR
+#ifndef __LFI__
   movq  56(%rdi), %rax # rax holds new stack pointer
   subq  $16, %rax
   movq  %rax, 56(%rdi)
+#else
+  .lfi_rewrite_disable
+  movq 8(%r15), %rax
+  .lfi_rewrite_enable
+  subq $16, %rax
+#endif
+
+
   movq  32(%rdi), %rbx  # store new rdi on new stack
   movq  %rbx, 0(%rax)
   movq  128(%rdi), %rbx # store new rip on new stack
@@ -141,8 +150,16 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
   movdqu 416(%rdi),%xmm15
 #endif
   movq  56(%rdi), %rsp  # cut back rsp to new location
+#ifndef __LFI__
   pop    %rdi      # rdi was saved here earlier
   pop    %rcx
+#else
+  .lfi_rewrite_disable
+  movq 8(%r15), %r11
+  .lfi_rewrite_enable
+  movq -16(%r11), %rdi
+  movq -8(%r11), %rcx
+#endif
   jmpq   *%rcx
 
 

@@ -157,6 +157,61 @@ struct UnwindInfoSections {
 #endif
 };
 
+#define DISABLE_LFI_REWRITE ".lfi_rewrite_disable\n"
+#define ENABLE_LFI_REWRITE ".lfi_rewrite_enable\n"
+
+static uint64_t read_8byte_safestack(void *src) {
+  uint64_t value = 0;
+    asm volatile (
+        DISABLE_LFI_REWRITE
+        ".bundle_lock\n"
+        "movq %%rsp, %%r11\n"
+        "andq $-1048576, %%r11\n"
+        "andq $1048575, %[SSP]\n"
+        "movq (%%r11, %[SSP]), %[Result]\n"
+        ".bundle_unlock\n"
+        ENABLE_LFI_REWRITE
+        : [SSP] "+r" (src), [Result] "=r" (value) : : "r11", "cc");
+    return value;
+}
+
+#define extract_nbit(src, n) (src & (1UL << n) - 1))
+
+static void *memcpy_safestack(void *dest, void *src, size_t size) {
+  uintptr_t sp;
+  asm volatile("movq %%rsp, %0": "=r" (sp):);
+
+  _LIBUNWIND_TRACE_DWARF("memcpy_safestack(dest=0x%0" PRIx64
+      ", src=0x%0" PRIx64 ", size=%d)\n", dest, src, size);
+
+  if ((sp & ~0xffff) != ((uintptr_t)src & ~0xffff))
+    return memcpy(dest, src, size); 
+
+  uint64_t value = read_8byte_safestack(src);
+  switch (size) {
+    case 1:
+      *(uint8_t*)dest = (uint8_t)value;
+      break;
+    case 2:
+      *(uint16_t*)dest = (uint16_t)value;
+      break;
+    case 4:
+      *(uint32_t*)dest = (uint32_t)value;
+      break;
+    case 8:
+      *(uint64_t*)dest = (uint64_t)value;
+      break;
+    case 16:
+      *(uint64_t*)dest = (uint64_t)value;
+      value = read_8byte_safestack((void *)((uintptr_t)src + 8));
+      *((uint64_t*)dest + 8) = (uint64_t)value;
+      break;
+    default:
+      return memcpy(dest, src, size); 
+  }
+  return dest;
+}
+
 
 /// LocalAddressSpace is used as a template parameter to UnwindCursor when
 /// unwinding a thread in the same process.  The wrappers compile away,
@@ -167,32 +222,32 @@ public:
   typedef intptr_t  sint_t;
   uint8_t         get8(pint_t addr) {
     uint8_t val;
-    memcpy(&val, (void *)addr, sizeof(val));
+    memcpy_safestack(&val, (void *)addr, sizeof(val));
     return val;
   }
   uint16_t         get16(pint_t addr) {
     uint16_t val;
-    memcpy(&val, (void *)addr, sizeof(val));
+    memcpy_safestack(&val, (void *)addr, sizeof(val));
     return val;
   }
   uint32_t         get32(pint_t addr) {
     uint32_t val;
-    memcpy(&val, (void *)addr, sizeof(val));
+    memcpy_safestack(&val, (void *)addr, sizeof(val));
     return val;
   }
   uint64_t         get64(pint_t addr) {
     uint64_t val;
-    memcpy(&val, (void *)addr, sizeof(val));
+    memcpy_safestack(&val, (void *)addr, sizeof(val));
     return val;
   }
   double           getDouble(pint_t addr) {
     double val;
-    memcpy(&val, (void *)addr, sizeof(val));
+    memcpy_safestack(&val, (void *)addr, sizeof(val));
     return val;
   }
   v128             getVector(pint_t addr) {
     v128 val;
-    memcpy(&val, (void *)addr, sizeof(val));
+    memcpy_safestack(&val, (void *)addr, sizeof(val));
     return val;
   }
   uintptr_t       getP(pint_t addr);
