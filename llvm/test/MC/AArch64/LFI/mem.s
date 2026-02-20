@@ -394,6 +394,28 @@ ldrsb x0, [x1, w2, uxtw #0]
 // CHECK:      add x26, x1, w2, uxtw{{$}}
 // CHECK-NEXT: ldrsb x0, [x27, w26, uxtw]
 
+// LDRSH register-offset: shift should be #1 (log2(2) for halfword).
+ldrsh x0, [x1, x2, sxtx #1]
+// CHECK:      add x26, x1, x2, sxtx #1
+// CHECK-NEXT: ldrsh x0, [x27, w26, uxtw]
+
+ldrsh w0, [x1, x2, sxtx #1]
+// CHECK:      add x26, x1, x2, sxtx #1
+// CHECK-NEXT: ldrsh w0, [x27, w26, uxtw]
+
+ldrsh w0, [x1, w2, sxtw #1]
+// CHECK:      add x26, x1, w2, sxtw #1
+// CHECK-NEXT: ldrsh w0, [x27, w26, uxtw]
+
+// LDRSW register-offset: shift should be #2 (log2(4) for word).
+ldrsw x0, [x1, x2, sxtx #2]
+// CHECK:      add x26, x1, x2, sxtx #2
+// CHECK-NEXT: ldrsw x0, [x27, w26, uxtw]
+
+ldrsw x0, [x1, w2, sxtw #2]
+// CHECK:      add x26, x1, w2, sxtw #2
+// CHECK-NEXT: ldrsw x0, [x27, w26, uxtw]
+
 // 32-bit pair pre/post-index
 ldp w0, w1, [x2], #8
 // CHECK:      add x28, x27, w2, uxtw

@@ -4,8 +4,6 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// This file was written by the Native Client and LFI authors.
-//
 //===----------------------------------------------------------------------===//
 //
 // This file declares the AArch64MCLFIRewriter class, the AArch64 specific
@@ -53,7 +51,8 @@ public:
   bool rewriteInst(const MCInst &Inst, MCStreamer &Out,
                    const MCSubtargetInfo &STI) override;
 
-  void onLabel(const MCSymbol *Symbol) override;
+  void onLabel(const MCSymbol *Symbol, MCStreamer &Out) override;
+  void finish(MCStreamer &Out) override;
 
 private:
   /// Recursion guard to prevent infinite loops when emitting instructions.
@@ -131,10 +130,9 @@ private:
   // PAC (Pointer Authentication Code) instructions.
   void rewriteAuthenticatedReturn(const MCInst &Inst, MCStreamer &Out,
                                   const MCSubtargetInfo &STI);
-  void rewriteAuthenticatedBranch(const MCInst &Inst, MCStreamer &Out,
-                                  const MCSubtargetInfo &STI);
-  void rewriteAuthenticatedCall(const MCInst &Inst, MCStreamer &Out,
-                                const MCSubtargetInfo &STI);
+  void rewriteAuthenticatedBranchOrCall(const MCInst &Inst,
+                                        unsigned BranchOpcode, MCStreamer &Out,
+                                        const MCSubtargetInfo &STI);
 
   // System instructions.
   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,

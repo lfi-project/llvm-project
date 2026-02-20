@@ -273,16 +273,18 @@ LFI is designed to be compatible with ARM Pointer Authentication Code (PAC)
 instructions. PAC signs and authenticates pointers (typically the return
 address in ``x30``) to protect against control-flow hijacking attacks.
 
+To get the security benefits of PAC with LFI-compiled code, the hardware must
+support **FEAT_FPAC** (Faulting PAC), which causes authentication failures to
+immediately fault. Without FEAT_FPAC, a failed authentication produces a
+"poisoned" pointer that only faults when dereferenced, which may not provide
+immediate detection of authentication failures.
+
 **PACIASP** (sign return address) passes through unchanged. It signs the
 current value of ``x30`` using the stack pointer as a modifier, which does not
 affect LFI's security guarantees.
 
-**AUTIASP** (authenticate return address) requires special handling. After
-authentication, if the signature was invalid, ``x30`` contains a "poisoned"
-pointer that will fault when used. On processors without FEAT_FPAC (Faulting
-PAC), authentication failure does not immediately fault—the poisoned pointer
-only faults when dereferenced. To ensure immediate detection of authentication
-failures, LFI emits a validation load after ``autiasp``:
+**AUTIASP** (authenticate return address) passes through unchanged. On
+processors with FEAT_FPAC, authentication failure automatically faults.
 
 +-------------------+------------------------+
 |     Original      |       Rewritten        |
@@ -291,20 +293,6 @@ failures, LFI emits a validation load after ``autiasp``:
 |                   |                        |
 |    paciasp        |    paciasp             |
 |                   |                        |
-+-------------------+------------------------+
-| .. code-block::   | .. code-block::        |
-|                   |                        |
-|    autiasp        |    autiasp             |
-|                   |    ldr xzr, [x30]      |
-|                   |                        |
-+-------------------+------------------------+
-
-On processors with **FEAT_FPAC** support (e.g., Apple M2 and later), PAC
-authentication automatically faults on failure, so the validation load is
-omitted:
-
-+-------------------+------------------------+
-|     Original      |  Rewritten (FEAT_FPAC) |
 +-------------------+------------------------+
 | .. code-block::   | .. code-block::        |
 |                   |                        |
@@ -327,7 +315,6 @@ return. LFI expands these into their component operations:
 | .. code-block::   | .. code-block::               |
 |                   |                               |
 |    retaa          |    autiasp                    |
-|                   |    ldr xzr, [x30]             |
 |                   |    add x30, x27, w30, uxtw    |
 |                   |    ret                        |
 |                   |                               |
@@ -335,7 +322,6 @@ return. LFI expands these into their component operations:
 | .. code-block::   | .. code-block::               |
 |                   |                               |
 |    retab          |    autibsp                    |
-|                   |    ldr xzr, [x30]             |
 |                   |    add x30, x27, w30, uxtw    |
 |                   |    ret                        |
 |                   |                               |
@@ -351,7 +337,6 @@ the target register, then performing a normal sandboxed branch:
 | .. code-block::   | .. code-block::               |
 |                   |                               |
 |    braa xN, xM    |    autia xN, xM               |
-|                   |    ldr xzr, [xN]              |
 |                   |    add x28, x27, wN, uxtw     |
 |                   |    br x28                     |
 |                   |                               |
@@ -359,7 +344,6 @@ the target register, then performing a normal sandboxed branch:
 | .. code-block::   | .. code-block::               |
 |                   |                               |
 |    braaz xN       |    autiza xN                  |
-|                   |    ldr xzr, [xN]              |
 |                   |    add x28, x27, wN, uxtw     |
 |                   |    br x28                     |
 |                   |                               |
@@ -374,7 +358,6 @@ expanded similarly:
 | .. code-block::   | .. code-block::               |
 |                   |                               |
 |    blraa xN, xM   |    autia xN, xM               |
-|                   |    ldr xzr, [xN]              |
 |                   |    add x28, x27, wN, uxtw     |
 |                   |    blr x28                    |
 |                   |                               |
@@ -382,14 +365,10 @@ expanded similarly:
 | .. code-block::   | .. code-block::               |
 |                   |                               |
 |    blraaz xN      |    autiza xN                  |
-|                   |    ldr xzr, [xN]              |
 |                   |    add x28, x27, wN, uxtw     |
 |                   |    blr x28                    |
 |                   |                               |
 +-------------------+-------------------------------+
-
-As with ``autiasp``, the validation load is omitted on processors with
-FEAT_FPAC support.
 
 **Authenticated exception returns** (``eretaa``/``eretab``) are not supported
 by LFI and will produce an error.

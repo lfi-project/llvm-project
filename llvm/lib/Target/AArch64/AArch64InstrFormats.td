@@ -117,7 +117,9 @@ class AArch64Inst<Format f, string cstr> : Instruction {
   ElementSizeEnum ElementSize = ElementSizeNone;
   MemOpAddrModeEnum MemOpAddrMode = MemOpAddrModeNone;
   // Index of the base register operand for memory instructions.
-  // 0 means not set (non-memory instruction).
+  // 0 means not set (non-memory instruction). This means operand index 0
+  // cannot be used as a base register, which is fine for AArch64 since
+  // operand 0 is always the data/destination register.
   bits<4> MemOpBaseIdx = 0;
   // Index of the offset operand for memory instructions.
   // 0 means not set (no offset operand).

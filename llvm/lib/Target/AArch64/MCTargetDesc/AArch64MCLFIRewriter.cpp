@@ -4,8 +4,6 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// This file was written by the LFI authors.
-//
 //===----------------------------------------------------------------------===//
 //
 // This file implements the AArch64MCLFIRewriter class, the AArch64 specific
@@ -33,15 +31,15 @@ using namespace llvm;
 
 // LFI reserved registers.
 namespace {
-const MCRegister LFIBaseReg = AArch64::X27;
-const MCRegister LFIAddrReg = AArch64::X28;
-const MCRegister LFIScratchReg = AArch64::X26;
-const MCRegister LFITLSReg = AArch64::X25;
+constexpr MCRegister LFIBaseReg = AArch64::X27;
+constexpr MCRegister LFIAddrReg = AArch64::X28;
+constexpr MCRegister LFIScratchReg = AArch64::X26;
+constexpr MCRegister LFITLSReg = AArch64::X25;
 
 // Offset into the virtual register file (pointed to by LFITLSReg) where the
 // thread pointer is stored. This is a scaled offset (multiplied by 8 for
 // 64-bit loads), so a value of 4 means an actual byte offset of 32.
-const unsigned LFITPOffset = 4;
+constexpr unsigned LFITPOffset = 4;
 
 static unsigned convertUiToRoW(unsigned Op);
 static unsigned convertPreToRoW(unsigned Op);
@@ -132,11 +130,23 @@ bool AArch64::AArch64MCLFIRewriter::mayModifyLR(const MCInst &Inst) const {
 
 // Guard elimination.
 
-void AArch64::AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol) {
-  // Labels are potential branch targets, so reset the guard state. We can't
-  // emit here as we don't have Out/STI. The pending ADRP will be emitted at
-  // the start of the next instruction processing.
+void AArch64::AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol,
+                                             MCStreamer &Out) {
+  // Labels are potential branch targets, so reset the guard state and flush
+  // the pending ADRP (the load could be reached via the label without the
+  // ADRP, so we can't optimize it).
   ActiveGuard = false;
+  if (PendingAdrp.has_value()) {
+    emitInst(PendingAdrp.value(), Out, *LastSTI);
+    PendingAdrp.reset();
+  }
+}
+
+void AArch64::AArch64MCLFIRewriter::finish(MCStreamer &Out) {
+  if (PendingAdrp.has_value()) {
+    emitInst(PendingAdrp.value(), Out, *LastSTI);
+    PendingAdrp.reset();
+  }
 }
 
 // Instruction emission helpers.
@@ -209,6 +219,8 @@ void AArch64::AArch64MCLFIRewriter::emitMov(MCRegister Dest, MCRegister Src,
 void AArch64::AArch64MCLFIRewriter::emitAddImm(MCRegister Dest, MCRegister Src,
                                                 int64_t Imm, MCStreamer &Out,
                                                 const MCSubtargetInfo &STI) {
+  // Immediate must fit in a 12-bit ADDXri/SUBXri.
+  assert(std::abs(Imm) <= 4095);
   MCInst Inst;
   if (Imm >= 0) {
     Inst.setOpcode(AArch64::ADDXri);
@@ -718,12 +730,9 @@ void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedReturn(
   emitInst(Ret, Out, STI);
 }
 
-void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedBranch(
-    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  // BRAA Xn, Xm  = AUTIA Xn, Xm + BR Xn
-  // BRAAZ Xn     = AUTIZA Xn + BR Xn
-  // BRAB Xn, Xm  = AUTIB Xn, Xm + BR Xn
-  // BRABZ Xn     = AUTIZB Xn + BR Xn
+void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedBranchOrCall(
+    const MCInst &Inst, unsigned BranchOpcode, MCStreamer &Out,
+    const MCSubtargetInfo &STI) {
   unsigned Opcode = Inst.getOpcode();
   MCRegister TargetReg = Inst.getOperand(0).getReg();
 
@@ -733,81 +742,39 @@ void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedBranch(
   MCInst Auth;
   switch (Opcode) {
   case AArch64::BRAA:
-    Auth.setOpcode(AArch64::AUTIA);
-    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
-    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
-    Auth.addOperand(Inst.getOperand(1));              // modifier
-    break;
-  case AArch64::BRAAZ:
-    Auth.setOpcode(AArch64::AUTIZA);
-    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
-    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
-    break;
-  case AArch64::BRAB:
-    Auth.setOpcode(AArch64::AUTIB);
-    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
-    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
-    Auth.addOperand(Inst.getOperand(1));              // modifier
-    break;
-  case AArch64::BRABZ:
-    Auth.setOpcode(AArch64::AUTIZB);
-    Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
-    Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
-    break;
-  default:
-    llvm_unreachable("unexpected authenticated branch opcode");
-  }
-  emitInst(Auth, Out, STI);
-
-  // Guard the target and branch.
-  emitAddMask(LFIAddrReg, TargetReg, Out, STI);
-  emitBranch(AArch64::BR, LFIAddrReg, Out, STI);
-}
-
-void AArch64::AArch64MCLFIRewriter::rewriteAuthenticatedCall(
-    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  // BLRAA Xn, Xm  = AUTIA Xn, Xm + BLR Xn
-  // BLRAAZ Xn     = AUTIZA Xn + BLR Xn
-  // BLRAB Xn, Xm  = AUTIB Xn, Xm + BLR Xn
-  // BLRABZ Xn     = AUTIZB Xn + BLR Xn
-  unsigned Opcode = Inst.getOpcode();
-  MCRegister TargetReg = Inst.getOperand(0).getReg();
-
-  // Emit the appropriate authentication instruction.
-  // AUTIA/AUTIB: 3 operands - dst, src (tied to dst), modifier
-  // AUTIZA/AUTIZB: 2 operands - dst, src (tied to dst)
-  MCInst Auth;
-  switch (Opcode) {
   case AArch64::BLRAA:
     Auth.setOpcode(AArch64::AUTIA);
     Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
     Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
     Auth.addOperand(Inst.getOperand(1));              // modifier
     break;
+  case AArch64::BRAAZ:
   case AArch64::BLRAAZ:
     Auth.setOpcode(AArch64::AUTIZA);
     Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
     Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
     break;
+  case AArch64::BRAB:
   case AArch64::BLRAB:
     Auth.setOpcode(AArch64::AUTIB);
     Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
     Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
     Auth.addOperand(Inst.getOperand(1));              // modifier
     break;
+  case AArch64::BRABZ:
   case AArch64::BLRABZ:
     Auth.setOpcode(AArch64::AUTIZB);
     Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
     Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied)
     break;
   default:
-    llvm_unreachable("unexpected authenticated call opcode");
+    llvm_unreachable("unexpected authenticated branch/call opcode");
   }
   emitInst(Auth, Out, STI);
 
-  // Guard the target and call.
+  // Guard the target and branch/call.
   emitAddMask(LFIAddrReg, TargetReg, Out, STI);
-  emitBranch(AArch64::BLR, LFIAddrReg, Out, STI);
+  emitBranch(BranchOpcode, LFIAddrReg, Out, STI);
 }
 
 // System instruction rewriting.
@@ -832,7 +799,7 @@ void AArch64::AArch64MCLFIRewriter::emitSyscall(MCStreamer &Out,
   emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
 }
 
-void AArch64::AArch64MCLFIRewriter::rewriteSyscall(const MCInst &Inst,
+void AArch64::AArch64MCLFIRewriter::rewriteSyscall(const MCInst &,
                                                     MCStreamer &Out,
                                                     const MCSubtargetInfo &STI) {
   emitSyscall(Out, STI);
@@ -970,10 +937,10 @@ void AArch64::AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst,
     return rewriteAuthenticatedReturn(Inst, Out, STI);
 
   if (isAuthenticatedBranch(Inst.getOpcode()))
-    return rewriteAuthenticatedBranch(Inst, Out, STI);
+    return rewriteAuthenticatedBranchOrCall(Inst, AArch64::BR, Out, STI);
 
   if (isAuthenticatedCall(Inst.getOpcode()))
-    return rewriteAuthenticatedCall(Inst, Out, STI);
+    return rewriteAuthenticatedBranchOrCall(Inst, AArch64::BLR, Out, STI);
 
   // Emit deferred LR guard before control flow instructions.
   if (DeferredLRGuard) {
@@ -1031,6 +998,7 @@ bool AArch64::AArch64MCLFIRewriter::rewriteInst(const MCInst &Inst,
   if (!Enabled || Guard)
     return false;
   Guard = true;
+  LastSTI = &STI;
 
   doRewriteInst(Inst, Out, STI);
 

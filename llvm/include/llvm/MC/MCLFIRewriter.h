@@ -32,6 +32,7 @@ private:
 
 protected:
   bool Enabled = true;
+  const MCSubtargetInfo *LastSTI = nullptr;
   std::unique_ptr<MCInstrInfo> InstInfo;
   std::unique_ptr<MCRegisterInfo> RegInfo;
 
@@ -61,7 +62,10 @@ public:
 
   // Called when a label is emitted. Used for optimizations that require
   // information about jump targets, such as guard elimination.
-  virtual void onLabel(const MCSymbol *Symbol) {}
+  virtual void onLabel(const MCSymbol *Symbol, MCStreamer &Out) {}
+
+  // Called at the end of the stream to flush any pending state.
+  virtual void finish(MCStreamer &Out) {}
 };
 
 } // namespace llvm
