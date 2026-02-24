@@ -2272,7 +2272,7 @@ ABIArgInfo X86_64ABIInfo::getIndirectResult(QualType Ty,
   }
 
   return ABIArgInfo::getIndirect(CharUnits::fromQuantity(Align),
-                                 getDataLayout().getAllocaAddrSpace());
+                                 getDataLayout().getAllocaAddrSpace(), /*ByVal=*/!getTarget().getTriple().isLFI());
 }
 
 /// The ABI specifies that a value should be passed in a full vector XMM/YMM
