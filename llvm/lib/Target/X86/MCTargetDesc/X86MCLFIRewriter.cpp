@@ -608,6 +608,13 @@ void X86::X86MCLFIRewriter::expandSafeStackModification(MCRegister StackReg,
   if (Opcode == X86::LEA64r) {
     Out.emitBundleLock(false, STI);
 
+    // leaq X, %r11  (compute effective address into scratch)
+    {
+      MCInst Lea(Inst);
+      Lea.getOperand(0).setReg(LFIScratchReg);
+      Out.emitInstruction(Lea, STI);
+    }
+
     // andq $BaseMask, %rsp  (keep region base)
     {
       MCInst And;
@@ -616,13 +623,6 @@ void X86::X86MCLFIRewriter::expandSafeStackModification(MCRegister StackReg,
       And.addOperand(MCOperand::createReg(X86::RSP));
       And.addOperand(MCOperand::createImm(BaseMask));
       Out.emitInstruction(And, STI);
-    }
-
-    // leaq X, %r11  (compute effective address into scratch)
-    {
-      MCInst Lea(Inst);
-      Lea.getOperand(0).setReg(LFIScratchReg);
-      Out.emitInstruction(Lea, STI);
     }
 
     // andq $OffsetMask, %r11  (mask to offset)

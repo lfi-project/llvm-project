@@ -112,16 +112,24 @@ orq $8, %rsp
 // LEA into RSP
 leaq 8(%rax), %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: andq $-1048576, %rsp
 // CHECK-NEXT: leaq 8(%rax), %r11
+// CHECK-NEXT: andq $-1048576, %rsp
 // CHECK-NEXT: andq $1048575, %r11
 // CHECK-NEXT: addq %r11, %rsp
 // CHECK-NEXT: .bundle_unlock
 
 leaq (%rax,%rcx), %rsp
 // CHECK:      .bundle_lock
-// CHECK-NEXT: andq $-1048576, %rsp
 // CHECK-NEXT: leaq (%rax,%rcx), %r11
+// CHECK-NEXT: andq $-1048576, %rsp
+// CHECK-NEXT: andq $1048575, %r11
+// CHECK-NEXT: addq %r11, %rsp
+// CHECK-NEXT: .bundle_unlock
+
+leaq -128(%rsp), %rsp
+// CHECK:      .bundle_lock
+// CHECK-NEXT: leaq -128(%rsp), %r11
+// CHECK-NEXT: andq $-1048576, %rsp
 // CHECK-NEXT: andq $1048575, %r11
 // CHECK-NEXT: addq %r11, %rsp
 // CHECK-NEXT: .bundle_unlock
