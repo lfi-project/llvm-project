@@ -301,8 +301,79 @@ void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
     emitIndirectJumpReg(Target, Out, STI);
 }
 
+void X86::X86MCLFIRewriter::expandSafeStackReturn(const MCInst &Inst, MCStreamer &Out,
+                                          const MCSubtargetInfo &STI) {
+  MCInst Load, Store, And, Add;
+
+  // movl (%rsp), %r11d
+  Load.setOpcode(X86::MOV32rm);
+  Load.addOperand(MCOperand::createReg(getReg32(LFIScratchReg)));
+  Load.addOperand(MCOperand::createReg(X86::RSP));
+  Load.addOperand(MCOperand::createImm(1));
+  Load.addOperand(MCOperand::createReg(X86::NoRegister));
+  Load.addOperand(MCOperand::createImm(0));
+  Load.addOperand(MCOperand::createReg(X86::NoRegister));
+  Out.emitInstruction(Load, STI);
+
+  if (Inst.getNumOperands() > 0) {
+    if (Inst.getOpcode() == X86::RETI32 || Inst.getOpcode() == X86::RETI64) {
+
+      MCInst Add;
+      Add.setOpcode(X86::ADD64ri32);
+      MCOperand StackPointer = MCOperand::createReg(X86::RSP);
+      Add.addOperand(StackPointer);
+      Add.addOperand(StackPointer);
+      Add.addOperand(Inst.getOperand(0));
+      doRewriteInst(Add, Out, STI, false);
+    }
+  }
+
+
+  Out.emitBundleLock(false, STI);
+
+  // andl $-32, %r11d
+  And.setOpcode(X86::AND32ri8);
+  And.addOperand(MCOperand::createReg(getReg32(LFIScratchReg)));
+  And.addOperand(MCOperand::createReg(getReg32(LFIScratchReg)));
+  And.addOperand(MCOperand::createImm(-BundleSize));
+  Out.emitInstruction(And, STI);
+
+  // leaq (%r14, %r11), %r11
+  Add.setOpcode(X86::LEA64r);
+  Add.addOperand(MCOperand::createReg(LFIScratchReg));
+  Add.addOperand(MCOperand::createReg(LFIBaseReg));
+  Add.addOperand(MCOperand::createImm(1));
+  Add.addOperand(MCOperand::createReg(LFIScratchReg));
+  Add.addOperand(MCOperand::createImm(0));
+  Add.addOperand(MCOperand::createReg(X86::NoRegister));
+  Out.emitInstruction(Add, STI);
+
+  // movq %r11, (%rsp)
+  Store.setOpcode(X86::MOV64mr);
+  Store.addOperand(MCOperand::createReg(X86::RSP));
+  Store.addOperand(MCOperand::createImm(1));
+  Store.addOperand(MCOperand::createReg(X86::NoRegister));
+  Store.addOperand(MCOperand::createImm(0));
+  Store.addOperand(MCOperand::createReg(X86::NoRegister));
+  Store.addOperand(MCOperand::createReg(LFIScratchReg));
+  Out.emitInstruction(Store, STI);
+
+  // ret
+  MCInst Ret;
+  Ret.setOpcode(X86::RET64);
+  Ret.setFlags(Inst.getFlags());
+  Ret.setLoc(Inst.getLoc());
+  Out.emitInstruction(Ret, STI);
+
+  Out.emitBundleUnlock(STI);
+}
+
 void X86::X86MCLFIRewriter::expandReturn(const MCInst &Inst, MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
+  if (hasSafeStack(STI)) {
+    return expandSafeStackReturn(Inst, Out, STI);
+  }
+
   // pop %r11
   MCInst Pop;
   Pop.setOpcode(X86::POP64r);

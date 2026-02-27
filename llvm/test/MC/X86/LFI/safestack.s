@@ -162,3 +162,37 @@ xchgq %rax, %rsp
 leave
 
 ret
+// CHECK:       movl (%rsp), %r11d
+// CHECK-NEXT:  .bundle_lock
+// CHECK-NEXT:  andl $-32, %r11d
+// CHECK-NEXT:  leaq (%r14,%r11), %r11
+// CHECK-NEXT:  movq %r11, (%rsp)
+// CHECK-NEXT:  retq
+// CHECK-NEXT:  .bundle_unlock
+
+// Return with immediate (pop extra bytes)
+retq $8
+// CHECK:      movl    (%rsp), %r11d
+// CHECK-NEXT: .bundle_lock
+// CHECK-NEXT: addq    $8, %rsp
+// CHECK-NEXT: movq    (%rsp), %r11
+// CHECK-NEXT: .bundle_unlock
+// CHECK-NEXT: .bundle_lock
+// CHECK-NEXT: andl    $-32, %r11d
+// CHECK-NEXT: leaq    (%r14,%r11), %r11
+// CHECK-NEXT: movq    %r11, (%rsp)
+// CHECK-NEXT: retq
+// CHECK-NEXT: .bundle_unlock
+
+retq $16
+// CHECK:      movl    (%rsp), %r11d
+// CHECK-NEXT: .bundle_lock
+// CHECK-NEXT: addq    $16, %rsp
+// CHECK-NEXT: movq    (%rsp), %r11
+// CHECK-NEXT: .bundle_unlock
+// CHECK-NEXT: .bundle_lock
+// CHECK-NEXT: andl    $-32, %r11d
+// CHECK-NEXT: leaq    (%r14,%r11), %r11
+// CHECK-NEXT: movq    %r11, (%rsp)
+// CHECK-NEXT: retq
+// CHECK-NEXT: .bundle_unlock

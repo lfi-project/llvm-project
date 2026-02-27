@@ -87,6 +87,9 @@ private:
   void expandReturn(const MCInst &Inst, MCStreamer &Out,
                     const MCSubtargetInfo &STI);
 
+  void expandSafeStackReturn(const MCInst &Inst, MCStreamer &Out,
+                             const MCSubtargetInfo &STI);
+
   /// Expand load/store instructions with memory sandboxing.
   void expandLoadStore(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI, bool EmitPrefixes);
