@@ -1086,9 +1086,12 @@ void InputSection::relocateNonAlloc(Ctx &ctx, uint8_t *buf,
       continue;
     auto *ds = dyn_cast<Defined>(&sym);
 
-    if (emachine == EM_RISCV && type == R_RISCV_SET_ULEB128) {
+    if ((emachine == EM_RISCV && type == R_RISCV_SET_ULEB128) ||
+        (emachine == EM_X86_64 && type == R_X86_64_SET_ULEB128)) {
+      const RelType subType = emachine == EM_RISCV ? R_RISCV_SUB_ULEB128
+                                                   : R_X86_64_SUB_ULEB128;
       if (++it != end &&
-          it->getType(/*isMips64EL=*/false) == R_RISCV_SUB_ULEB128 &&
+          it->getType(/*isMips64EL=*/false) == subType &&
           it->r_offset == offset) {
         uint64_t val;
         if (!ds && tombstone) {
@@ -1103,7 +1106,7 @@ void InputSection::relocateNonAlloc(Ctx &ctx, uint8_t *buf,
         continue;
       }
       Err(ctx) << getLocation(offset)
-               << ": R_RISCV_SET_ULEB128 not paired with R_RISCV_SUB_SET128";
+               << ": SET_ULEB128 not paired with SUB_ULEB128";
       return;
     }
 

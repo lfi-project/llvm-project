@@ -15,6 +15,7 @@
 #include "TargetImpl.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/LEB128.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace llvm;
@@ -383,6 +384,23 @@ RelExpr X86_64::getRelExpr(RelType type, const Symbol &s,
     return R_GOTPLTONLY_PC;
   case R_X86_64_NONE:
     return R_NONE;
+  case R_X86_64_RELAX:
+  case R_X86_64_ALIGN:
+    return R_RELAX_HINT;
+  case R_X86_64_ADD8:
+  case R_X86_64_SUB8:
+  case R_X86_64_ADD16:
+  case R_X86_64_SUB16:
+  case R_X86_64_ADD32:
+  case R_X86_64_SUB32:
+  case R_X86_64_ADD64:
+  case R_X86_64_SUB64:
+  case R_X86_64_SET6:
+  case R_X86_64_SUB6:
+    return RE_RISCV_ADD;
+  case R_X86_64_SET_ULEB128:
+  case R_X86_64_SUB_ULEB128:
+    return RE_RISCV_LEB128;
   default:
     Err(ctx) << getErrorLoc(ctx, loc) << "unknown relocation (" << type.v
              << ") against symbol " << &s;
@@ -555,6 +573,28 @@ void X86_64::scanSectionImpl(InputSectionBase &sec, Relocs<RelTy> rels) {
     case R_X86_64_SIZE32:
     case R_X86_64_SIZE64:
       expr = R_SIZE;
+      break;
+
+      // Quark linker relaxation relocations:
+    case R_X86_64_RELAX:
+    case R_X86_64_ALIGN:
+      sec.addReloc({R_RELAX_HINT, type, offset, addend, &sym});
+      continue;
+    case R_X86_64_ADD8:
+    case R_X86_64_SUB8:
+    case R_X86_64_ADD16:
+    case R_X86_64_SUB16:
+    case R_X86_64_ADD32:
+    case R_X86_64_SUB32:
+    case R_X86_64_ADD64:
+    case R_X86_64_SUB64:
+    case R_X86_64_SET6:
+    case R_X86_64_SUB6:
+      expr = RE_RISCV_ADD;
+      break;
+    case R_X86_64_SET_ULEB128:
+    case R_X86_64_SUB_ULEB128:
+      expr = RE_RISCV_LEB128;
       break;
 
     default:
@@ -1049,6 +1089,36 @@ void X86_64::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     // The addend is stored in the second 64-bit word.
     write64le(loc + 8, val);
     break;
+  case R_X86_64_ADD8:
+    *loc += val;
+    break;
+  case R_X86_64_SUB8:
+    *loc -= val;
+    break;
+  case R_X86_64_ADD16:
+    write16le(loc, read16le(loc) + val);
+    break;
+  case R_X86_64_SUB16:
+    write16le(loc, read16le(loc) - val);
+    break;
+  case R_X86_64_ADD32:
+    write32le(loc, read32le(loc) + val);
+    break;
+  case R_X86_64_SUB32:
+    write32le(loc, read32le(loc) - val);
+    break;
+  case R_X86_64_ADD64:
+    write64le(loc, read64le(loc) + val);
+    break;
+  case R_X86_64_SUB64:
+    write64le(loc, read64le(loc) - val);
+    break;
+  case R_X86_64_SET6:
+    *loc = (*loc & 0xc0) | (val & 0x3f);
+    break;
+  case R_X86_64_SUB6:
+    *loc = (*loc & 0xc0) | (((*loc & 0x3f) - val) & 0x3f);
+    break;
   default:
     llvm_unreachable("unknown relocation");
   }
@@ -1246,11 +1316,39 @@ bool X86_64::adjustPrologueForCrossSplitStack(uint8_t *loc, uint8_t *end,
 
 void X86_64::relocateAlloc(InputSection &sec, uint8_t *buf) const {
   uint64_t secAddr = sec.getOutputSection()->addr + sec.outSecOff;
-  for (const Relocation &rel : sec.relocs()) {
+  const ArrayRef<Relocation> relocs = sec.relocs();
+  for (size_t i = 0, size = relocs.size(); i != size; ++i) {
+    const Relocation &rel = relocs[i];
     if (rel.expr == R_NONE) // See deleteFallThruJmpInsn
       continue;
     uint8_t *loc = buf + rel.offset;
     const uint64_t val = sec.getRelocTargetVA(ctx, rel, secAddr + rel.offset);
+
+    switch (rel.expr) {
+    case R_RELAX_HINT:
+      continue;
+    case RE_RISCV_LEB128:
+      if (i + 1 < size) {
+        const Relocation &rel1 = relocs[i + 1];
+        if (rel.type == R_X86_64_SET_ULEB128 &&
+            rel1.type == R_X86_64_SUB_ULEB128 &&
+            rel.offset == rel1.offset) {
+          auto val = rel.sym->getVA(ctx, rel.addend) -
+                     rel1.sym->getVA(ctx, rel1.addend);
+          if (overwriteULEB128(loc, val) >= 0x80)
+            Err(ctx) << sec.getLocation(rel.offset) << ": ULEB128 value " << val
+                     << " exceeds available space; references '" << rel.sym
+                     << "'";
+          ++i;
+          continue;
+        }
+      }
+      Err(ctx) << sec.getLocation(rel.offset)
+               << ": R_X86_64_SET_ULEB128 not paired with R_X86_64_SUB_ULEB128";
+      return;
+    default:
+      break;
+    }
     relocate(loc, rel, val);
   }
   if (sec.jumpInstrMod) {

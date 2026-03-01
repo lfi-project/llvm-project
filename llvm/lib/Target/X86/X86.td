@@ -367,6 +367,9 @@ def FeatureZU : SubtargetFeature<"zu", "HasZU", "true",
 def FeatureUseGPR32InInlineAsm
     : SubtargetFeature<"inline-asm-use-gpr32", "UseInlineAsmGPR32", "true",
                        "Enable use of GPR32 in inline assembly for APX">;
+def FeatureQuarkRelax
+    : SubtargetFeature<"quark-relax", "EnableQuarkRelax", "true",
+                       "Enable Quark linker relaxation relocations.">;
 def FeatureMOVRS   : SubtargetFeature<"movrs", "HasMOVRS", "true",
                            "Enable MOVRS", []>;
 

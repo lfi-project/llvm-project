@@ -320,6 +320,11 @@ void x86::getX86TargetFeatures(const Driver &D, const llvm::Triple &Triple,
   if (Args.hasArg(options::OPT_mapx_inline_asm_use_gpr32))
     Features.push_back("+inline-asm-use-gpr32");
 
+  // -mquark-relax / -mno-quark-relax support (enabled by default)
+  if (Args.hasFlag(options::OPT_mquark_relax, options::OPT_mno_quark_relax,
+                   true))
+    Features.push_back("+quark-relax");
+
   // Warn for removed 3dnow support
   if (const Arg *A =
           Args.getLastArg(options::OPT_m3dnowa, options::OPT_mno_3dnowa,

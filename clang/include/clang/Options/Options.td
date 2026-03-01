@@ -5420,6 +5420,10 @@ def mrelax : Flag<["-"], "mrelax">, Group<m_Group>,
   HelpText<"Enable linker relaxation">;
 def mno_relax : Flag<["-"], "mno-relax">, Group<m_Group>,
   HelpText<"Disable linker relaxation">;
+def mquark_relax : Flag<["-"], "mquark-relax">, Group<m_Group>,
+  HelpText<"Enable Quark linker relaxation relocations">;
+def mno_quark_relax : Flag<["-"], "mno-quark-relax">, Group<m_Group>,
+  HelpText<"Disable Quark linker relaxation relocations">;
 def msmall_data_limit_EQ : Joined<["-"], "msmall-data-limit=">, Group<m_Group>,
   Alias<G>,
   HelpText<"Put global and static data smaller than the limit into a special section">;

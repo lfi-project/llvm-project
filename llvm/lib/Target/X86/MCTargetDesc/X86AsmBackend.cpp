@@ -11,6 +11,7 @@
 #include "MCTargetDesc/X86FixupKinds.h"
 #include "MCTargetDesc/X86MCAsmInfo.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/MC/MCAsmBackend.h"
@@ -31,7 +32,9 @@
 #include "llvm/MC/MCValue.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/EndianStream.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/LEB128.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
@@ -128,6 +131,10 @@ class X86AsmBackend : public MCAsmBackend {
   MCBoundaryAlignFragment *PendingBA = nullptr;
   std::pair<MCFragment *, size_t> PrevInstPosition;
 
+  // Quark linker relaxation support.
+  MCSymbol *PCRelTemp = nullptr;
+  bool isPCRelFixupResolved(const MCSymbol *SymA, const MCFragment &F);
+
   uint8_t determinePaddingPrefix(const MCInst &Inst) const;
   bool isMacroFused(const MCInst &Cmp, const MCInst &Jcc) const;
   bool needAlign(const MCInst &Inst) const;
@@ -201,6 +208,15 @@ public:
 
   bool writeNopData(raw_ostream &OS, uint64_t Count,
                     const MCSubtargetInfo *STI) const override;
+
+  // Quark linker relaxation overrides.
+  bool addReloc(const MCFragment &, const MCFixup &, const MCValue &,
+                uint64_t &FixedValue, bool IsResolved);
+  bool relaxAlign(MCFragment &F, unsigned &Size) override;
+  bool relaxDwarfLineAddr(MCFragment &) const override;
+  bool relaxDwarfCFA(MCFragment &) const override;
+  std::pair<bool, bool> relaxLEB128(MCFragment &LF,
+                                    int64_t &Value) const override;
 };
 } // end anonymous namespace
 
@@ -624,6 +640,7 @@ static unsigned getFixupKindSize(unsigned Kind) {
   default:
     llvm_unreachable("invalid fixup kind!");
   case FK_NONE:
+  case FK_Data_leb128:
     return 0;
   case FK_SecRel_1:
   case FK_Data_1:
@@ -689,7 +706,10 @@ void X86AsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
   // - GAS doesn't emit a relocation for call local@plt; local:.
   if (Target.getSpecifier())
     IsResolved = false;
-  maybeAddReloc(F, Fixup, Target, Value, IsResolved);
+  if (STI.hasFeature(X86::FeatureQuarkRelax))
+    addReloc(F, Fixup, Target, Value, IsResolved);
+  else
+    maybeAddReloc(F, Fixup, Target, Value, IsResolved);
 
   auto Kind = Fixup.getKind();
   if (mc::isRelocation(Kind))
@@ -735,6 +755,12 @@ bool X86AsmBackend::fixupNeedsRelaxationAdvanced(const MCFragment &,
                                                  const MCValue &Target,
                                                  uint64_t Value,
                                                  bool Resolved) const {
+  // When Quark relaxation is enabled, always relax branches to use 32-bit
+  // displacement (JCC_1 -> JCC_4, JMP_1 -> JMP_4). This ensures all branches
+  // are wide, avoiding the need for an instrumentation tool to resize them.
+  if (STI.hasFeature(X86::FeatureQuarkRelax))
+    return true;
+
   // If resolved, relax if the value is too big for a (signed) i8.
   //
   // Currently, `jmp local@plt` relaxes JMP even if the offset is small,
@@ -1024,6 +1050,228 @@ bool X86AsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
   } while (Count != 0);
 
   return true;
+}
+
+// Quark linker relaxation support.
+
+bool X86AsmBackend::isPCRelFixupResolved(const MCSymbol *SymA,
+                                         const MCFragment &F) {
+  if (!F.getParent()->isLinkerRelaxable())
+    return true;
+
+  if (!PCRelTemp)
+    PCRelTemp = getContext().createTempSymbol();
+  PCRelTemp->setFragment(const_cast<MCFragment *>(&F));
+  MCValue Res;
+  MCExpr::evaluateSymbolicAdd(Asm, false, MCValue::get(SymA),
+                              MCValue::get(nullptr, PCRelTemp), Res);
+  return !Res.getSubSym();
+}
+
+bool X86AsmBackend::addReloc(const MCFragment &F, const MCFixup &Fixup,
+                             const MCValue &Target, uint64_t &FixedValue,
+                             bool IsResolved) {
+  uint64_t FixedValueA, FixedValueB;
+  if (Target.getSubSym()) {
+    assert(Target.getSpecifier() == 0 &&
+           "relocatable SymA-SymB cannot have relocation specifier");
+    unsigned TA = 0, TB = 0;
+    switch (Fixup.getKind()) {
+    case llvm::FK_Data_1:
+      TA = FirstLiteralRelocationKind + ELF::R_X86_64_ADD8;
+      TB = FirstLiteralRelocationKind + ELF::R_X86_64_SUB8;
+      break;
+    case llvm::FK_Data_2:
+      TA = FirstLiteralRelocationKind + ELF::R_X86_64_ADD16;
+      TB = FirstLiteralRelocationKind + ELF::R_X86_64_SUB16;
+      break;
+    case llvm::FK_Data_4:
+      TA = FirstLiteralRelocationKind + ELF::R_X86_64_ADD32;
+      TB = FirstLiteralRelocationKind + ELF::R_X86_64_SUB32;
+      break;
+    case llvm::FK_Data_8:
+      TA = FirstLiteralRelocationKind + ELF::R_X86_64_ADD64;
+      TB = FirstLiteralRelocationKind + ELF::R_X86_64_SUB64;
+      break;
+    case llvm::FK_Data_leb128:
+      TA = FirstLiteralRelocationKind + ELF::R_X86_64_SET_ULEB128;
+      TB = FirstLiteralRelocationKind + ELF::R_X86_64_SUB_ULEB128;
+      break;
+    default:
+      llvm_unreachable("unsupported fixup size");
+    }
+    MCValue A = MCValue::get(Target.getAddSym(), nullptr, Target.getConstant());
+    MCValue B = MCValue::get(Target.getSubSym());
+    auto FA = MCFixup::create(Fixup.getOffset(), nullptr, TA);
+    auto FB = MCFixup::create(Fixup.getOffset(), nullptr, TB);
+    Asm->getWriter().recordRelocation(F, FA, A, FixedValueA);
+    Asm->getWriter().recordRelocation(F, FB, B, FixedValueB);
+    FixedValue = FixedValueA - FixedValueB;
+    return false;
+  }
+
+  // If linker relaxation is enabled and the fixup is linker-relaxable,
+  // force relocation emission.
+  bool NeedsRelax = Fixup.isLinkerRelaxable();
+  if (NeedsRelax)
+    IsResolved = false;
+
+  if (IsResolved && Fixup.isPCRel())
+    IsResolved = isPCRelFixupResolved(Target.getAddSym(), F);
+
+  if (!IsResolved) {
+    Asm->getWriter().recordRelocation(F, Fixup, Target, FixedValue);
+
+    if (NeedsRelax) {
+      // Emit a companion R_X86_64_RELAX relocation.
+      MCFixup RelaxFixup = MCFixup::create(
+          Fixup.getOffset(), nullptr,
+          FirstLiteralRelocationKind + ELF::R_X86_64_RELAX);
+      MCValue RelaxTarget = MCValue::get(nullptr);
+      uint64_t RelaxValue;
+      Asm->getWriter().recordRelocation(F, RelaxFixup, RelaxTarget, RelaxValue);
+    }
+  }
+
+  return false;
+}
+
+bool X86AsmBackend::relaxAlign(MCFragment &F, unsigned &Size) {
+  if (!STI.hasFeature(X86::FeatureQuarkRelax))
+    return false;
+
+  auto *Sec = F.getParent();
+  if (F.getLayoutOrder() <= Sec->firstLinkerRelaxable())
+    return false;
+
+  unsigned MinNopLen = 1;
+  if (F.getAlignment() <= MinNopLen)
+    return false;
+
+  Size = F.getAlignment().value() - MinNopLen;
+  auto *Expr = MCConstantExpr::create(Size, getContext());
+  MCFixup Fixup =
+      MCFixup::create(0, Expr, FirstLiteralRelocationKind + ELF::R_X86_64_ALIGN);
+  F.setVarFixups({Fixup});
+  F.setLinkerRelaxable();
+  return true;
+}
+
+bool X86AsmBackend::relaxDwarfLineAddr(MCFragment &F) const {
+  if (!STI.hasFeature(X86::FeatureQuarkRelax))
+    return false;
+
+  int64_t LineDelta = F.getDwarfLineDelta();
+  const MCExpr &AddrDelta = F.getDwarfAddrDelta();
+  int64_t Value;
+  if (AddrDelta.evaluateAsAbsolute(Value, *Asm))
+    return false;
+  [[maybe_unused]] bool IsAbsolute =
+      AddrDelta.evaluateKnownAbsolute(Value, *Asm);
+  assert(IsAbsolute && "CFA with invalid expression");
+
+  SmallVector<char> Data;
+  raw_svector_ostream OS(Data);
+
+  // INT64_MAX is a signal that this is actually a DW_LNE_end_sequence.
+  if (LineDelta != INT64_MAX) {
+    OS << uint8_t(dwarf::DW_LNS_advance_line);
+    encodeSLEB128(LineDelta, OS);
+  }
+
+  unsigned PCBytes;
+  if (Value > 60000) {
+    PCBytes = getContext().getAsmInfo()->getCodePointerSize();
+    OS << uint8_t(dwarf::DW_LNS_extended_op) << uint8_t(PCBytes + 1)
+       << uint8_t(dwarf::DW_LNE_set_address);
+    OS.write_zeros(PCBytes);
+  } else {
+    PCBytes = 2;
+    OS << uint8_t(dwarf::DW_LNS_fixed_advance_pc);
+    support::endian::write<uint16_t>(OS, 0, Endian);
+  }
+  auto Offset = OS.tell() - PCBytes;
+
+  if (LineDelta == INT64_MAX) {
+    OS << uint8_t(dwarf::DW_LNS_extended_op);
+    OS << uint8_t(1);
+    OS << uint8_t(dwarf::DW_LNE_end_sequence);
+  } else {
+    OS << uint8_t(dwarf::DW_LNS_copy);
+  }
+
+  F.setVarContents(Data);
+  F.setVarFixups({MCFixup::create(Offset, &AddrDelta,
+                                  MCFixup::getDataKindForSize(PCBytes))});
+  return true;
+}
+
+bool X86AsmBackend::relaxDwarfCFA(MCFragment &F) const {
+  if (!STI.hasFeature(X86::FeatureQuarkRelax))
+    return false;
+
+  const MCExpr &AddrDelta = F.getDwarfAddrDelta();
+  SmallVector<MCFixup, 2> Fixups;
+  int64_t Value;
+  if (AddrDelta.evaluateAsAbsolute(Value, *Asm))
+    return false;
+  [[maybe_unused]] bool IsAbsolute =
+      AddrDelta.evaluateKnownAbsolute(Value, *Asm);
+  assert(IsAbsolute && "CFA with invalid expression");
+
+  assert(getContext().getAsmInfo()->getMinInstAlignment() == 1 &&
+         "expected 1-byte alignment");
+  if (Value == 0) {
+    F.clearVarContents();
+    F.clearVarFixups();
+    return true;
+  }
+
+  auto AddFixups = [&Fixups, &AddrDelta](unsigned Offset,
+                                         std::pair<unsigned, unsigned> Fixup) {
+    const MCBinaryExpr &MBE = cast<MCBinaryExpr>(AddrDelta);
+    Fixups.push_back(MCFixup::create(Offset, MBE.getLHS(), std::get<0>(Fixup)));
+    Fixups.push_back(MCFixup::create(Offset, MBE.getRHS(), std::get<1>(Fixup)));
+  };
+
+  SmallVector<char, 8> Data;
+  raw_svector_ostream OS(Data);
+  if (isUIntN(6, Value)) {
+    OS << uint8_t(dwarf::DW_CFA_advance_loc);
+    AddFixups(0, {FirstLiteralRelocationKind + ELF::R_X86_64_SET6,
+                  FirstLiteralRelocationKind + ELF::R_X86_64_SUB6});
+  } else if (isUInt<8>(Value)) {
+    OS << uint8_t(dwarf::DW_CFA_advance_loc1);
+    support::endian::write<uint8_t>(OS, 0, Endian);
+    AddFixups(1, {FirstLiteralRelocationKind + ELF::R_X86_64_ADD8,
+                  FirstLiteralRelocationKind + ELF::R_X86_64_SUB8});
+  } else if (isUInt<16>(Value)) {
+    OS << uint8_t(dwarf::DW_CFA_advance_loc2);
+    support::endian::write<uint16_t>(OS, 0, Endian);
+    AddFixups(1, {FirstLiteralRelocationKind + ELF::R_X86_64_ADD16,
+                  FirstLiteralRelocationKind + ELF::R_X86_64_SUB16});
+  } else if (isUInt<32>(Value)) {
+    OS << uint8_t(dwarf::DW_CFA_advance_loc4);
+    support::endian::write<uint32_t>(OS, 0, Endian);
+    AddFixups(1, {FirstLiteralRelocationKind + ELF::R_X86_64_ADD32,
+                  FirstLiteralRelocationKind + ELF::R_X86_64_SUB32});
+  } else {
+    llvm_unreachable("unsupported CFA encoding");
+  }
+  F.setVarContents(Data);
+  F.setVarFixups(Fixups);
+  return true;
+}
+
+std::pair<bool, bool> X86AsmBackend::relaxLEB128(MCFragment &LF,
+                                                 int64_t &Value) const {
+  if (!STI.hasFeature(X86::FeatureQuarkRelax))
+    return std::make_pair(false, false);
+  if (LF.isLEBSigned())
+    return std::make_pair(false, false);
+  const MCExpr &Expr = LF.getLEBValue();
+  LF.setVarFixups({MCFixup::create(0, &Expr, FK_Data_leb128)});
+  return std::make_pair(Expr.evaluateKnownAbsolute(Value, *Asm), false);
 }
 
 /* *** */
