@@ -697,8 +697,10 @@ void X86MCCodeEmitter::emitMemModRMByte(
 
     emitImmediate(Disp, MI.getLoc(), FixupKind, true, StartByte, CB, Fixups,
                   -ImmSize);
-    if (STI.hasFeature(X86::FeatureQuarkRelax) && Disp.isExpr())
+#ifndef QUARK_DISABLED
+    if (Disp.isExpr())
       Fixups.back().setLinkerRelaxable();
+#endif
     return;
   }
 
@@ -1619,8 +1621,9 @@ void X86MCCodeEmitter::encodeInstruction(const MCInst &MI,
     const MCOperand &Op = MI.getOperand(CurOp++);
     emitImmediate(Op, MI.getLoc(), X86::reloc_branch_4byte_pcrel, true,
                   StartByte, CB, Fixups);
-    if (STI.hasFeature(X86::FeatureQuarkRelax))
-      Fixups.back().setLinkerRelaxable();
+#ifndef QUARK_DISABLED
+    Fixups.back().setLinkerRelaxable();
+#endif
     break;
   }
   case X86II::RawFrmMemOffs:

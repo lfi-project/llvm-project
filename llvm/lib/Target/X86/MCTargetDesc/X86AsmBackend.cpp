@@ -706,10 +706,11 @@ void X86AsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
   // - GAS doesn't emit a relocation for call local@plt; local:.
   if (Target.getSpecifier())
     IsResolved = false;
-  if (STI.hasFeature(X86::FeatureQuarkRelax))
-    addReloc(F, Fixup, Target, Value, IsResolved);
-  else
-    maybeAddReloc(F, Fixup, Target, Value, IsResolved);
+#ifndef QUARK_DISABLED
+  addReloc(F, Fixup, Target, Value, IsResolved);
+#else
+  maybeAddReloc(F, Fixup, Target, Value, IsResolved);
+#endif
 
   auto Kind = Fixup.getKind();
   if (mc::isRelocation(Kind))
@@ -758,8 +759,9 @@ bool X86AsmBackend::fixupNeedsRelaxationAdvanced(const MCFragment &,
   // When Quark relaxation is enabled, always relax branches to use 32-bit
   // displacement (JCC_1 -> JCC_4, JMP_1 -> JMP_4). This ensures all branches
   // are wide, avoiding the need for an instrumentation tool to resize them.
-  if (STI.hasFeature(X86::FeatureQuarkRelax))
-    return true;
+#ifndef QUARK_DISABLED
+  return true;
+#endif
 
   // If resolved, relax if the value is too big for a (signed) i8.
   //
@@ -1137,8 +1139,9 @@ bool X86AsmBackend::addReloc(const MCFragment &F, const MCFixup &Fixup,
 }
 
 bool X86AsmBackend::relaxAlign(MCFragment &F, unsigned &Size) {
-  if (!STI.hasFeature(X86::FeatureQuarkRelax))
-    return false;
+#ifdef QUARK_DISABLED
+  return false;
+#endif
 
   unsigned MinNopLen = 1;
   if (F.getAlignment() <= MinNopLen)
@@ -1154,8 +1157,9 @@ bool X86AsmBackend::relaxAlign(MCFragment &F, unsigned &Size) {
 }
 
 bool X86AsmBackend::relaxDwarfLineAddr(MCFragment &F) const {
-  if (!STI.hasFeature(X86::FeatureQuarkRelax))
-    return false;
+#ifdef QUARK_DISABLED
+  return false;
+#endif
 
   int64_t LineDelta = F.getDwarfLineDelta();
   const MCExpr &AddrDelta = F.getDwarfAddrDelta();
@@ -1203,8 +1207,9 @@ bool X86AsmBackend::relaxDwarfLineAddr(MCFragment &F) const {
 }
 
 bool X86AsmBackend::relaxDwarfCFA(MCFragment &F) const {
-  if (!STI.hasFeature(X86::FeatureQuarkRelax))
-    return false;
+#ifdef QUARK_DISABLED
+  return false;
+#endif
 
   const MCExpr &AddrDelta = F.getDwarfAddrDelta();
   SmallVector<MCFixup, 2> Fixups;
@@ -1246,8 +1251,9 @@ bool X86AsmBackend::relaxDwarfCFA(MCFragment &F) const {
 
 std::pair<bool, bool> X86AsmBackend::relaxLEB128(MCFragment &LF,
                                                  int64_t &Value) const {
-  if (!STI.hasFeature(X86::FeatureQuarkRelax))
-    return std::make_pair(false, false);
+#ifdef QUARK_DISABLED
+  return std::make_pair(false, false);
+#endif
   if (LF.isLEBSigned())
     return std::make_pair(false, false);
   const MCExpr &Expr = LF.getLEBValue();

@@ -431,12 +431,14 @@ InputSectionBase *InputSection::getRelocatedSection() const {
 
 template <class ELFT, class RelTy>
 void InputSection::copyRelocations(Ctx &ctx, uint8_t *buf) {
+  InputSectionBase *sec = getRelocatedSection();
   bool linkerRelax =
       ctx.arg.relax && is_contained({EM_RISCV, EM_LOONGARCH}, ctx.arg.emachine);
-  if (!ctx.arg.relocatable && (linkerRelax || ctx.arg.branchToBranch)) {
-    // On LoongArch and RISC-V, relaxation might change relocations: copy
-    // from internal ones that are updated by relaxation.
-    InputSectionBase *sec = getRelocatedSection();
+  // When relaxation adjusts relocation offsets (RISC-V/LoongArch linker
+  // relaxation, X86_64 ALIGN relaxation, or branch-to-branch optimization),
+  // use the internal (cooked) relocations which have updated offsets.
+  if (!ctx.arg.relocatable &&
+      (linkerRelax || ctx.arg.branchToBranch || sec->relaxAux)) {
     copyRelocations<ELFT, RelTy>(
         ctx, buf,
         llvm::make_range(sec->relocations.begin(), sec->relocations.end()));
