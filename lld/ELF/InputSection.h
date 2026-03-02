@@ -403,6 +403,9 @@ public:
 
   SyntheticSection *getParent() const;
   uint64_t getParentOffset(uint64_t offset) const;
+  // Returns true if offset falls within a CIE/FDE piece that was discarded
+  // during deduplication (outputOff == -1).
+  bool isPieceDiscarded(uint64_t offset) const;
 
   // Preprocessed relocations in uniform format to avoid REL/RELA/CREL
   // relocation format handling throughout the codebase.

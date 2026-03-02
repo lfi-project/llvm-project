@@ -674,6 +674,7 @@ GotSection::GotSection(Ctx &ctx)
 void GotSection::addEntry(const Symbol &sym) {
   assert(sym.auxIdx == ctx.symAux.size() - 1);
   ctx.symAux.back().gotIdx = numEntries++;
+  entries.push_back(&sym);
 }
 
 void GotSection::addAuthEntry(const Symbol &sym) {
@@ -764,6 +765,108 @@ void GotSection::writeTo(uint8_t *buf) {
     write64(ctx, dest, (addrDiversity << 63) | (key << 60));
   }
 }
+
+#ifndef QUARK_DISABLED
+template <class ELFT>
+GotRelocSection<ELFT>::GotRelocSection(Ctx &ctx)
+    : SyntheticSection(ctx, ".rela.got", SHT_RELA, SHF_ALLOC,
+                       ctx.arg.wordsize) {
+  entsize = sizeof(typename ELFT::Rela);
+}
+
+template <class ELFT>
+size_t GotRelocSection<ELFT>::getSize() const {
+  return ctx.in.got->entries.size() * sizeof(typename ELFT::Rela);
+}
+
+template <class ELFT>
+bool GotRelocSection<ELFT>::isNeeded() const {
+  return ctx.arg.copyRelocs && !ctx.in.got->entries.empty();
+}
+
+template <class ELFT>
+void GotRelocSection<ELFT>::finalizeContents() {
+  getParent()->link = ctx.in.symTab->getParent()->sectionIndex;
+  getParent()->info = ctx.in.got->getParent()->sectionIndex;
+  getParent()->flags |= SHF_INFO_LINK;
+}
+
+template <class ELFT>
+void GotRelocSection<ELFT>::writeTo(uint8_t *buf) {
+  auto headerEntries = ctx.target->gotHeaderEntriesNum;
+  auto entrySize = ctx.target->gotEntrySize;
+  for (size_t i = 0; i < ctx.in.got->entries.size(); i++) {
+    const Symbol *sym = ctx.in.got->entries[i];
+    auto *p = reinterpret_cast<typename ELFT::Rela *>(buf);
+    p->r_offset = ctx.in.got->getVA() + (headerEntries + i) * entrySize;
+    p->setSymbolAndType(ctx.in.symTab->getSymbolIndex(*sym),
+                        ctx.target->symbolicRel, ctx.arg.isMips64EL);
+    p->r_addend = 0;
+    buf += sizeof(typename ELFT::Rela);
+  }
+}
+
+template <class ELFT>
+EhFrameHdrRelocSection<ELFT>::EhFrameHdrRelocSection(Ctx &ctx)
+    : SyntheticSection(ctx, ".rela.eh_frame_hdr", SHT_RELA, SHF_ALLOC,
+                       ctx.arg.wordsize) {
+  entsize = sizeof(typename ELFT::Rela);
+}
+
+template <class ELFT>
+size_t EhFrameHdrRelocSection<ELFT>::getSize() const {
+  auto *hdr = ctx.partitions[0].ehFrameHdr.get();
+  if (!hdr)
+    return 0;
+  return hdr->fdes.size() * sizeof(typename ELFT::Rela);
+}
+
+template <class ELFT>
+bool EhFrameHdrRelocSection<ELFT>::isNeeded() const {
+  auto *hdr = ctx.partitions[0].ehFrameHdr.get();
+  return ctx.arg.copyRelocs && hdr && hdr->isNeeded();
+}
+
+template <class ELFT>
+void EhFrameHdrRelocSection<ELFT>::finalizeContents() {
+  getParent()->link = ctx.in.symTab->getParent()->sectionIndex;
+  auto *hdr = ctx.partitions[0].ehFrameHdr.get();
+  if (hdr)
+    getParent()->info = hdr->getParent()->sectionIndex;
+  getParent()->flags |= SHF_INFO_LINK;
+}
+
+template <class ELFT>
+void EhFrameHdrRelocSection<ELFT>::writeTo(uint8_t *buf) {
+  auto *hdr = ctx.partitions[0].ehFrameHdr.get();
+  if (!hdr)
+    return;
+
+  EhFrameSection *ehFrame = ctx.partitions[0].ehFrame.get();
+  bool large = hdr->large;
+  size_t ptrSize = large ? 8 : 4;
+  // Header: version(1) + eh_frame_ptr_enc(1) + fde_count_enc(1) + table_enc(1) = 4
+  // + eh_frame_ptr(ptrSize) + fde_count(4)
+  size_t tableStart = 4 + ptrSize + 4;
+  size_t fieldSize = large ? 16 : 8;
+
+  size_t i = 0;
+  for (CieRecord *rec : ehFrame->getCieRecords()) {
+    for (EhSectionPiece *fde : rec->fdes) {
+      auto *isec = cast<EhInputSection>(fde->sec);
+      auto &reloc = isec->rels[fde->firstRelocation];
+
+      auto *p = reinterpret_cast<typename ELFT::Rela *>(buf);
+      p->r_offset = hdr->getVA() + tableStart + i * fieldSize;
+      p->setSymbolAndType(ctx.in.symTab->getSymbolIndex(*reloc.sym),
+                          llvm::ELF::R_X86_64_32, ctx.arg.isMips64EL);
+      p->r_addend = reloc.addend;
+      buf += sizeof(typename ELFT::Rela);
+      i++;
+    }
+  }
+}
+#endif
 
 static uint64_t getMipsPageCount(uint64_t size) {
   return (size + 0xfffe) / 0xffff + 1;
@@ -4796,6 +4899,12 @@ template <class ELFT> void elf::createSyntheticSections(Ctx &ctx) {
     if (ctx.arg.ehFrameHdr) {
       part.ehFrameHdr = std::make_unique<EhFrameHeader>(ctx);
       add(*part.ehFrameHdr);
+#ifndef QUARK_DISABLED
+      if (ctx.arg.copyRelocs) {
+        ctx.in.relaEhFrameHdr = std::make_unique<EhFrameHdrRelocSection<ELFT>>(ctx);
+        add(*ctx.in.relaEhFrameHdr);
+      }
+#endif
     }
     part.ehFrame = std::make_unique<EhFrameSection>(ctx);
     add(*part.ehFrame);
@@ -4836,6 +4945,12 @@ template <class ELFT> void elf::createSyntheticSections(Ctx &ctx) {
   } else {
     ctx.in.got = std::make_unique<GotSection>(ctx);
     add(*ctx.in.got);
+#ifndef QUARK_DISABLED
+    if (ctx.arg.copyRelocs) {
+      ctx.in.relaGot = std::make_unique<GotRelocSection<ELFT>>(ctx);
+      add(*ctx.in.relaGot);
+    }
+#endif
   }
 
   if (ctx.arg.emachine == EM_PPC) {
@@ -4950,6 +5065,17 @@ template class elf::SymbolTableSection<ELF32LE>;
 template class elf::SymbolTableSection<ELF32BE>;
 template class elf::SymbolTableSection<ELF64LE>;
 template class elf::SymbolTableSection<ELF64BE>;
+
+#ifndef QUARK_DISABLED
+template class elf::GotRelocSection<ELF32LE>;
+template class elf::GotRelocSection<ELF32BE>;
+template class elf::GotRelocSection<ELF64LE>;
+template class elf::GotRelocSection<ELF64BE>;
+template class elf::EhFrameHdrRelocSection<ELF32LE>;
+template class elf::EhFrameHdrRelocSection<ELF32BE>;
+template class elf::EhFrameHdrRelocSection<ELF64LE>;
+template class elf::EhFrameHdrRelocSection<ELF64BE>;
+#endif
 
 template void elf::writeEhdr<ELF32LE>(Ctx &, uint8_t *Buf, Partition &Part);
 template void elf::writeEhdr<ELF32BE>(Ctx &, uint8_t *Buf, Partition &Part);

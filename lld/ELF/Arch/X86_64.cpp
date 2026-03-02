@@ -51,6 +51,7 @@ public:
   bool deleteFallThruJmpInsn(InputSection &is,
                              InputSection *nextIS) const override;
   bool relaxOnce(int pass) const override;
+  void finalizeRelax(int passes) const override;
   void applyBranchToBranchOpt() const override;
   template <class ELFT, class RelTy>
   void scanSectionImpl(InputSectionBase &sec, Relocs<RelTy> rels);
@@ -312,7 +313,100 @@ bool X86_64::deleteFallThruJmpInsn(InputSection &is,
   return true;
 }
 
+// Quark ALIGN relaxation: compute how many bytes to remove from each
+// alignment fragment to achieve correct alignment.
+static bool relaxAlign(Ctx &ctx, InputSection &sec) {
+  const uint64_t secAddr = sec.getVA();
+  const MutableArrayRef<Relocation> relocs = sec.relocs();
+  auto &aux = *sec.relaxAux;
+  bool changed = false;
+  ArrayRef<SymbolAnchor> sa = ArrayRef(aux.anchors);
+  uint64_t delta = 0;
+
+  for (auto [i, r] : llvm::enumerate(relocs)) {
+    const uint64_t loc = secAddr + r.offset - delta;
+    uint32_t &cur = aux.relocDeltas[i], remove = 0;
+    if (r.type == R_X86_64_ALIGN) {
+      // r.addend = alignment - 1 (worst-case padding size).
+      // The actual alignment is r.addend + 1.
+      const uint64_t align = r.addend + 1;
+      const uint64_t nextLoc = loc + r.addend;
+      // Compute how many bytes to remove to achieve alignment.
+      remove = nextLoc - ((loc + align - 1) & -align);
+      if (LLVM_UNLIKELY(static_cast<int32_t>(remove) < 0)) {
+        Err(ctx) << "insufficient padding bytes for R_X86_64_ALIGN: "
+                 << r.addend << " bytes available for requested alignment of "
+                 << align << " bytes";
+        remove = 0;
+      }
+    }
+
+    // Update symbol anchors: adjust st_value/st_size for symbols
+    // whose offsets are <= r.offset.
+    for (; sa.size() && sa[0].offset <= r.offset; sa = sa.slice(1)) {
+      if (sa[0].end)
+        sa[0].d->size = sa[0].offset - delta - sa[0].d->value;
+      else
+        sa[0].d->value = sa[0].offset - delta;
+    }
+    delta += remove;
+    if (delta != cur) {
+      cur = delta;
+      changed = true;
+    }
+  }
+
+  for (const SymbolAnchor &a : sa) {
+    if (a.end)
+      a.d->size = a.offset - delta - a.d->value;
+    else
+      a.d->value = a.offset - delta;
+  }
+  if (!isUInt<32>(delta))
+    Err(ctx) << "section size decrease is too large: " << delta;
+  sec.bytesDropped = delta;
+  return changed;
+}
+
 bool X86_64::relaxOnce(int pass) const {
+  SmallVector<InputSection *, 0> storage;
+  bool changed = false;
+
+  // On the first pass, check if any section has R_X86_64_ALIGN relocations.
+  // Only initialize the relaxation infrastructure when they exist, to avoid
+  // overhead and interference with non-quark builds.
+  if (pass == 0) {
+    bool hasAlignRelocs = false;
+    for (OutputSection *osec : ctx.outputSections) {
+      if (!(osec->flags & SHF_EXECINSTR))
+        continue;
+      for (InputSection *sec : getInputSections(*osec, storage)) {
+        for (const Relocation &r : sec->relocs())
+          if (r.type == R_X86_64_ALIGN) {
+            hasAlignRelocs = true;
+            break;
+          }
+        if (hasAlignRelocs)
+          break;
+      }
+      if (hasAlignRelocs)
+        break;
+    }
+    if (hasAlignRelocs)
+      initSymbolAnchors(ctx);
+
+  }
+
+  // Process R_X86_64_ALIGN relocations: trim worst-case alignment padding.
+  for (OutputSection *osec : ctx.outputSections) {
+    if (!(osec->flags & SHF_EXECINSTR))
+      continue;
+    for (InputSection *sec : getInputSections(*osec, storage))
+      if (sec->relaxAux)
+        changed |= relaxAlign(ctx, *sec);
+  }
+
+  // Existing GOTPCRELX overflow handling.
   uint64_t minVA = UINT64_MAX, maxVA = 0;
   for (OutputSection *osec : ctx.outputSections) {
     if (!(osec->flags & SHF_ALLOC))
@@ -320,36 +414,30 @@ bool X86_64::relaxOnce(int pass) const {
     minVA = std::min(minVA, osec->addr);
     maxVA = std::max(maxVA, osec->addr + osec->size);
   }
-  // If the max VA is under 2^31, GOTPCRELX relocations cannot overfow. In
-  // -pie/-shared, the condition can be relaxed to test the max VA difference as
-  // there is no R_RELAX_GOT_PC_NOPIC.
-  if (isUInt<31>(maxVA) || (isUInt<31>(maxVA - minVA) && ctx.arg.isPic))
-    return false;
+  if (!(isUInt<31>(maxVA) || (isUInt<31>(maxVA - minVA) && ctx.arg.isPic))) {
+    for (OutputSection *osec : ctx.outputSections) {
+      if (!(osec->flags & SHF_EXECINSTR))
+        continue;
+      for (InputSection *sec : getInputSections(*osec, storage)) {
+        for (Relocation &rel : sec->relocs()) {
+          if (rel.expr != R_RELAX_GOT_PC && rel.expr != R_RELAX_GOT_PC_NOPIC)
+            continue;
+          assert(rel.addend == -4);
 
-  SmallVector<InputSection *, 0> storage;
-  bool changed = false;
-  for (OutputSection *osec : ctx.outputSections) {
-    if (!(osec->flags & SHF_EXECINSTR))
-      continue;
-    for (InputSection *sec : getInputSections(*osec, storage)) {
-      for (Relocation &rel : sec->relocs()) {
-        if (rel.expr != R_RELAX_GOT_PC && rel.expr != R_RELAX_GOT_PC_NOPIC)
-          continue;
-        assert(rel.addend == -4);
-
-        Relocation rel1 = rel;
-        rel1.addend = rel.expr == R_RELAX_GOT_PC_NOPIC ? 0 : -4;
-        uint64_t v = sec->getRelocTargetVA(ctx, rel1,
-                                           sec->getOutputSection()->addr +
-                                               sec->outSecOff + rel.offset);
-        if (isInt<32>(v))
-          continue;
-        if (rel.sym->auxIdx == 0) {
-          rel.sym->allocateAux(ctx);
-          addGotEntry(ctx, *rel.sym);
-          changed = true;
+          Relocation rel1 = rel;
+          rel1.addend = rel.expr == R_RELAX_GOT_PC_NOPIC ? 0 : -4;
+          uint64_t v = sec->getRelocTargetVA(ctx, rel1,
+                                             sec->getOutputSection()->addr +
+                                                 sec->outSecOff + rel.offset);
+          if (isInt<32>(v))
+            continue;
+          if (rel.sym->auxIdx == 0) {
+            rel.sym->allocateAux(ctx);
+            addGotEntry(ctx, *rel.sym);
+            changed = true;
+          }
+          rel.expr = R_GOT_PC;
         }
-        rel.expr = R_GOT_PC;
       }
     }
   }
@@ -1351,7 +1439,9 @@ void X86_64::relocateAlloc(InputSection &sec, uint8_t *buf) const {
     }
     relocate(loc, rel, val);
   }
-  if (sec.jumpInstrMod) {
+  // jumpInstrMod and relaxAux share a union, so only check jumpInstrMod
+  // when relaxAux is not in use (i.e., no R_X86_64_ALIGN relaxation).
+  if (!sec.relaxAux && sec.jumpInstrMod) {
     applyJumpInstrMod(buf + sec.jumpInstrMod->offset,
                       sec.jumpInstrMod->original, sec.jumpInstrMod->size);
   }
@@ -1415,6 +1505,70 @@ static void redirectControlTransferRelocations(Relocation &r1,
     r1.addend += r2.addend + 4;
   r1.expr = r2.expr;
   r1.sym = r2.sym;
+}
+
+void X86_64::finalizeRelax(int passes) const {
+  SmallVector<InputSection *, 0> storage;
+  for (OutputSection *osec : ctx.outputSections) {
+    if (!(osec->flags & SHF_EXECINSTR))
+      continue;
+    for (InputSection *sec : getInputSections(*osec, storage)) {
+      if (!sec->relaxAux)
+        continue;
+      RelaxAux &aux = *sec->relaxAux;
+      if (!aux.relocDeltas)
+        continue;
+
+      MutableArrayRef<Relocation> rels = sec->relocs();
+      ArrayRef<uint8_t> old = sec->content();
+      size_t newSize = old.size() - aux.relocDeltas[rels.size() - 1];
+      uint8_t *p = ctx.bAlloc.Allocate<uint8_t>(newSize);
+      uint64_t offset = 0;
+      int64_t delta = 0;
+      sec->content_ = p;
+      sec->size = newSize;
+      sec->bytesDropped = 0;
+
+      // Update section content: remove excess NOP bytes for R_X86_64_ALIGN.
+      for (size_t i = 0, e = rels.size(); i != e; ++i) {
+        uint32_t remove = aux.relocDeltas[i] - delta;
+        delta = aux.relocDeltas[i];
+        if (remove == 0)
+          continue;
+
+        const Relocation &r = rels[i];
+        uint64_t size = r.offset - offset;
+        memcpy(p, old.data() + offset, size);
+        p += size;
+
+        int64_t skip = 0;
+        if (r.type == R_X86_64_ALIGN) {
+          skip = r.addend - remove;
+          int64_t j = 0;
+          while (j < skip) {
+            int nopLen = std::min<int64_t>(skip - j, 9);
+            const auto &nop = nopInstructions[nopLen - 1];
+            memcpy(p + j, nop.data(), nop.size());
+            j += nopLen;
+          }
+        }
+
+        p += skip;
+        offset = r.offset + skip + remove;
+      }
+      memcpy(p, old.data() + offset, old.size() - offset);
+
+      // Update relocation offsets: subtract accumulated delta.
+      delta = 0;
+      for (size_t i = 0, e = rels.size(); i != e;) {
+        uint64_t cur = rels[i].offset;
+        do {
+          rels[i].offset -= delta;
+        } while (++i != e && rels[i].offset == cur);
+        delta = aux.relocDeltas[i - 1];
+      }
+    }
+  }
 }
 
 void X86_64::applyBranchToBranchOpt() const {

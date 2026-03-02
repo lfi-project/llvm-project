@@ -572,6 +572,10 @@ struct InStruct {
   std::unique_ptr<SyntheticSection> gnuProperty;
   std::unique_ptr<SyntheticSection> gnuStack;
   std::unique_ptr<GotSection> got;
+#ifndef QUARK_DISABLED
+  std::unique_ptr<SyntheticSection> relaGot;
+  std::unique_ptr<SyntheticSection> relaEhFrameHdr;
+#endif
   std::unique_ptr<GotPltSection> gotPlt;
   std::unique_ptr<IgotPltSection> igotPlt;
   std::unique_ptr<RelroPaddingSection> relroPadding;

@@ -301,13 +301,24 @@ static void attemptToFoldSymbolOffsetDifference(const MCAssembler *Asm,
   if (&SecA != &SecB)
     return;
 
+#ifndef QUARK_DISABLED
+  // In linker-relaxable sections, don't fold symbol differences.
+  // Post-link tools (e.g. quark) may insert instructions between ANY labels,
+  // changing distances. ADD/SUB relocation pairs must be preserved for all
+  // label differences in code sections, not just across relaxable fragments.
+  bool Layout = Asm->hasLayout();
+  if (!InSet && SecA.isLinkerRelaxable())
+    return;
+#else
+  bool Layout = Asm->hasLayout();
+#endif
+
   // When layout is available, we can generally compute the difference using the
   // getSymbolOffset path, which also avoids the possible slow fragment walk.
   // However, linker relaxation may cause incorrect fold of A-B if A and B are
   // separated by a linker-relaxable fragment. If the section contains
   // linker-relaxable instruction and InSet is false (not expressions in
   // directive like .size/.fill), disable the fast path.
-  bool Layout = Asm->hasLayout();
   if (Layout && (InSet || !SecA.isLinkerRelaxable())) {
     // If both symbols are in the same fragment, return the difference of their
     // offsets. canGetFragmentOffset(FA) may be false.

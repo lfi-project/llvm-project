@@ -491,6 +491,16 @@ void InputSection::copyRelocations(Ctx &ctx, uint8_t *buf,
     p->setSymbolAndType(ctx.in.symTab->getSymbolIndex(sym), type,
                         ctx.arg.isMips64EL);
 
+    // Suppress relocations from discarded .eh_frame pieces (e.g. CIEs that
+    // were deduplicated). Their offsets map into the surviving CIE and would
+    // corrupt it.
+    if (auto *ehSec = dyn_cast<EhInputSection>(sec)) {
+      if (ehSec->isPieceDiscarded(rel.offset)) {
+        p->setSymbolAndType(0, 0, false);
+        continue;
+      }
+    }
+
     if (sym.type == STT_SECTION) {
       // We combine multiple section symbols into only one per
       // section. This means we have to update the addend. That is
@@ -1474,6 +1484,18 @@ uint64_t EhInputSection::getParentOffset(uint64_t offset) const {
   if (it[-1].outputOff == -1) // invalid piece
     return offset - it[-1].inputOff;
   return it[-1].outputOff + (offset - it[-1].inputOff);
+}
+
+bool EhInputSection::isPieceDiscarded(uint64_t offset) const {
+  auto it = partition_point(
+      fdes, [=](EhSectionPiece p) { return p.inputOff <= offset; });
+  if (it == fdes.begin() || it[-1].inputOff + it[-1].size <= offset) {
+    it = partition_point(
+        cies, [=](EhSectionPiece p) { return p.inputOff <= offset; });
+    if (it == cies.begin())
+      return true;
+  }
+  return it[-1].outputOff == -1;
 }
 
 static size_t findNull(StringRef s, size_t entSize) {

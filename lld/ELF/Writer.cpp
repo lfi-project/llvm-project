@@ -2105,6 +2105,10 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     finalizeSynthetic(ctx, ctx.in.shStrTab.get());
     finalizeSynthetic(ctx, ctx.in.strTab.get());
     finalizeSynthetic(ctx, ctx.in.got.get());
+#ifndef QUARK_DISABLED
+    finalizeSynthetic(ctx, ctx.in.relaGot.get());
+    finalizeSynthetic(ctx, ctx.in.relaEhFrameHdr.get());
+#endif
     finalizeSynthetic(ctx, ctx.in.mipsGot.get());
     finalizeSynthetic(ctx, ctx.in.igotPlt.get());
     finalizeSynthetic(ctx, ctx.in.gotPlt.get());

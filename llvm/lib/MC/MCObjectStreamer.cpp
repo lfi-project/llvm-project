@@ -143,6 +143,13 @@ static std::optional<uint64_t> absoluteSymbolDiff(const MCSymbol *Hi,
   auto *LoF = Lo->getFragment();
   if (!LoF || Hi->getFragment() != LoF || LoF->isLinkerRelaxable())
     return std::nullopt;
+#ifndef QUARK_DISABLED
+  // In linker-relaxable sections, don't resolve differences at emission time.
+  // Post-link tools (e.g. quark) may insert instructions, changing distances
+  // between labels. ADD/SUB relocation pairs must be preserved.
+  if (LoF->getParent()->isLinkerRelaxable())
+    return std::nullopt;
+#endif
   // If either symbol resides in the variable part, bail out.
   auto Fixed = LoF->getFixedSize();
   if (Lo->getOffset() > Fixed || Hi->getOffset() > Fixed)
@@ -448,6 +455,22 @@ void MCObjectStreamer::emitInstToData(const MCInst &Inst,
     CodeOffset = 0;
   }
   F->setHasInstructions(STI);
+
+#ifndef QUARK_DISABLED
+  // Quark inserts NOPs after every instruction, so all instructions and
+  // sections must be marked linker-relaxable.
+  {
+    auto *Sec = F->getParent();
+    if (!Sec->isLinkerRelaxable())
+      Sec->setFirstLinkerRelaxable(F->getLayoutOrder());
+    for (auto &Fixup : Fixups)
+      Fixup.setOffset(Fixup.getOffset() + CodeOffset);
+    F->appendFixups(Fixups);
+    F->setLinkerRelaxable();
+    newFragment();
+  }
+  return;
+#endif
 
   if (Fixups.empty())
     return;

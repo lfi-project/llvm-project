@@ -170,6 +170,7 @@ void TargetLoweringObjectFileELF::Initialize(MCContext &Ctx,
       TTypeEncoding = (CM == CodeModel::Small)
         ? dwarf::DW_EH_PE_udata4 : dwarf::DW_EH_PE_absptr;
     }
+    CallSiteEncoding = dwarf::DW_EH_PE_udata4;
     break;
   case Triple::hexagon:
     PersonalityEncoding = dwarf::DW_EH_PE_absptr;

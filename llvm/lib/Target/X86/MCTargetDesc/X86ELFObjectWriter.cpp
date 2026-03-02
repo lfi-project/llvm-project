@@ -12,6 +12,8 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCSection.h"
+#include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCFixup.h"
@@ -393,6 +395,15 @@ bool X86ELFObjectWriter::needsRelocateWithSymbol(const MCValue &V,
   case X86::S_GOTPCREL_NORELAX:
     return true;
   default:
+#ifndef QUARK_DISABLED
+    // When a section is linker-relaxable (quark mode), keep the original
+    // symbol in relocations instead of converting to section symbol + addend.
+    // This matches RISC-V behavior and allows the linker's symbol anchor
+    // mechanism to correctly adjust symbol values during ALIGN relaxation.
+    if (const MCSymbol *Sym = V.getAddSym())
+      if (Sym->isInSection() && Sym->getSection().isLinkerRelaxable())
+        return true;
+#endif
     return false;
   }
 }

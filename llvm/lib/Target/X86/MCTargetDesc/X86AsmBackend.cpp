@@ -1140,10 +1140,6 @@ bool X86AsmBackend::relaxAlign(MCFragment &F, unsigned &Size) {
   if (!STI.hasFeature(X86::FeatureQuarkRelax))
     return false;
 
-  auto *Sec = F.getParent();
-  if (F.getLayoutOrder() <= Sec->firstLinkerRelaxable())
-    return false;
-
   unsigned MinNopLen = 1;
   if (F.getAlignment() <= MinNopLen)
     return false;
@@ -1236,28 +1232,13 @@ bool X86AsmBackend::relaxDwarfCFA(MCFragment &F) const {
 
   SmallVector<char, 8> Data;
   raw_svector_ostream OS(Data);
-  if (isUIntN(6, Value)) {
-    OS << uint8_t(dwarf::DW_CFA_advance_loc);
-    AddFixups(0, {FirstLiteralRelocationKind + ELF::R_X86_64_SET6,
-                  FirstLiteralRelocationKind + ELF::R_X86_64_SUB6});
-  } else if (isUInt<8>(Value)) {
-    OS << uint8_t(dwarf::DW_CFA_advance_loc1);
-    support::endian::write<uint8_t>(OS, 0, Endian);
-    AddFixups(1, {FirstLiteralRelocationKind + ELF::R_X86_64_ADD8,
-                  FirstLiteralRelocationKind + ELF::R_X86_64_SUB8});
-  } else if (isUInt<16>(Value)) {
-    OS << uint8_t(dwarf::DW_CFA_advance_loc2);
-    support::endian::write<uint16_t>(OS, 0, Endian);
-    AddFixups(1, {FirstLiteralRelocationKind + ELF::R_X86_64_ADD16,
-                  FirstLiteralRelocationKind + ELF::R_X86_64_SUB16});
-  } else if (isUInt<32>(Value)) {
-    OS << uint8_t(dwarf::DW_CFA_advance_loc4);
-    support::endian::write<uint32_t>(OS, 0, Endian);
-    AddFixups(1, {FirstLiteralRelocationKind + ELF::R_X86_64_ADD32,
-                  FirstLiteralRelocationKind + ELF::R_X86_64_SUB32});
-  } else {
-    llvm_unreachable("unsupported CFA encoding");
-  }
+  // Always use advance_loc4 to avoid overflow after quark NOP insertion.
+  // The assembly-time value may fit in a smaller encoding, but after
+  // instrumentation the value can grow significantly.
+  OS << uint8_t(dwarf::DW_CFA_advance_loc4);
+  support::endian::write<uint32_t>(OS, 0, Endian);
+  AddFixups(1, {FirstLiteralRelocationKind + ELF::R_X86_64_ADD32,
+                FirstLiteralRelocationKind + ELF::R_X86_64_SUB32});
   F.setVarContents(Data);
   F.setVarFixups(Fixups);
   return true;

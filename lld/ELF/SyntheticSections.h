@@ -111,6 +111,17 @@ public:
   size_t size = 0;
 };
 
+#ifndef QUARK_DISABLED
+template <class ELFT> class EhFrameHdrRelocSection final : public SyntheticSection {
+public:
+  EhFrameHdrRelocSection(Ctx &ctx);
+  size_t getSize() const override;
+  void finalizeContents() override;
+  void writeTo(uint8_t *buf) override;
+  bool isNeeded() const override;
+};
+#endif
+
 class GotSection final : public SyntheticSection {
 public:
   GotSection(Ctx &);
@@ -138,6 +149,8 @@ public:
   // that relies on its address.
   std::atomic<bool> hasGotOffRel = false;
 
+  SmallVector<const Symbol *, 0> entries;
+
 protected:
   size_t numEntries = 0;
   uint32_t tlsIndexOff = -1;
@@ -147,6 +160,17 @@ protected:
   };
   SmallVector<AuthEntryInfo, 0> authEntries;
 };
+
+#ifndef QUARK_DISABLED
+template <class ELFT> class GotRelocSection final : public SyntheticSection {
+public:
+  GotRelocSection(Ctx &ctx);
+  size_t getSize() const override;
+  void finalizeContents() override;
+  void writeTo(uint8_t *buf) override;
+  bool isNeeded() const override;
+};
+#endif
 
 // .note.GNU-stack section.
 class GnuStackSection : public SyntheticSection {
