@@ -19,7 +19,7 @@ callq foo
 // ENDBR-NEXT: callq foo
 // ENDBR-NEXT: .Ltmp0:
 // ENDBR-NEXT: movq %rsp, 16(%r15)
-// ENDBR-NEXT: movq 24(%r15), %rsp
+// ENDBR-NEXT: movq %r11, %rsp
 // ENDBR-NEXT: popq %r11
 //
 // BOTH:      callq foo
@@ -89,9 +89,9 @@ jmpq *%rax
 // both: ret emitted as-is
 ret
 // SHSTK:      retq
-// SHSTK-NOT:  movq %rsp, 24(%r15)
+// SHSTK-NOT:  movq %rsp, %r11
 //
-// ENDBR:      movq %rsp, 24(%r15)
+// ENDBR:      movq %rsp, %r11
 // ENDBR-NEXT: movq 16(%r15), %rsp
 // ENDBR-NEXT: retq
 //
@@ -102,11 +102,11 @@ ret
 // hw-endbr: SCS return with stack adjustment
 retq $8
 // SHSTK:      retq $8
-// SHSTK-NOT:  movq %rsp, 24(%r15)
+// SHSTK-NOT:  movq %rsp, %r11
 //
 // ENDBR:      addl $8, %esp
 // ENDBR-NEXT: leaq (%rsp,%r14), %rsp
-// ENDBR-NEXT: movq %rsp, 24(%r15)
+// ENDBR-NEXT: movq %rsp, %r11
 // ENDBR-NEXT: movq 16(%r15), %rsp
 // ENDBR-NEXT: retq
 //

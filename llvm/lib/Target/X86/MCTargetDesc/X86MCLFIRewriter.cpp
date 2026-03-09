@@ -450,8 +450,12 @@ void X86::X86MCLFIRewriter::emitShadowCallEpilogue(MCSymbol *RetLabel,
   // movq %rsp, SCSOffset(%r15) - save shadow stack ptr (updated by callee's ret)
   emitMovToR15Slot(X86::RSP, SCSOffset, Out, STI);
 
-  // movq SCSTempOffset(%r15), %rsp - restore real rsp (saved by callee's ret)
-  emitMovFromR15Slot(X86::RSP, SCSTempOffset, Out, STI);
+  // movq %r11, %rsp - restore real rsp (saved by callee's ret in r11)
+  MCInst RestoreRsp;
+  RestoreRsp.setOpcode(X86::MOV64rr);
+  RestoreRsp.addOperand(MCOperand::createReg(X86::RSP));
+  RestoreRsp.addOperand(MCOperand::createReg(LFIScratchReg));
+  Out.emitInstruction(RestoreRsp, STI);
 
   // popq %r11 - pop the return address that callq pushed on the real stack
   MCInst Pop;
@@ -534,8 +538,12 @@ void X86::X86MCLFIRewriter::expandReturn(const MCInst &Inst, MCStreamer &Out,
       }
     }
 
-    // movq %rsp, SCSTempOffset(%r15) - save rsp to temp slot
-    emitMovToR15Slot(X86::RSP, SCSTempOffset, Out, STI);
+    // movq %rsp, %r11 - save rsp to scratch register
+    MCInst SaveRsp;
+    SaveRsp.setOpcode(X86::MOV64rr);
+    SaveRsp.addOperand(MCOperand::createReg(LFIScratchReg));
+    SaveRsp.addOperand(MCOperand::createReg(X86::RSP));
+    Out.emitInstruction(SaveRsp, STI);
 
     // movq SCSOffset(%r15), %rsp - load shadow call stack pointer
     emitMovFromR15Slot(X86::RSP, SCSOffset, Out, STI);

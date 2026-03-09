@@ -35,7 +35,7 @@ jmpq *%rax
 
 // Return - no CFI check (return addresses don't have endbr64)
 ret
-// CHECK:      movq %rsp, 24(%r15)
+// CHECK:      movq %rsp, %r11
 // CHECK-NEXT: movq 16(%r15), %rsp
 // CHECK-NEXT: retq
 

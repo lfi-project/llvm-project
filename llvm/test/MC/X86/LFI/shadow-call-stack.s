@@ -11,7 +11,7 @@ callq foo
 // CHECK-NEXT: callq foo
 // CHECK-NEXT: .Ltmp0:
 // CHECK-NEXT: movq %rsp, 16(%r15)
-// CHECK-NEXT: movq 24(%r15), %rsp
+// CHECK-NEXT: movq %r11, %rsp
 // CHECK-NEXT: popq %r11
 
 // Indirect call through register
@@ -29,7 +29,7 @@ callq *%rax
 // CHECK-NEXT: callq *%rax
 // CHECK-NEXT: .Ltmp1:
 // CHECK-NEXT: movq %rsp, 16(%r15)
-// CHECK-NEXT: movq 24(%r15), %rsp
+// CHECK-NEXT: movq %r11, %rsp
 // CHECK-NEXT: popq %r11
 
 // Indirect call through memory
@@ -48,12 +48,12 @@ callq *(%rax)
 // CHECK-NEXT: callq *%r11
 // CHECK-NEXT: .Ltmp2:
 // CHECK-NEXT: movq %rsp, 16(%r15)
-// CHECK-NEXT: movq 24(%r15), %rsp
+// CHECK-NEXT: movq %r11, %rsp
 // CHECK-NEXT: popq %r11
 
 // Basic return
 ret
-// CHECK:      movq %rsp, 24(%r15)
+// CHECK:      movq %rsp, %r11
 // CHECK-NEXT: movq 16(%r15), %rsp
 // CHECK-NEXT: retq
 
@@ -61,14 +61,14 @@ ret
 retq $8
 // CHECK:      addl $8, %esp
 // CHECK-NEXT: leaq (%rsp,%r14), %rsp
-// CHECK-NEXT: movq %rsp, 24(%r15)
+// CHECK-NEXT: movq %rsp, %r11
 // CHECK-NEXT: movq 16(%r15), %rsp
 // CHECK-NEXT: retq
 
 retq $16
 // CHECK:      addl $16, %esp
 // CHECK-NEXT: leaq (%rsp,%r14), %rsp
-// CHECK-NEXT: movq %rsp, 24(%r15)
+// CHECK-NEXT: movq %rsp, %r11
 // CHECK-NEXT: movq 16(%r15), %rsp
 // CHECK-NEXT: retq
 
