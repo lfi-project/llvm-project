@@ -59,7 +59,7 @@ static cl::opt<bool>
     X86LFIHwShstk("x86-lfi-hw-shstk",
                    cl::desc("Hardware shadow call stack is available; skip "
                             "software SCS rewrites"),
-                   cl::init(true));
+                   cl::init(false));
 
 static cl::opt<bool>
     X86LFIHwEndbr("x86-lfi-hw-endbr",
