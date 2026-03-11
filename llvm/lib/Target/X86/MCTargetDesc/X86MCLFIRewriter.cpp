@@ -683,8 +683,8 @@ void X86::X86MCLFIRewriter::expandStringOperation(const MCInst &Inst,
                                                    MCStreamer &Out,
                                                    const MCSubtargetInfo &STI,
                                                    bool EmitPrefixes) {
-  bool JumpsOnly = hasNoLFILoads(STI) && hasNoLFIStores(STI);
-  bool StoresOnly = hasNoLFILoads(STI) && !hasNoLFIStores(STI);
+  bool SkipLoads = hasNoLFILoads(STI);
+  bool SkipStores = hasNoLFIStores(STI);
 
   maybeEmitBundleLock(false, Out, STI);
 
@@ -693,23 +693,29 @@ void X86::X86MCLFIRewriter::expandStringOperation(const MCInst &Inst,
   case X86::CMPSW:
   case X86::CMPSL:
   case X86::CMPSQ:
+    // Both operands are loads.
+    if (!SkipLoads) {
+      fixupStringOpReg(Inst.getOperand(1), Out, STI);
+      fixupStringOpReg(Inst.getOperand(0), Out, STI);
+    }
+    break;
   case X86::MOVSB:
   case X86::MOVSW:
   case X86::MOVSL:
   case X86::MOVSQ:
-    // Source operand (RSI).
-    if (!JumpsOnly && !StoresOnly)
+    // Source operand (RSI) is a load.
+    if (!SkipLoads)
       fixupStringOpReg(Inst.getOperand(1), Out, STI);
-    // Destination operand (RDI).
-    if (!JumpsOnly)
+    // Destination operand (RDI) is a store.
+    if (!SkipStores)
       fixupStringOpReg(Inst.getOperand(0), Out, STI);
     break;
   case X86::STOSB:
   case X86::STOSW:
   case X86::STOSL:
   case X86::STOSQ:
-    // Destination operand (RDI).
-    if (!JumpsOnly)
+    // Destination operand (RDI) is a store.
+    if (!SkipStores)
       fixupStringOpReg(Inst.getOperand(0), Out, STI);
     break;
   }
