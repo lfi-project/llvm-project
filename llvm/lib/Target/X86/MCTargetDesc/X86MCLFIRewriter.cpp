@@ -850,12 +850,14 @@ void X86::X86MCLFIRewriter::emitSandboxMemOp(MCInst &Inst, int MemIdx,
                                               MCRegister ScratchReg,
                                               MCStreamer &Out,
                                               const MCSubtargetInfo &STI) {
-  bool JumpsOnly = hasNoLFILoads(STI) && hasNoLFIStores(STI);
-  bool StoresOnly = hasNoLFILoads(STI) && !hasNoLFIStores(STI);
+  bool SkipLoads = hasNoLFILoads(STI);
+  bool SkipStores = hasNoLFIStores(STI);
 
-  if (JumpsOnly)
+  if (SkipLoads && SkipStores)
     return;
-  if (StoresOnly && !mayStore(Inst))
+  if (SkipLoads && !mayStore(Inst))
+    return;
+  if (SkipStores && !mayLoad(Inst))
     return;
 
   MCOperand &Base = Inst.getOperand(MemIdx);
