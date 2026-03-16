@@ -83,11 +83,11 @@ by the LFI runtime. The layout is as follows:
 +--------+--------+----------------------------------------------+
 | Offset | Size   | Description                                  |
 +--------+--------+----------------------------------------------+
-| 0      | 8      | Reserved for use by the LFI runtime.         |
+| 0      | 8      | Reserved for future use.                     |
 +--------+--------+----------------------------------------------+
-| 8      | 24     | Reserved for future use.                     |
+| 8      | 8      | Reserved for use by the LFI runtime.         |
 +--------+--------+----------------------------------------------+
-| 32     | 8      | Virtual thread pointer (used for TLS access).|
+| 16     | 8      | Virtual thread pointer (used for TP access). |
 +--------+--------+----------------------------------------------+
 
 Linker Support

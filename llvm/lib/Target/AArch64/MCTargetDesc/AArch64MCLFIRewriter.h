@@ -76,8 +76,6 @@ private:
                       const MCSubtargetInfo &STI);
   void rewriteDCZVA(const MCInst &Inst, MCStreamer &Out,
                     const MCSubtargetInfo &STI);
-
-  void emitSyscall(MCStreamer &Out, const MCSubtargetInfo &STI);
 };
 
 } // namespace llvm
