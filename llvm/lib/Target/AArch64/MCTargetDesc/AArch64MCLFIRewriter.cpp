@@ -69,14 +69,27 @@ static bool isNotMemAccess(const MCInst &Inst) {
   }
 }
 
-static bool isTLSRead(const MCInst &Inst) {
+static bool isPrivilegedTP(int64_t Reg) {
+  return Reg == AArch64SysReg::TPIDR_EL1 || Reg == AArch64SysReg::TPIDR_EL2 ||
+         Reg == AArch64SysReg::TPIDR_EL3;
+}
+
+static bool isTPRead(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::MRS &&
          Inst.getOperand(1).getImm() == AArch64SysReg::TPIDR_EL0;
 }
 
-static bool isTLSWrite(const MCInst &Inst) {
+static bool isTPWrite(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::MSR &&
          Inst.getOperand(0).getImm() == AArch64SysReg::TPIDR_EL0;
+}
+
+static bool isPrivilegedTPAccess(const MCInst &Inst) {
+  if (Inst.getOpcode() == AArch64::MRS)
+    return isPrivilegedTP(Inst.getOperand(1).getImm());
+  if (Inst.getOpcode() == AArch64::MSR)
+    return isPrivilegedTP(Inst.getOperand(0).getImm());
+  return false;
 }
 
 static bool mayPrefetch(const MCInst &Inst) {
@@ -738,14 +751,22 @@ void AArch64MCLFIRewriter::emitSyscall(MCStreamer &Out,
   emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
 }
 
+// svc #0
+// ->
+// mov x26, x30
+// ldur x30, [x27, #-8]
+// blr x30
+// add x30, x27, w26, uxtw
 void AArch64MCLFIRewriter::rewriteSyscall(const MCInst &, MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
   emitSyscall(Out, STI);
 }
 
-void AArch64MCLFIRewriter::rewriteTLSRead(const MCInst &Inst, MCStreamer &Out,
-                                          const MCSubtargetInfo &STI) {
-  // mrs xN, tpidr_el0 -> ldr xN, [x25, #TP]
+// mrs xN, tpidr_el0
+// ->
+// ldr xN, [x25, #32]
+void AArch64MCLFIRewriter::rewriteTPRead(const MCInst &Inst, MCStreamer &Out,
+                                         const MCSubtargetInfo &STI) {
   MCRegister DestReg = Inst.getOperand(0).getReg();
 
   MCInst Load;
@@ -756,9 +777,11 @@ void AArch64MCLFIRewriter::rewriteTLSRead(const MCInst &Inst, MCStreamer &Out,
   emitInst(Load, Out, STI);
 }
 
-void AArch64MCLFIRewriter::rewriteTLSWrite(const MCInst &Inst, MCStreamer &Out,
-                                           const MCSubtargetInfo &STI) {
-  // msr tpidr_el0, xN -> str xN, [x25, #TP]
+// msr tpidr_el0, xN
+// ->
+// str xN, [x25, #32]
+void AArch64MCLFIRewriter::rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
+                                          const MCSubtargetInfo &STI) {
   MCRegister SrcReg = Inst.getOperand(1).getReg();
 
   MCInst Store;
@@ -769,9 +792,12 @@ void AArch64MCLFIRewriter::rewriteTLSWrite(const MCInst &Inst, MCStreamer &Out,
   emitInst(Store, Out, STI);
 }
 
+// dc zva, xN
+// ->
+// add x28, x27, wN, uxtw
+// dc zva, x28
 void AArch64MCLFIRewriter::rewriteDCZVA(const MCInst &Inst, MCStreamer &Out,
                                         const MCSubtargetInfo &STI) {
-  // dc zva, xN -> add x28, x27, wN, uxtw; dc zva, x28
   MCRegister AddrReg = Inst.getOperand(4).getReg();
 
   emitAddMask(LFIAddrReg, AddrReg, Out, STI);
@@ -798,11 +824,16 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   if (isSyscall(Inst))
     return rewriteSyscall(Inst, Out, STI);
 
-  if (isTLSRead(Inst))
-    return rewriteTLSRead(Inst, Out, STI);
+  if (isTPRead(Inst))
+    return rewriteTPRead(Inst, Out, STI);
 
-  if (isTLSWrite(Inst))
-    return rewriteTLSWrite(Inst, Out, STI);
+  if (isTPWrite(Inst))
+    return rewriteTPWrite(Inst, Out, STI);
+
+  if (isPrivilegedTPAccess(Inst)) {
+    error(Inst, "illegal access to privileged thread pointer register");
+    return;
+  }
 
   if (isDCZVA(Inst))
     return rewriteDCZVA(Inst, Out, STI);
