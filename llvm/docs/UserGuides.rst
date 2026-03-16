@@ -50,7 +50,7 @@ intermediate LLVM representation.
    InstrProfileFormat
    InstrRefDebugInfo
    KeyInstructionsDebugInfo
-   LFI
+   LightweightFaultIsolation
    LinkTimeOptimization
    LoopTerminology
    MarkdownQuickstartTemplate
@@ -319,5 +319,5 @@ Additional Topics
 :doc:`Telemetry`
    This document describes the Telemetry framework in LLVM.
 
-:doc:`LFI <LFI>`
+:doc:`LFI <LightweightFaultIsolation>`
     This document describes the Lightweight Fault Isolation (LFI) target in LLVM.
