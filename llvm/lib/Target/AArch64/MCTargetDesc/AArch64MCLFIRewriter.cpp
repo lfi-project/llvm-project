@@ -38,8 +38,8 @@ static constexpr MCRegister LFICtxReg = AArch64::X25;
 
 // Offset into the context register block (pointed to by LFICtxReg) where the
 // thread pointer is stored. This is a scaled offset (multiplied by 8 for
-// 64-bit loads), so a value of 4 means an actual byte offset of 32.
-static constexpr unsigned LFITPOffset = 4;
+// 64-bit loads), so a value of 2 means an actual byte offset of 16.
+static constexpr unsigned LFITPOffset = 2;
 
 static unsigned convertUiToRoW(unsigned Op);
 static unsigned convertPreToRoW(unsigned Op);
@@ -731,8 +731,14 @@ void AArch64MCLFIRewriter::rewriteAuthenticatedBranchOrCall(
   emitBranch(BranchOpcode, LFIAddrReg, Out, STI);
 }
 
-void AArch64MCLFIRewriter::emitSyscall(MCStreamer &Out,
-                                       const MCSubtargetInfo &STI) {
+// svc #0
+// ->
+// mov x26, x30
+// ldur x30, [x27, #-8]
+// blr x30
+// add x30, x27, w26, uxtw
+void AArch64MCLFIRewriter::rewriteSyscall(const MCInst &, MCStreamer &Out,
+                                          const MCSubtargetInfo &STI) {
   // Save LR to scratch.
   emitMov(LFIScratchReg, AArch64::LR, Out, STI);
 
@@ -751,20 +757,9 @@ void AArch64MCLFIRewriter::emitSyscall(MCStreamer &Out,
   emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
 }
 
-// svc #0
-// ->
-// mov x26, x30
-// ldur x30, [x27, #-8]
-// blr x30
-// add x30, x27, w26, uxtw
-void AArch64MCLFIRewriter::rewriteSyscall(const MCInst &, MCStreamer &Out,
-                                          const MCSubtargetInfo &STI) {
-  emitSyscall(Out, STI);
-}
-
 // mrs xN, tpidr_el0
 // ->
-// ldr xN, [x25, #32]
+// ldr xN, [x25, #16]
 void AArch64MCLFIRewriter::rewriteTPRead(const MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI) {
   MCRegister DestReg = Inst.getOperand(0).getReg();
@@ -779,7 +774,7 @@ void AArch64MCLFIRewriter::rewriteTPRead(const MCInst &Inst, MCStreamer &Out,
 
 // msr tpidr_el0, xN
 // ->
-// str xN, [x25, #32]
+// str xN, [x25, #16]
 void AArch64MCLFIRewriter::rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
   MCRegister SrcReg = Inst.getOperand(1).getReg();
@@ -886,6 +881,8 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
 
 bool AArch64MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
                                        const MCSubtargetInfo &STI) {
+  // The guard prevents rewrite-recursion when we emit instructions from inside
+  // the rewriter (such instructions should not be rewritten).
   if (!Enabled || Guard)
     return false;
   Guard = true;

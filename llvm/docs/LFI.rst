@@ -99,11 +99,11 @@ by the LFI runtime. The layout is as follows:
 +--------+--------+----------------------------------------------+
 | Offset | Size   | Description                                  |
 +--------+--------+----------------------------------------------+
-| 0      | 8      | Reserved for use by the LFI runtime.         |
+| 0      | 8      | Reserved for future use.                     |
 +--------+--------+----------------------------------------------+
-| 8      | 24     | Reserved for future use.                     |
+| 8      | 8      | Reserved for use by the LFI runtime.         |
 +--------+--------+----------------------------------------------+
-| 32     | 8      | Virtual thread pointer (used for TLS access).|
+| 16     | 8      | Virtual thread pointer (used for TP access). |
 +--------+--------+----------------------------------------------+
 
 Linker Support
@@ -408,11 +408,11 @@ used for branching into the runtime.
 |                 |                              |
 +-----------------+------------------------------+
 
-Thread-local storage
-~~~~~~~~~~~~~~~~~~~~
+Thread pointer
+~~~~~~~~~~~~~~
 
-TLS accesses are rewritten into loads/stores from the context register
-(``x25``), which holds the virtual thread pointer at offset 32 (see
+TP accesses are rewritten into loads/stores from the context register
+(``x25``), which holds the virtual thread pointer at offset 16 (see
 `Context Register`_).
 
 +----------------------+-------------------------+
@@ -420,12 +420,12 @@ TLS accesses are rewritten into loads/stores from the context register
 +----------------------+-------------------------+
 | .. code-block::      | .. code-block::         |
 |                      |                         |
-|    mrs xN, tpidr_el0 |    ldr xN, [x25, #32]   |
+|    mrs xN, tpidr_el0 |    ldr xN, [x25, #16]   |
 |                      |                         |
 +----------------------+-------------------------+
 | .. code-block::      | .. code-block::         |
 |                      |                         |
-|    msr tpidr_el0, xN |    str xN, [x25, #32]   |
+|    msr tpidr_el0, xN |    str xN, [x25, #16]   |
 |                      |                         |
 +----------------------+-------------------------+
 
