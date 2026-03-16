@@ -60,16 +60,6 @@ static bool isPrivilegedTPAccess(const MCInst &Inst) {
   return false;
 }
 
-static bool isDCZVA(const MCInst &Inst) {
-  // DC ZVA is encoded as SYSxt with op1=3, Cn=7, Cm=4, op2=1
-  if (Inst.getOpcode() != AArch64::SYSxt)
-    return false;
-  return Inst.getOperand(0).getImm() == 3 && // op1
-         Inst.getOperand(1).getImm() == 7 && // Cn
-         Inst.getOperand(2).getImm() == 4 && // Cm
-         Inst.getOperand(3).getImm() == 1;   // op2
-}
-
 bool AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
   return mayModifyRegister(Inst, LFIAddrReg) ||
          mayModifyRegister(Inst, LFIBaseReg) ||
@@ -173,26 +163,6 @@ void AArch64MCLFIRewriter::rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
   emitInst(Store, Out, STI);
 }
 
-// dc zva, xN
-// ->
-// add x28, x27, wN, uxtw
-// dc zva, x28
-void AArch64MCLFIRewriter::rewriteDCZVA(const MCInst &Inst, MCStreamer &Out,
-                                        const MCSubtargetInfo &STI) {
-  MCRegister AddrReg = Inst.getOperand(4).getReg();
-
-  emitAddMask(LFIAddrReg, AddrReg, Out, STI);
-
-  MCInst NewInst;
-  NewInst.setOpcode(AArch64::SYSxt);
-  NewInst.addOperand(Inst.getOperand(0)); // op1
-  NewInst.addOperand(Inst.getOperand(1)); // Cn
-  NewInst.addOperand(Inst.getOperand(2)); // Cm
-  NewInst.addOperand(Inst.getOperand(3)); // op2
-  NewInst.addOperand(MCOperand::createReg(LFIAddrReg));
-  emitInst(NewInst, Out, STI);
-}
-
 void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI) {
   // Reserved register modification is an error.
@@ -215,9 +185,6 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
     error(Inst, "illegal access to privileged thread pointer register");
     return;
   }
-
-  if (isDCZVA(Inst))
-    return rewriteDCZVA(Inst, Out, STI);
 
   emitInst(Inst, Out, STI);
 }
