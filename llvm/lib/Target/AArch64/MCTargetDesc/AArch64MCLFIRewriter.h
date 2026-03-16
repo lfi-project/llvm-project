@@ -70,10 +70,10 @@ private:
   // System instructions.
   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
                       const MCSubtargetInfo &STI);
-  void rewriteTLSRead(const MCInst &Inst, MCStreamer &Out,
+  void rewriteTPRead(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI);
+  void rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
                       const MCSubtargetInfo &STI);
-  void rewriteTLSWrite(const MCInst &Inst, MCStreamer &Out,
-                       const MCSubtargetInfo &STI);
   void rewriteDCZVA(const MCInst &Inst, MCStreamer &Out,
                     const MCSubtargetInfo &STI);
 
