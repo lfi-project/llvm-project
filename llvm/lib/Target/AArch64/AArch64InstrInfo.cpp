@@ -110,11 +110,10 @@ AArch64InstrInfo::AArch64InstrInfo(const AArch64Subtarget &STI)
 /// Return the maximum number of bytes of code the specified instruction may be
 /// after LFI rewriting. If the instruction is not rewritten, std::nullopt is
 /// returned (use default sizing).
-static std::optional<unsigned>
-getLFIInstSizeInBytes(const MachineInstr &MI) {
+static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI) {
   switch (MI.getOpcode()) {
   case AArch64::SVC:
-    // svc expands to 4 instructions.
+    // SVC expands to 4 instructions.
     return 16;
   default:
     return std::nullopt;
@@ -145,10 +144,9 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   const MCInstrDesc &Desc = MI.getDesc();
 
   // LFI rewriter expansions that supersede normal sizing.
-  if (Subtarget.isLFI()) {
+  if (Subtarget.isLFI())
     if (auto Size = getLFIInstSizeInBytes(MI))
       return *Size;
-  }
 
   if (!MI.isBundle() && isTailCallReturnInst(MI)) {
     NumBytes = Desc.getSize() ? Desc.getSize() : 4;
