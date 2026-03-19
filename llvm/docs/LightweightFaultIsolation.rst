@@ -67,12 +67,19 @@ The LFI target uses a custom ABI that reserves additional registers for the
 platform. The registers are listed below, along with the security invariant
 that must be maintained.
 
-* ``x27``: always holds the sandbox base address.
+* ``x27``: always holds the sandbox base address (must be aligned to the size
+  of the sandbox).
 * ``x28``: always holds an address within the sandbox.
 * ``sp``: always holds an address within the sandbox.
 * ``x30``: always holds an address within the sandbox.
 * ``x26``: scratch register.
 * ``x25``: context register (see below).
+
+The current design only supports 4GiB sandboxes, which requires the sandbox
+base address to be 4GiB-aligned. This is because LFI's ABI stores pointers as
+their full 64-bit values, rather than just 32-bit offsets from the base. This
+enables stores-only mode, where loads are not sandboxed but stores are, and
+allows the host to directly pass pointers to the sandbox.
 
 Context Register
 ~~~~~~~~~~~~~~~~
