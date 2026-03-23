@@ -28,6 +28,10 @@ static constexpr MCRegister LFIAddrReg = AArch64::X28;
 static constexpr MCRegister LFIScratchReg = AArch64::X26;
 static constexpr MCRegister LFICtxReg = AArch64::X25;
 
+// Registers that may not be modified by sandboxed code.
+static constexpr MCRegister LFIReservedRegs[] = {LFIAddrReg, LFIBaseReg,
+                                                  LFICtxReg};
+
 // Offset into the context register block (pointed to by LFICtxReg) where the
 // thread pointer is stored. This is a scaled offset (multiplied by 8 for
 // 64-bit loads), so a value of 2 means an actual byte offset of 16.
@@ -60,10 +64,11 @@ static bool isPrivilegedTPAccess(const MCInst &Inst) {
   return false;
 }
 
-bool AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
-  return mayModifyRegister(Inst, LFIAddrReg) ||
-         mayModifyRegister(Inst, LFIBaseReg) ||
-         mayModifyRegister(Inst, LFICtxReg);
+MCRegister AArch64MCLFIRewriter::modifiedReservedReg(const MCInst &Inst) const {
+  for (MCRegister Reg : LFIReservedRegs)
+    if (mayModifyRegister(Inst, Reg))
+      return Reg;
+  return MCRegister();
 }
 
 void AArch64MCLFIRewriter::emitInst(const MCInst &Inst, MCStreamer &Out,
@@ -166,8 +171,16 @@ void AArch64MCLFIRewriter::rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
 void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI) {
   // Reserved register modification is an error.
-  if (mayModifyReserved(Inst)) {
-    error(Inst, "illegal modification of reserved LFI register");
+  if (MCRegister Reg = modifiedReservedReg(Inst)) {
+    std::string RegList;
+    for (MCRegister R : LFIReservedRegs) {
+      if (!RegList.empty())
+        RegList += ", ";
+      RegList += RegInfo->getName(R);
+    }
+    error(Inst, "illegal modification of reserved LFI register " +
+                    Twine(RegInfo->getName(Reg)) +
+                    ", reserved registers are " + RegList);
     return;
   }
 

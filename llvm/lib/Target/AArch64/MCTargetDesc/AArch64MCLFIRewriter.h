@@ -51,7 +51,7 @@ private:
   bool Guard = false;
 
   // Instruction classification.
-  bool mayModifyReserved(const MCInst &Inst) const;
+  MCRegister modifiedReservedReg(const MCInst &Inst) const;
 
   // Instruction emission.
   void emitInst(const MCInst &Inst, MCStreamer &Out,

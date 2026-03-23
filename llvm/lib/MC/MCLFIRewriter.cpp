@@ -19,7 +19,7 @@
 
 namespace llvm {
 
-void MCLFIRewriter::error(const MCInst &Inst, const char Msg[]) {
+void MCLFIRewriter::error(const MCInst &Inst, const Twine &Msg) {
   Ctx.reportError(Inst.getLoc(), Msg);
 }
 

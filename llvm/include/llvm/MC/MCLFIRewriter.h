@@ -18,6 +18,7 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/Compiler.h"
 
 namespace llvm {
@@ -40,7 +41,7 @@ public:
                 std::unique_ptr<MCInstrInfo> &&II)
       : Ctx(Ctx), InstInfo(std::move(II)), RegInfo(std::move(RI)) {}
 
-  LLVM_ABI void error(const MCInst &Inst, const char Msg[]);
+  LLVM_ABI void error(const MCInst &Inst, const Twine &Msg);
 
   void disable() { Enabled = false; }
   void enable() { Enabled = true; }
