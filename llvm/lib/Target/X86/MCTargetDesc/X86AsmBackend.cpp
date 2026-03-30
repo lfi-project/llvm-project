@@ -1258,7 +1258,17 @@ std::pair<bool, bool> X86AsmBackend::relaxLEB128(MCFragment &LF,
     return std::make_pair(false, false);
   const MCExpr &Expr = LF.getLEBValue();
   LF.setVarFixups({MCFixup::create(0, &Expr, FK_Data_leb128)});
-  return std::make_pair(Expr.evaluateKnownAbsolute(Value, *Asm), false);
+  bool Abs = Expr.evaluateKnownAbsolute(Value, *Asm);
+#ifdef QUARK_DISABLED
+  return std::make_pair(Abs, false);
+#else
+  // Report a large value so the encoding is padded to 5 bytes, providing
+  // headroom for code expansion during binary instrumentation.  The actual
+  // content is zero-filled (UseZeroPad=true) and the linker resolves the
+  // real value via the SET_ULEB128/SUB_ULEB128 relocation pair.
+  Value = 0x0FFFFFFF; // requires 5-byte ULEB128
+  return std::make_pair(Abs, /*UseZeroPad=*/true);
+#endif
 }
 
 /* *** */
