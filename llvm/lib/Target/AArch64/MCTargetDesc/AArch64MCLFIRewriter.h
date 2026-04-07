@@ -32,13 +32,16 @@ class MCSubtargetInfo;
 /// for AArch64 instructions. It transforms instructions to ensure memory
 /// accesses and control flow are confined within the sandbox region.
 ///
-/// Reserved registers:
+/// Reserved registers (standard mode):
 /// - X27: Sandbox base address (always holds the base)
 /// - X28: Safe address register (always within sandbox)
 /// - X26: Scratch register for intermediate calculations
-/// - X25: context register (points to thread-local runtime data)
+/// - X25: Context register (points to thread-local runtime data)
 /// - SP:  Stack pointer (always within sandbox)
 /// - X30: Link register (always within sandbox)
+///
+/// Additional reserved register (large sandbox mode):
+/// - X24: Offset register (always holds a value in [0, sandbox_size - 1])
 class AArch64MCLFIRewriter : public MCLFIRewriter {
 public:
   AArch64MCLFIRewriter(MCContext &Ctx, std::unique_ptr<MCRegisterInfo> &&RI,
@@ -71,8 +74,14 @@ private:
 
   // Instruction classification.
   bool mayModifyStack(const MCInst &Inst) const;
-  bool mayModifyReserved(const MCInst &Inst) const;
+  bool mayModifyReserved(const MCInst &Inst,
+                         const MCSubtargetInfo &STI) const;
   bool mayModifyLR(const MCInst &Inst) const;
+
+  // Large sandbox helpers.
+  bool isLargeSandbox(const MCSubtargetInfo &STI) const;
+  uint64_t getSandboxMask() const;
+  uint64_t getSandboxMaskEncoding() const;
 
   // Instruction emission.
   void emitInst(const MCInst &Inst, MCStreamer &Out,

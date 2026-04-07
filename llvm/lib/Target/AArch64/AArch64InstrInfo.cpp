@@ -202,11 +202,13 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   }
 
   if (Subtarget.getTargetTriple().isLFI()) {
-    // Loads and stores may be expanded to include an additional guard
-    // instruction, so we overestimate the size here to allow things like
-    // branch relaxation to be more accurate.
+    // Loads and stores may be expanded to include additional guard
+    // instructions, so we overestimate the size here to allow things like
+    // branch relaxation to be more accurate. Large sandbox mode uses a
+    // two-instruction guard (and + add) vs one instruction (add w/ uxtw).
+    unsigned GuardSize = Subtarget.lFILargeSandbox() ? 8 : 4;
     if (Desc.mayLoad() || Desc.mayStore())
-      NumBytes += 4;
+      NumBytes += GuardSize;
   }
 
   return NumBytes;

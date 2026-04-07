@@ -30,11 +30,17 @@ static cl::opt<bool>
                    cl::desc("Disable LFI guard elimination optimization"),
                    cl::init(false));
 
+static cl::opt<unsigned>
+    LFISandboxBits("aarch64-lfi-sandbox-bits", cl::Hidden,
+                   cl::desc("Number of address bits for LFI large sandbox"),
+                   cl::init(32));
+
 // LFI reserved registers.
 static constexpr MCRegister LFIBaseReg = AArch64::X27;
 static constexpr MCRegister LFIAddrReg = AArch64::X28;
 static constexpr MCRegister LFIScratchReg = AArch64::X26;
 static constexpr MCRegister LFICtxReg = AArch64::X25;
+static constexpr MCRegister LFIOffsetReg = AArch64::X24;
 
 // Offset into the context register block (pointed to by LFICtxReg) where the
 // thread pointer is stored. This is a scaled offset (multiplied by 8 for
@@ -45,6 +51,7 @@ static unsigned convertUiToRoW(unsigned Op);
 static unsigned convertPreToRoW(unsigned Op);
 static unsigned convertPostToRoW(unsigned Op);
 static unsigned convertRoXToRoW(unsigned Op, unsigned &Shift);
+static unsigned convertRoWToRoX(unsigned Op);
 static bool getRoWShift(unsigned Op, unsigned &Shift);
 static unsigned getPrePostScale(unsigned Op);
 static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
@@ -157,10 +164,15 @@ bool AArch64MCLFIRewriter::mayModifyStack(const MCInst &Inst) const {
   return mayModifyRegister(Inst, AArch64::SP);
 }
 
-bool AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
-  return mayModifyRegister(Inst, LFIAddrReg) ||
-         mayModifyRegister(Inst, LFIBaseReg) ||
-         mayModifyRegister(Inst, LFICtxReg);
+bool AArch64MCLFIRewriter::mayModifyReserved(
+    const MCInst &Inst, const MCSubtargetInfo &STI) const {
+  if (mayModifyRegister(Inst, LFIAddrReg) ||
+      mayModifyRegister(Inst, LFIBaseReg) ||
+      mayModifyRegister(Inst, LFICtxReg))
+    return true;
+  if (isLargeSandbox(STI) && mayModifyRegister(Inst, LFIOffsetReg))
+    return true;
+  return false;
 }
 
 bool AArch64MCLFIRewriter::mayModifyLR(const MCInst &Inst) const {
@@ -190,16 +202,33 @@ void AArch64MCLFIRewriter::finish(MCStreamer &Out) {
   }
 }
 
+bool AArch64MCLFIRewriter::isLargeSandbox(const MCSubtargetInfo &STI) const {
+  return STI.hasFeature(AArch64::FeatureLFILargeSandbox);
+}
+
+uint64_t AArch64MCLFIRewriter::getSandboxMask() const {
+  assert(LFISandboxBits > 0 && LFISandboxBits < 64 &&
+         "sandbox bits must be in [1, 63]");
+  return (1ULL << LFISandboxBits) - 1;
+}
+
+uint64_t AArch64MCLFIRewriter::getSandboxMaskEncoding() const {
+  return AArch64_AM::encodeLogicalImmediate(getSandboxMask(), 64);
+}
+
 void AArch64MCLFIRewriter::emitInst(const MCInst &Inst, MCStreamer &Out,
                                     const MCSubtargetInfo &STI) {
   // Guard elimination: invalidate guard if instruction modifies guarded
-  // register, x28 (which holds the guarded value), or affects control flow.
+  // register, the guard destination register, or affects control flow.
+  // In standard mode the guard destination is x28; in large sandbox mode
+  // the guard depends on both x24 (offset) and x28 (address).
   if (ActiveGuard) {
     const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
     if (Desc.mayAffectControlFlow(Inst, *RegInfo) ||
         mayModifyRegister(Inst, ActiveGuardReg) ||
         mayModifyRegister(Inst, getWRegFromXReg(ActiveGuardReg)) ||
-        mayModifyRegister(Inst, LFIAddrReg))
+        mayModifyRegister(Inst, LFIAddrReg) ||
+        (isLargeSandbox(STI) && mayModifyRegister(Inst, LFIOffsetReg)))
       ActiveGuard = false;
   }
 
@@ -214,15 +243,27 @@ void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
       ActiveGuardReg == Src)
     return;
 
-  // add Dest, LFIBaseReg, W(Src), uxtw
-  MCInst Inst;
-  Inst.setOpcode(AArch64::ADDXrx);
-  Inst.addOperand(MCOperand::createReg(Dest));
-  Inst.addOperand(MCOperand::createReg(LFIBaseReg));
-  Inst.addOperand(MCOperand::createReg(getWRegFromXReg(Src)));
-  Inst.addOperand(
-      MCOperand::createImm(AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)));
-  emitInst(Inst, Out, STI);
+  if (isLargeSandbox(STI)) {
+    // Large sandbox: and x24, Src, #mask; add Dest, x27, x24
+    MCInst AndInst;
+    AndInst.setOpcode(AArch64::ANDXri);
+    AndInst.addOperand(MCOperand::createReg(LFIOffsetReg));
+    AndInst.addOperand(MCOperand::createReg(Src));
+    AndInst.addOperand(MCOperand::createImm(getSandboxMaskEncoding()));
+    emitInst(AndInst, Out, STI);
+
+    emitAddReg(Dest, LFIBaseReg, LFIOffsetReg, 0, Out, STI);
+  } else {
+    // Standard: add Dest, LFIBaseReg, W(Src), uxtw
+    MCInst Inst;
+    Inst.setOpcode(AArch64::ADDXrx);
+    Inst.addOperand(MCOperand::createReg(Dest));
+    Inst.addOperand(MCOperand::createReg(LFIBaseReg));
+    Inst.addOperand(MCOperand::createReg(getWRegFromXReg(Src)));
+    Inst.addOperand(MCOperand::createImm(
+        AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)));
+    emitInst(Inst, Out, STI);
+  }
 
   // Register Src as an actively guarded value.
   if (Dest == LFIAddrReg) {
@@ -311,15 +352,36 @@ void AArch64MCLFIRewriter::emitAddRegExtend(MCRegister Dest, MCRegister Src1,
 void AArch64MCLFIRewriter::emitMemRoW(unsigned Opcode, const MCOperand &DataOp,
                                       MCRegister BaseReg, MCStreamer &Out,
                                       const MCSubtargetInfo &STI) {
-  // Emits: Op DataOp, [LFIBaseReg, W(BaseReg), uxtw].
-  MCInst Inst;
-  Inst.setOpcode(Opcode);
-  Inst.addOperand(DataOp);
-  Inst.addOperand(MCOperand::createReg(LFIBaseReg));
-  Inst.addOperand(MCOperand::createReg(getWRegFromXReg(BaseReg)));
-  Inst.addOperand(MCOperand::createImm(0)); // S bit = 0 (UXTW).
-  Inst.addOperand(MCOperand::createImm(0)); // Shift amount = 0 (unscaled).
-  emitInst(Inst, Out, STI);
+  if (isLargeSandbox(STI)) {
+    // Large sandbox: and x24, BaseReg, #mask; Op DataOp, [x27, x24].
+    MCInst AndInst;
+    AndInst.setOpcode(AArch64::ANDXri);
+    AndInst.addOperand(MCOperand::createReg(LFIOffsetReg));
+    AndInst.addOperand(MCOperand::createReg(BaseReg));
+    AndInst.addOperand(MCOperand::createImm(getSandboxMaskEncoding()));
+    emitInst(AndInst, Out, STI);
+
+    unsigned RoXOpcode = convertRoWToRoX(Opcode);
+    assert(RoXOpcode != AArch64::INSTRUCTION_LIST_END);
+    MCInst Inst;
+    Inst.setOpcode(RoXOpcode);
+    Inst.addOperand(DataOp);
+    Inst.addOperand(MCOperand::createReg(LFIBaseReg));
+    Inst.addOperand(MCOperand::createReg(LFIOffsetReg));
+    Inst.addOperand(MCOperand::createImm(0)); // S bit = 0 (LSL).
+    Inst.addOperand(MCOperand::createImm(0)); // Shift amount = 0.
+    emitInst(Inst, Out, STI);
+  } else {
+    // Standard: Op DataOp, [LFIBaseReg, W(BaseReg), uxtw].
+    MCInst Inst;
+    Inst.setOpcode(Opcode);
+    Inst.addOperand(DataOp);
+    Inst.addOperand(MCOperand::createReg(LFIBaseReg));
+    Inst.addOperand(MCOperand::createReg(getWRegFromXReg(BaseReg)));
+    Inst.addOperand(MCOperand::createImm(0)); // S bit = 0 (UXTW).
+    Inst.addOperand(MCOperand::createImm(0)); // Shift amount = 0 (unscaled).
+    emitInst(Inst, Out, STI);
+  }
 }
 
 void AArch64MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
@@ -789,7 +851,7 @@ void AArch64MCLFIRewriter::rewriteDCZVA(const MCInst &Inst, MCStreamer &Out,
 void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI) {
   // Reserved register modification is an error.
-  if (mayModifyReserved(Inst)) {
+  if (mayModifyReserved(Inst, STI)) {
     error(Inst, "illegal modification of reserved LFI register");
     return;
   }
@@ -1152,6 +1214,64 @@ static bool getRoWShift(unsigned Op, unsigned &Shift) {
     return true;
   default:
     return false;
+  }
+}
+
+// Convert RoW (register-offset-W) opcode to RoX (register-offset-X) form.
+// Used by the large sandbox mode which uses [x27, x24] instead of
+// [x27, wN, uxtw].
+static unsigned convertRoWToRoX(unsigned Op) {
+  switch (Op) {
+  case AArch64::LDRBBroW:
+    return AArch64::LDRBBroX;
+  case AArch64::LDRBroW:
+    return AArch64::LDRBroX;
+  case AArch64::LDRDroW:
+    return AArch64::LDRDroX;
+  case AArch64::LDRHHroW:
+    return AArch64::LDRHHroX;
+  case AArch64::LDRHroW:
+    return AArch64::LDRHroX;
+  case AArch64::LDRQroW:
+    return AArch64::LDRQroX;
+  case AArch64::LDRSBWroW:
+    return AArch64::LDRSBWroX;
+  case AArch64::LDRSBXroW:
+    return AArch64::LDRSBXroX;
+  case AArch64::LDRSHWroW:
+    return AArch64::LDRSHWroX;
+  case AArch64::LDRSHXroW:
+    return AArch64::LDRSHXroX;
+  case AArch64::LDRSWroW:
+    return AArch64::LDRSWroX;
+  case AArch64::LDRSroW:
+    return AArch64::LDRSroX;
+  case AArch64::LDRWroW:
+    return AArch64::LDRWroX;
+  case AArch64::LDRXroW:
+    return AArch64::LDRXroX;
+  case AArch64::PRFMroW:
+    return AArch64::PRFMroX;
+  case AArch64::STRBBroW:
+    return AArch64::STRBBroX;
+  case AArch64::STRBroW:
+    return AArch64::STRBroX;
+  case AArch64::STRDroW:
+    return AArch64::STRDroX;
+  case AArch64::STRHHroW:
+    return AArch64::STRHHroX;
+  case AArch64::STRHroW:
+    return AArch64::STRHroX;
+  case AArch64::STRQroW:
+    return AArch64::STRQroX;
+  case AArch64::STRSroW:
+    return AArch64::STRSroX;
+  case AArch64::STRWroW:
+    return AArch64::STRWroX;
+  case AArch64::STRXroW:
+    return AArch64::STRXroX;
+  default:
+    return AArch64::INSTRUCTION_LIST_END;
   }
 }
 
