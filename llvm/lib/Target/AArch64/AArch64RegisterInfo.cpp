@@ -444,7 +444,7 @@ AArch64RegisterInfo::getStrictlyReservedRegs(const MachineFunction &MF) const {
     markSuperRegs(Reserved, AArch64::W27);
     markSuperRegs(Reserved, AArch64::W26);
     markSuperRegs(Reserved, AArch64::W25);
-    if (MF.getSubtarget<AArch64Subtarget>().lFILargeSandbox())
+    if (!MF.getSubtarget<AArch64Subtarget>().lFISmallSandbox())
       markSuperRegs(Reserved, AArch64::W24); // Offset register
     if (!MF.getProperties().hasNoVRegs()) {
       markSuperRegs(Reserved, AArch64::LR);

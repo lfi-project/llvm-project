@@ -683,7 +683,6 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_arm64_jumpto)
   ldp    x26,x27, [x0, #0x0D0]
   ldp    x28,x29, [x0, #0x0E0]
 #else
-  ldp    x24,xzr, [x0, #0x0C0]
   ldp    x26,xzr, [x0, #0x0D0]
   ldp    xzr,x29, [x0, #0x0E0]
 #endif

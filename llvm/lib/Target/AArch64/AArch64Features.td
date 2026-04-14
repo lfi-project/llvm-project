@@ -1070,6 +1070,9 @@ def FeatureNoLFIStores : SubtargetFeature<"no-lfi-stores", "NoLFIStores", "true"
 def FeatureLFILargeSandbox : SubtargetFeature<"lfi-large-sandbox",
   "LFILargeSandbox", "true",
   "Use LFI large sandbox mode with configurable power-of-2 sandbox size">;
+def FeatureLFISmallSandbox : SubtargetFeature<"lfi-small-sandbox",
+  "LFISmallSandbox", "true",
+  "Use LFI small sandbox mode (4 GiB, single-instruction guard)">;
 // Only intended to be used by disassemblers.
 def FeatureAll
     : SubtargetFeature<"all", "IsAll", "true", "Enable all instructions">;

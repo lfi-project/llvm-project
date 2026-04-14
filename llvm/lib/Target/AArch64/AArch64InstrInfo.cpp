@@ -206,7 +206,7 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
     // instructions, so we overestimate the size here to allow things like
     // branch relaxation to be more accurate. Large sandbox mode uses a
     // two-instruction guard (and + add) vs one instruction (add w/ uxtw).
-    unsigned GuardSize = Subtarget.lFILargeSandbox() ? 8 : 4;
+    unsigned GuardSize = Subtarget.lFISmallSandbox() ? 4 : 8;
     if (Desc.mayLoad() || Desc.mayStore())
       NumBytes += GuardSize;
   }

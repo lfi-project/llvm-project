@@ -186,7 +186,9 @@ void AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol, MCStreamer &Out) {
   // Flush deferred LR guard before a label, since labels are potential branch
   // targets and the code after the label may use LR for control flow.
   if (DeferredLRGuard && LastSTI) {
+    Guard = true;
     emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI);
+    Guard = false;
     DeferredLRGuard = false;
   }
 
@@ -197,13 +199,15 @@ void AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol, MCStreamer &Out) {
 void AArch64MCLFIRewriter::finish(MCStreamer &Out) {
   // Flush deferred LR guard at end of stream.
   if (DeferredLRGuard && LastSTI) {
+    Guard = true;
     emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI);
+    Guard = false;
     DeferredLRGuard = false;
   }
 }
 
 bool AArch64MCLFIRewriter::isLargeSandbox(const MCSubtargetInfo &STI) const {
-  return STI.hasFeature(AArch64::FeatureLFILargeSandbox);
+  return !STI.hasFeature(AArch64::FeatureLFISmallSandbox);
 }
 
 uint64_t AArch64MCLFIRewriter::getSandboxMask() const {
@@ -252,7 +256,11 @@ void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
     AndInst.addOperand(MCOperand::createImm(getSandboxMaskEncoding()));
     emitInst(AndInst, Out, STI);
 
-    emitAddReg(Dest, LFIBaseReg, LFIOffsetReg, 0, Out, STI);
+    // Use UXTX (extended register form) rather than LSL (shifted register
+    // form) because ADDXrs encodes register 31 as XZR, not SP. ADDXrx64
+    // with UXTX #0 is functionally equivalent but supports SP as Rd.
+    emitAddRegExtend(Dest, LFIBaseReg, LFIOffsetReg, AArch64_AM::UXTX, 0, Out,
+                     STI);
   } else {
     // Standard: add Dest, LFIBaseReg, W(Src), uxtw
     MCInst Inst;
