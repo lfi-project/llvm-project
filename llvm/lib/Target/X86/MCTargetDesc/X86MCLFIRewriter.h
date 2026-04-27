@@ -38,6 +38,9 @@ private:
   /// Recursion guard to prevent infinite loops when emitting instructions.
   bool Guard = false;
 
+  /// Cached symbol for the lazily-emitted ``_lfi_trap`` weak/COMDAT symbol.
+  MCSymbol *LFITrapSymbol = nullptr;
+
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
 
@@ -47,6 +50,14 @@ private:
   bool isFSAccess(const MCInst &Inst);
   void rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI);
+
+  MCSymbol *getOrEmitTrapSymbol(MCStreamer &Out, const MCSubtargetInfo &STI);
+  void emitCFICheck(MCRegister Reg, MCStreamer &Out,
+                    const MCSubtargetInfo &STI);
+  void emitSandboxBranchReg(MCRegister Reg, MCStreamer &Out,
+                            const MCSubtargetInfo &STI);
+  void expandIndirectBranch(const MCInst &Inst, MCStreamer &Out,
+                            const MCSubtargetInfo &STI);
 };
 
 } // namespace X86

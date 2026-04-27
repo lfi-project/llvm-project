@@ -71,6 +71,10 @@ FunctionPass *createX86FPStackifierLegacyPass();
 /// transition penalty between functions encoded with AVX and SSE.
 FunctionPass *createX86IssueVZeroUpperPass();
 
+/// This pass inserts ENDBR64 instructions and 32-byte alignment at indirect
+/// branch targets for the X86 LFI target.
+FunctionPass *createX86LFIRewritePass();
+
 /// This pass inserts ENDBR instructions before indirect jump/call
 /// destinations as part of CET IBT mechanism.
 class X86IndirectBranchTrackingPass

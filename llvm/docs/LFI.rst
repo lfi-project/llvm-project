@@ -451,6 +451,17 @@ X86-64
 
 The X86-64 LFI target is ``x86_64_lfi``.
 
+Compiler Options
+================
+
+The X86-64 LFI target has the following configuration option.
+
+* ``--x86-lfi-hw-endbr``: assume the host hardware enforces ``endbr64``
+  landing pads at indirect branch targets (e.g., Intel CET indirect branch
+  tracking). When set, the software comparison check before indirect
+  branches is omitted; landing-pad insertion and 32-byte alignment are
+  still performed so that the hardware checks succeed.
+
 Reserved Registers
 ==================
 
@@ -478,7 +489,75 @@ In the following assembly rewrites, some shorthand is used.
 Control flow
 ~~~~~~~~~~~~
 
-**Note**: these rewrites have not been implemented.
+Forward-edge CFI is enforced at every indirect call and indirect jump by
+verifying that the target is 32-byte-aligned and points to an ``endbr64``
+instruction. The encoding of ``endbr64`` is the four-byte little-endian
+sequence ``0xfa1e0ff3``. A separate ``MachineFunction``-level pass
+(``X86LFIRewritePass``) ensures that every valid indirect-branch target is
+aligned and prefixed with ``endbr64`` so that this check succeeds.
+
+Backward-edge CFI for ``ret`` is not addressed by this rewrite and will be
+provided in a future revision (e.g., via a shadow call stack).
+
+Indirect calls and jumps
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+Indirect calls and jumps through a register are rewritten to align and check
+the target before transferring control. The ``andl $-32, %eX`` clears the
+low five bits of the target and zero-extends ``%rX`` into the 32-bit address
+space (since the sandbox spans 4 GiB starting at ``%r14``). The ``cmpl``
+verifies the four-byte ``endbr64`` encoding at the candidate landing pad.
+
+The ``.p2align 1`` directive and ``cs`` prefix on the ``cmpl`` together
+ensure that the ``0xfa1e0ff3`` immediate embedded in the comparison itself
+never lands at a 32-byte-aligned address. Without this, an attacker could
+redirect an indirect branch into the middle of the check sequence and have
+the embedded immediate serve as a forged landing pad. The ``cs`` prefix is
+a one-byte no-op on ``cmpl``; combined with two-byte alignment, it shifts
+the immediate so its address is always odd.
+
++--------------------------+----------------------------------------+
+|         Original         |               Rewritten                |
++--------------------------+----------------------------------------+
+| .. code-block::          | .. code-block::                        |
+|                          |                                        |
+|    {jmpq,callq} *%rX     |    andl $-32, %eX                      |
+|                          |    .p2align 1                          |
+|                          |    cs cmpl $0xfa1e0ff3, (%r14,%rX)     |
+|                          |    jne _lfi_trap                       |
+|                          |    addq %r14, %rX                      |
+|                          |    {jmpq,callq} *%rX                   |
+|                          |                                        |
++--------------------------+----------------------------------------+
+
+Indirect calls and jumps through a memory operand are first lowered into a
+load to the scratch register ``%r11``, after which the same sequence
+applies.
+
+If the check fails, control transfers to the weak symbol ``_lfi_trap``,
+which contains a single ``ud2``. ``_lfi_trap`` is emitted lazily into a
+COMDAT ``.text_lfi_trap`` section so that all translation units share one
+copy.
+
+Landing pad insertion
+^^^^^^^^^^^^^^^^^^^^^
+
+The ``X86LFIRewritePass`` runs at the ``MachineFunction`` level and inserts
+``endbr64`` instructions, with 32-byte alignment, at all valid
+indirect-branch targets:
+
+* **Function prologues**: functions whose address may be taken or which
+  have non-local linkage are aligned to 32 bytes and receive ``endbr64`` as
+  their first instruction.
+* **Address-taken basic blocks**: blocks reachable through jump tables or
+  whose address is taken (e.g., ``blockaddress``) are aligned and prefixed
+  with ``endbr64``.
+* **Exception handler landing pads**: EH pads and call-site landing-pad
+  labels are aligned and prefixed with ``endbr64``, since the unwinder
+  reaches them via indirect jumps.
+
+Direct (relative) calls and jumps are not rewritten, since their targets
+are fixed at link time.
 
 Memory accesses
 ~~~~~~~~~~~~~~~

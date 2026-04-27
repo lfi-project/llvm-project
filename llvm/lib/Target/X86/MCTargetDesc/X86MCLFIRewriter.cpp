@@ -14,11 +14,15 @@
 #include "X86MCLFIRewriter.h"
 #include "X86BaseInfo.h"
 #include "X86MCTargetDesc.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstrDesc.h"
+#include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 
@@ -31,8 +35,53 @@ static constexpr MCRegister LFITPReg = X86::R15;
 // thread pointer is stored.
 static constexpr int TPOffset = 16;
 
+// Forward-edge CFI alignment for valid indirect branch targets.
+static constexpr int IndBranchAlignment = 32;
+
+// Encoding of endbr64 (f3 0f 1e fa) as a 32-bit little-endian value.
+static constexpr int32_t ENDBR64Encoding = static_cast<int32_t>(0xfa1e0ff3);
+
+static cl::opt<bool>
+    X86LFIHwEndbr("x86-lfi-hw-endbr",
+                  cl::desc("Hardware endbr CFI is available; skip software "
+                           "endbr comparison checks at indirect branches"),
+                  cl::init(false));
+
+static MCRegister getReg64(MCRegister Reg) {
+  switch (Reg) {
+  default:
+    return getX86SubSuperRegister(Reg, 64, false);
+  case X86::IP:
+  case X86::EIP:
+  case X86::RIP:
+    return X86::RIP;
+  }
+}
+
+static MCRegister getReg32(MCRegister Reg) {
+  switch (Reg) {
+  default:
+    return getX86SubSuperRegister(Reg, 32, false);
+  case X86::IP:
+  case X86::EIP:
+    return X86::EIP;
+  case X86::RIP:
+    llvm_unreachable("Trying to demote %rip");
+  }
+}
+
 static bool isSyscall(const MCInst &Inst) {
   return Inst.getOpcode() == X86::SYSCALL;
+}
+
+static bool isDirectCall(const MCInst &Inst) {
+  switch (Inst.getOpcode()) {
+  case X86::CALLpcrel32:
+  case X86::CALL64pcrel32:
+    return true;
+  default:
+    return false;
+  }
 }
 
 // Find the index of the first memory operand with %fs segment override.
@@ -181,6 +230,136 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
   Out.emitInstruction(Modified, STI);
 }
 
+// Lazily emit the weak ``_lfi_trap`` symbol into a COMDAT
+// ``.text_lfi_trap`` section so that all translation units share one copy.
+// The symbol contains a single ``ud2`` (0f 0b).
+MCSymbol *
+X86::X86MCLFIRewriter::getOrEmitTrapSymbol(MCStreamer &Out,
+                                           const MCSubtargetInfo &STI) {
+  if (LFITrapSymbol)
+    return LFITrapSymbol;
+
+  LFITrapSymbol = Out.getContext().getOrCreateSymbol("_lfi_trap");
+
+  Out.pushSection();
+  MCSection *TrapSec = Out.getContext().getELFSection(
+      ".text_lfi_trap", ELF::SHT_PROGBITS,
+      ELF::SHF_ALLOC | ELF::SHF_EXECINSTR | ELF::SHF_GROUP, 0, "_lfi_trap",
+      /*IsComdat=*/true);
+  Out.switchSection(TrapSec);
+  Out.emitSymbolAttribute(LFITrapSymbol, MCSA_Weak);
+  Out.emitLabel(LFITrapSymbol);
+  // ud2
+  Out.emitBytes(StringRef("\x0f\x0b", 2));
+  Out.popSection();
+
+  return LFITrapSymbol;
+}
+
+// Emit the forward-edge CFI check at an aligned indirect-branch target:
+//
+//   .p2align 1
+//   cs cmpl $0xfa1e0ff3, (%r14, %rX)
+//   jne _lfi_trap
+//
+// The .p2align 1 directive and the cs prefix together ensure that the
+// embedded immediate (the endbr64 encoding) never lands at a 32-byte-aligned
+// address, so it cannot be reached as a forged landing pad.
+void X86::X86MCLFIRewriter::emitCFICheck(MCRegister Reg, MCStreamer &Out,
+                                         const MCSubtargetInfo &STI) {
+  MCSymbol *TrapSym = getOrEmitTrapSymbol(Out, STI);
+
+  Out.emitCodeAlignment(llvm::Align(2), &STI);
+
+  // cs prefix
+  MCInst CSPrefix;
+  CSPrefix.setOpcode(X86::CS_PREFIX);
+  Out.emitInstruction(CSPrefix, STI);
+
+  // cmpl $0xfa1e0ff3, (%r14, %rX)
+  MCInst Cmp;
+  Cmp.setOpcode(X86::CMP32mi);
+  Cmp.addOperand(MCOperand::createReg(LFIBaseReg));      // Base = %r14
+  Cmp.addOperand(MCOperand::createImm(1));               // Scale
+  Cmp.addOperand(MCOperand::createReg(getReg64(Reg)));   // Index = %rX
+  Cmp.addOperand(MCOperand::createImm(0));               // Displacement
+  Cmp.addOperand(MCOperand::createReg(X86::NoRegister)); // Segment
+  Cmp.addOperand(MCOperand::createImm(ENDBR64Encoding));
+  Out.emitInstruction(Cmp, STI);
+
+  // jne _lfi_trap
+  MCInst Jne;
+  Jne.setOpcode(X86::JCC_1);
+  Jne.addOperand(
+      MCOperand::createExpr(MCSymbolRefExpr::create(TrapSym, Out.getContext())));
+  Jne.addOperand(MCOperand::createImm(X86::COND_NE));
+  Out.emitInstruction(Jne, STI);
+}
+
+// Emit the alignment, optional forward-edge CFI check, and base-relocation
+// for an indirect-branch target held in Reg:
+//
+//   andl $-32, %eX
+//   .p2align 1                  ; emitted by emitCFICheck
+//   cs cmpl $0xfa1e0ff3, (%r14, %rX)
+//   jne _lfi_trap
+//   addq %r14, %rX
+void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
+                                                 MCStreamer &Out,
+                                                 const MCSubtargetInfo &STI) {
+  // andl $-32, %eX
+  MCInst AndInst;
+  AndInst.setOpcode(X86::AND32ri8);
+  MCOperand Target32 = MCOperand::createReg(getReg32(Reg));
+  AndInst.addOperand(Target32);
+  AndInst.addOperand(Target32);
+  AndInst.addOperand(MCOperand::createImm(-IndBranchAlignment));
+  Out.emitInstruction(AndInst, STI);
+
+  if (!X86LFIHwEndbr)
+    emitCFICheck(Reg, Out, STI);
+
+  // addq %r14, %rX
+  MCInst Add;
+  Add.setOpcode(X86::ADD64rr);
+  MCOperand Target64 = MCOperand::createReg(getReg64(Reg));
+  Add.addOperand(Target64);
+  Add.addOperand(Target64);
+  Add.addOperand(MCOperand::createReg(LFIBaseReg));
+  Out.emitInstruction(Add, STI);
+}
+
+// Expand an indirect call or jump (register or memory operand variant) into
+// the sandboxed sequence above followed by the original branch instruction.
+void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
+                                                 MCStreamer &Out,
+                                                 const MCSubtargetInfo &STI) {
+  MCRegister Target;
+  if (mayLoad(Inst)) {
+    // Indirect jmp/call through memory — load address into the scratch
+    // register first.
+    Target = LFIScratchReg;
+    MCInst Mov;
+    Mov.setOpcode(X86::MOV64rm);
+    Mov.addOperand(MCOperand::createReg(getReg64(Target)));
+    Mov.addOperand(Inst.getOperand(0));
+    Mov.addOperand(Inst.getOperand(1));
+    Mov.addOperand(Inst.getOperand(2));
+    Mov.addOperand(Inst.getOperand(3));
+    Mov.addOperand(Inst.getOperand(4));
+    doRewriteInst(Mov, Out, STI);
+  } else {
+    Target = Inst.getOperand(0).getReg();
+  }
+
+  emitSandboxBranchReg(Target, Out, STI);
+
+  MCInst Branch;
+  Branch.setOpcode(isCall(Inst) ? X86::CALL64r : X86::JMP64r);
+  Branch.addOperand(MCOperand::createReg(getReg64(Target)));
+  Out.emitInstruction(Branch, STI);
+}
+
 void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
   if (mayModifyRegister(Inst, LFIBaseReg) || mayModifyRegister(Inst, LFITPReg))
@@ -188,6 +367,13 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
 
   if (isSyscall(Inst))
     return rewriteSyscall(Inst, Out, STI);
+
+  // Indirect branches are dispatched before isFSAccess so that an indirect
+  // call/jmp through an %fs-segment memory operand (e.g. callq *%fs:0) goes
+  // through expandIndirectBranch first; the inner load it emits will then
+  // hit rewriteFSAccess on its own.
+  if (isIndirectBranch(Inst) || (isCall(Inst) && !isDirectCall(Inst)))
+    return expandIndirectBranch(Inst, Out, STI);
 
   if (isFSAccess(Inst))
     return rewriteFSAccess(Inst, Out, STI);
@@ -203,6 +389,11 @@ bool X86::X86MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
   if (!Enabled || Guard)
     return false;
   Guard = true;
+
+  // Eagerly emit the trap symbol on first use, so the section switch doesn't
+  // land in the middle of a sandbox sequence.
+  if (!X86LFIHwEndbr && !LFITrapSymbol)
+    getOrEmitTrapSymbol(Out, STI);
 
   doRewriteInst(Inst, Out, STI);
 
