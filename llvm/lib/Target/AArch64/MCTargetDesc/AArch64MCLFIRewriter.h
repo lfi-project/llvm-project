@@ -112,6 +112,11 @@ private:
                     const MCSubtargetInfo &STI);
 };
 
+/// Returns true if \p Opcode is a pre- or post-indexed memory access that the
+/// LFI rewriter expands with a base-register update (i.e. an extra
+/// instruction beyond the guard + access pair).
+bool isLFIPrePostMemAccess(unsigned Opcode);
+
 } // namespace llvm
 
 #endif // LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H

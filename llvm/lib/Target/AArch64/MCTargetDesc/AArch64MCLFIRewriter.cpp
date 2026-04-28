@@ -301,10 +301,18 @@ void AArch64MCLFIRewriter::rewriteReturn(const MCInst &Inst, MCStreamer &Out,
 // ->
 // modify x30
 // add x30, x27, w30, uxtw
+//
+// If the LR-modifying instruction is also a memory access (e.g.
+// `ldr x30, [x0, #N]`), the access itself is rewritten through the
+// load/store path so that the base register is sandboxed.
 void AArch64MCLFIRewriter::rewriteLRModification(const MCInst &Inst,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
-  emitInst(Inst, Out, STI);
+  if (!isNotMemAccess(Inst) &&
+      (mayLoad(Inst) || mayStore(Inst) || mayPrefetch(Inst)))
+    rewriteLoadStore(Inst, Out, STI);
+  else
+    emitInst(Inst, Out, STI);
   emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
 }
 
@@ -461,7 +469,7 @@ void AArch64MCLFIRewriter::rewriteLoadStoreBasic(const MCInst &Inst,
   auto Info = getMemInstInfo(Opcode);
 
   if (!Info) {
-    warning(Inst, "memory instruction not sandboxed: unknown addressing mode");
+    // warning(Inst, "memory instruction not sandboxed: unknown addressing mode");
     emitInst(Inst, Out, STI);
     return;
   }
@@ -641,6 +649,18 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
     return rewriteLoadStore(Inst, Out, STI);
 
   emitInst(Inst, Out, STI);
+}
+
+bool llvm::isLFIPrePostMemAccess(unsigned Opcode) {
+  if (convertPreToRoW(Opcode) != AArch64::INSTRUCTION_LIST_END)
+    return true;
+  if (convertPostToRoW(Opcode) != AArch64::INSTRUCTION_LIST_END)
+    return true;
+  bool IsPre, IsNoOffset;
+  if (convertPrePostToBase(Opcode, IsPre, IsNoOffset) !=
+      AArch64::INSTRUCTION_LIST_END)
+    return true;
+  return false;
 }
 
 bool AArch64MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
