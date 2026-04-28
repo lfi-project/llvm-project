@@ -42,6 +42,7 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -128,6 +129,52 @@ static bool isUnsafeAlloca(const AllocaInst *AI, const DataLayout &DL) {
   return false;
 }
 
+/// Check if a function should be skipped by HLFI instrumentation.
+/// Note: This only affects transformations WITHIN the function (safe stack,
+/// heap masking, indirect call/branch transformation). Functions are still
+/// added to the CFI table if their address is taken, so indirect calls TO
+/// these functions are protected.
+///
+/// If Reason is non-null and the function should be skipped, it will be set
+/// to a string describing why.
+static bool shouldSkipFunction(const Function &F, const char **Reason = nullptr) {
+  // Skip declarations (silently - these are expected)
+  if (F.isDeclaration())
+    return true;
+
+  // Skip functions with no basic blocks (silently)
+  if (F.empty())
+    return true;
+
+  // Skip naked functions - they manage their own stack frame
+  if (F.hasFnAttribute(Attribute::Naked)) {
+    if (Reason)
+      *Reason = "naked attribute";
+    return true;
+  }
+
+  // Skip functions that are purely inline assembly (e.g., CRT startup code)
+  const BasicBlock &Entry = F.getEntryBlock();
+  bool hasOnlyAsmAndTerminator = true;
+  for (const Instruction &I : Entry) {
+    if (I.isTerminator())
+      continue;
+    if (const auto *CB = dyn_cast<CallBase>(&I)) {
+      if (CB->isInlineAsm())
+        continue;
+    }
+    hasOnlyAsmAndTerminator = false;
+    break;
+  }
+  if (hasOnlyAsmAndTerminator && Entry.size() <= 2) {
+    if (Reason)
+      *Reason = "inline assembly only";
+    return true;
+  }
+
+  return false;
+}
+
 class HLFIImpl {
   Module &M;
   LLVMContext &Ctx;
@@ -168,11 +215,14 @@ private:
 
   // Forward CFI
   void collectCFITargets(SmallVectorImpl<Function *> &Functions,
+                         SmallVectorImpl<Function *> &ExternalFunctions,
                          SmallVectorImpl<BlockAddress *> &BlockAddresses);
   void createCFITableEntries(ArrayRef<Function *> Functions,
+                             ArrayRef<Function *> ExternalFunctions,
                              ArrayRef<BlockAddress *> BlockAddresses);
   GlobalVariable *createCFITableEntry(Constant *Target, const Twine &Name);
-  GlobalVariable *createCFIIndexSlot(const Twine &Name);
+  GlobalVariable *createCFIIndexSlot(StringRef FuncName);
+  GlobalVariable *getOrCreateExternalIndexSlot(StringRef FuncName);
   void transformFunctionAddressUses();
   void transformBlockAddressUses();
   void transformIndirectCalls();
@@ -237,6 +287,7 @@ void HLFIImpl::storeToContext(IRBuilder<> &Builder, int64_t Offset,
 
 void HLFIImpl::collectCFITargets(
     SmallVectorImpl<Function *> &Functions,
+    SmallVectorImpl<Function *> &ExternalFunctions,
     SmallVectorImpl<BlockAddress *> &BlockAddresses) {
 
   for (Function &F : M) {
@@ -245,12 +296,11 @@ void HLFIImpl::collectCFITargets(
 
     if (F.hasAddressTaken()) {
       if (F.isDeclaration()) {
-        M.getContext().diagnose(DiagnosticInfoUnsupported(
-            F, "HLFI: cannot take address of external function",
-            F.getSubprogram()));
-        continue;
+        // External function - we'll reference an index slot defined elsewhere.
+        ExternalFunctions.push_back(&F);
+      } else {
+        Functions.push_back(&F);
       }
-      Functions.push_back(&F);
     }
   }
 
@@ -275,26 +325,52 @@ GlobalVariable *HLFIImpl::createCFITableEntry(Constant *Target,
   return GV;
 }
 
-GlobalVariable *HLFIImpl::createCFIIndexSlot(const Twine &Name) {
-  // Private linkage with 32-bit zero initializer.
-  // The post-linker patches these with actual indices based on position.
-  // Index slot N corresponds to table entry N.
-  auto *GV = new GlobalVariable(M, Int32Ty, false, GlobalValue::PrivateLinkage,
-                                 ConstantInt::get(Int32Ty, 0), Name);
+GlobalVariable *HLFIImpl::createCFIIndexSlot(StringRef FuncName) {
+  // Create an externally visible index slot so other modules can reference it.
+  // The naming convention is __hlfi_index_<funcname>, matching the assembly
+  // directive .hlfi_cfi_entry.
+  std::string SymName = ("__hlfi_index_" + FuncName).str();
+  auto *GV = new GlobalVariable(M, Int32Ty, false, GlobalValue::ExternalLinkage,
+                                 ConstantInt::get(Int32Ty, 0), SymName);
   GV->setSection(".hlfi_cfi_indices");
   GV->setAlignment(Align(4));
   return GV;
 }
 
+GlobalVariable *HLFIImpl::getOrCreateExternalIndexSlot(StringRef FuncName) {
+  // For external functions, reference an index slot defined in another module.
+  std::string SymName = ("__hlfi_index_" + FuncName).str();
+
+  // Check if we already have this symbol.
+  if (GlobalVariable *Existing = M.getGlobalVariable(SymName))
+    return Existing;
+
+  // Create an external reference (declaration, no initializer).
+  auto *GV = new GlobalVariable(M, Int32Ty, false, GlobalValue::ExternalLinkage,
+                                 nullptr, SymName);
+  GV->setAlignment(Align(4));
+  return GV;
+}
+
 void HLFIImpl::createCFITableEntries(ArrayRef<Function *> Functions,
+                                      ArrayRef<Function *> ExternalFunctions,
                                       ArrayRef<BlockAddress *> BlockAddresses) {
+  // Handle defined functions - create table entries and index slots.
   for (Function *F : Functions) {
     StringRef FName = F->getName();
     createCFITableEntry(F, ".hlfi_cfi_table." + FName);
-    GlobalVariable *IndexSlot = createCFIIndexSlot(".hlfi_cfi_index." + FName);
+    GlobalVariable *IndexSlot = createCFIIndexSlot(FName);
     FunctionIndexMap[F] = IndexSlot;
     ++NumFunctionsIndexed;
     LLVM_DEBUG(dbgs() << "HLFI: indexed function " << FName << "\n");
+  }
+
+  // Handle external functions - reference index slots defined elsewhere.
+  for (Function *F : ExternalFunctions) {
+    StringRef FName = F->getName();
+    GlobalVariable *IndexSlot = getOrCreateExternalIndexSlot(FName);
+    FunctionIndexMap[F] = IndexSlot;
+    LLVM_DEBUG(dbgs() << "HLFI: external function " << FName << "\n");
   }
 
   for (BlockAddress *BA : BlockAddresses) {
@@ -302,7 +378,7 @@ void HLFIImpl::createCFITableEntries(ArrayRef<Function *> Functions,
     BasicBlock *BB = BA->getBasicBlock();
     std::string Name = (F->getName() + "." + BB->getName()).str();
     createCFITableEntry(BA, ".hlfi_cfi_table." + Name);
-    GlobalVariable *IndexSlot = createCFIIndexSlot(".hlfi_cfi_index." + Name);
+    GlobalVariable *IndexSlot = createCFIIndexSlot(Name);
     BlockAddressIndexMap[BA] = IndexSlot;
     ++NumBlockAddressesIndexed;
     LLVM_DEBUG(dbgs() << "HLFI: indexed blockaddress " << Name << "\n");
@@ -327,6 +403,23 @@ void HLFIImpl::transformFunctionAddressUses() {
       if (!I)
         continue;
 
+      // For PHI nodes, we can't insert instructions before them.
+      // Instead, insert at the end of the incoming block.
+      if (auto *PN = dyn_cast<PHINode>(I)) {
+        // Find which incoming block this use corresponds to
+        for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
+          if (PN->getIncomingValue(i) == F) {
+            BasicBlock *IncomingBB = PN->getIncomingBlock(i);
+            IRBuilder<> Builder(IncomingBB->getTerminator());
+            Value *Idx = Builder.CreateLoad(Int32Ty, IndexSlot, "hlfi.idx");
+            Value *IdxExt = Builder.CreateZExt(Idx, Int64Ty, "hlfi.idx.ext");
+            Value *IdxAsPtr = Builder.CreateIntToPtr(IdxExt, F->getType());
+            PN->setIncomingValue(i, IdxAsPtr);
+          }
+        }
+        continue;
+      }
+
       IRBuilder<> Builder(I);
       Value *Idx = Builder.CreateLoad(Int32Ty, IndexSlot, "hlfi.idx");
       Value *IdxExt = Builder.CreateZExt(Idx, Int64Ty, "hlfi.idx.ext");
@@ -348,6 +441,23 @@ void HLFIImpl::transformBlockAddressUses() {
       auto *I = dyn_cast<Instruction>(U->getUser());
       if (!I)
         continue;
+
+      // For PHI nodes, we can't insert instructions before them.
+      // Instead, insert at the end of the incoming block.
+      if (auto *PN = dyn_cast<PHINode>(I)) {
+        // Find which incoming block this use corresponds to
+        for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
+          if (PN->getIncomingValue(i) == BA) {
+            BasicBlock *IncomingBB = PN->getIncomingBlock(i);
+            IRBuilder<> Builder(IncomingBB->getTerminator());
+            Value *Idx = Builder.CreateLoad(Int32Ty, IndexSlot, "hlfi.ba.idx");
+            Value *IdxExt = Builder.CreateZExt(Idx, Int64Ty, "hlfi.ba.idx.ext");
+            Value *IdxAsPtr = Builder.CreateIntToPtr(IdxExt, BA->getType());
+            PN->setIncomingValue(i, IdxAsPtr);
+          }
+        }
+        continue;
+      }
 
       IRBuilder<> Builder(I);
       Value *Idx = Builder.CreateLoad(Int32Ty, IndexSlot, "hlfi.ba.idx");
@@ -408,6 +518,8 @@ void HLFIImpl::transformIndirectBr(IndirectBrInst *IBI) {
 void HLFIImpl::transformIndirectCalls() {
   SmallVector<CallBase *, 32> IndirectCalls;
   for (Function &F : M) {
+    if (shouldSkipFunction(F))
+      continue;
     for (BasicBlock &BB : F) {
       for (Instruction &I : BB) {
         if (auto *CB = dyn_cast<CallBase>(&I)) {
@@ -425,6 +537,8 @@ void HLFIImpl::transformIndirectCalls() {
 void HLFIImpl::transformIndirectBranches() {
   SmallVector<IndirectBrInst *, 16> IndirectBranches;
   for (Function &F : M) {
+    if (shouldSkipFunction(F))
+      continue;
     for (BasicBlock &BB : F) {
       if (auto *IBI = dyn_cast<IndirectBrInst>(BB.getTerminator()))
         IndirectBranches.push_back(IBI);
@@ -441,8 +555,10 @@ void HLFIImpl::transformIndirectBranches() {
 
 Value *HLFIImpl::maskPointer(IRBuilder<> &Builder, Value *Ptr) {
   Value *PtrInt = Builder.CreatePtrToInt(Ptr, Int64Ty, "hlfi.ptr.int");
-  Value *Offset = Builder.CreateAnd(
-      PtrInt, ConstantInt::get(Int64Ty, HLFISandboxMask), "hlfi.offset");
+  // Use trunc+zext instead of AND to enable AArch64's "add x, x, w, uxtw"
+  // instruction which performs the truncation and addition in one operation.
+  Value *Offset32 = Builder.CreateTrunc(PtrInt, Int32Ty, "hlfi.offset.32");
+  Value *Offset = Builder.CreateZExt(Offset32, Int64Ty, "hlfi.offset");
   Value *Base = Builder.CreateLoad(Int64Ty, SandboxBase, "hlfi.base");
   Value *MaskedInt = Builder.CreateAdd(Base, Offset, "hlfi.masked.int");
   Value *MaskedPtr =
@@ -503,17 +619,27 @@ void HLFIImpl::maskMemoryAccess(Instruction *I) {
 //===----------------------------------------------------------------------===//
 
 void HLFIImpl::transformFunctionSafeStack(Function &F) {
-  if (F.isDeclaration())
+  if (shouldSkipFunction(F))
     return;
 
-  // Collect unsafe allocas
+  // Skip functions with no entry block (shouldn't happen after shouldSkipFunction check)
+  if (F.empty())
+    return;
+
+  BasicBlock &Entry = F.getEntryBlock();
+
+  // Skip if entry block is empty (shouldn't happen in valid IR)
+  if (Entry.empty())
+    return;
+
+  // Collect unsafe allocas from the entry block only.
+  // Allocas should always be in the entry block; allocas elsewhere have
+  // dynamic lifetime semantics that we don't handle.
   SmallVector<AllocaInst *, 16> UnsafeAllocas;
-  for (BasicBlock &BB : F) {
-    for (Instruction &I : BB) {
-      if (auto *AI = dyn_cast<AllocaInst>(&I)) {
-        if (isUnsafeAlloca(AI, DL)) {
-          UnsafeAllocas.push_back(AI);
-        }
+  for (Instruction &I : Entry) {
+    if (auto *AI = dyn_cast<AllocaInst>(&I)) {
+      if (isUnsafeAlloca(AI, DL)) {
+        UnsafeAllocas.push_back(AI);
       }
     }
   }
@@ -521,22 +647,12 @@ void HLFIImpl::transformFunctionSafeStack(Function &F) {
   if (UnsafeAllocas.empty())
     return;
 
-  // Insert at the beginning of the entry block, after existing allocas
-  BasicBlock &Entry = F.getEntryBlock();
-  Instruction *InsertPt = &*Entry.getFirstInsertionPt();
-
-  // Find the last alloca to insert after it
-  for (Instruction &I : Entry) {
-    if (isa<AllocaInst>(&I))
-      InsertPt = I.getNextNode();
-    else
-      break;
-  }
-
-  IRBuilder<> Builder(InsertPt);
-
   // Transform each unsafe alloca
   for (AllocaInst *AI : UnsafeAllocas) {
+    // Insert replacement instructions at the location of this alloca
+    // This ensures dominance is preserved
+    IRBuilder<> Builder(AI);
+
     Type *Ty = AI->getAllocatedType();
     uint64_t Size = DL.getTypeAllocSize(Ty);
     Align Alignment = AI->getAlign();
@@ -560,7 +676,19 @@ void HLFIImpl::transformFunctionSafeStack(Function &F) {
     // Store new unsafe stack pointer to context [x25+8]
     storeToContext(Builder, HLFIContextOffsetUnsafeStack, NewSP);
 
-    // Replace all uses of the alloca with the unsafe stack allocation
+    // Remove lifetime intrinsics - they can only be used on allocas, and we're
+    // replacing the alloca with an unsafe stack pointer.
+    SmallVector<Instruction *, 4> LifetimeIntrinsics;
+    for (User *U : AI->users()) {
+      if (auto *II = dyn_cast<IntrinsicInst>(U)) {
+        if (II->isLifetimeStartOrEnd())
+          LifetimeIntrinsics.push_back(II);
+      }
+    }
+    for (Instruction *II : LifetimeIntrinsics)
+      II->eraseFromParent();
+
+    // Replace all remaining uses of the alloca with the unsafe stack allocation
     AI->replaceAllUsesWith(NewSP);
     AI->eraseFromParent();
 
@@ -577,12 +705,25 @@ void HLFIImpl::transformFunctionSafeStack(Function &F) {
 bool HLFIImpl::run() {
   createRuntimeGlobals();
 
+  LLVM_DEBUG(dbgs() << "HLFI: Starting pass on module " << M.getName() << "\n");
+
+  // Warn about functions that will be skipped
+  for (Function &F : M) {
+    const char *Reason = nullptr;
+    if (shouldSkipFunction(F, &Reason) && Reason) {
+      errs() << "warning: HLFI skipping function '" << F.getName()
+             << "' (" << Reason << ")\n";
+    }
+  }
+
   bool Changed = false;
 
   // Phase 1: Safe stack transformation
   // Must happen first so heap masking can instrument unsafe stack accesses
   if (Options.EnableSafeStack) {
+    LLVM_DEBUG(dbgs() << "HLFI: Phase 1 - Safe stack transformation\n");
     for (Function &F : M) {
+      LLVM_DEBUG(dbgs() << "HLFI: Processing function " << F.getName() << " for safe stack\n");
       transformFunctionSafeStack(F);
     }
     Changed = true;
@@ -591,11 +732,13 @@ bool HLFIImpl::run() {
   // Phase 2: Forward CFI
   if (Options.EnableForwardCFI) {
     SmallVector<Function *, 64> Functions;
+    SmallVector<Function *, 16> ExternalFunctions;
     SmallVector<BlockAddress *, 16> BlockAddresses;
-    collectCFITargets(Functions, BlockAddresses);
+    collectCFITargets(Functions, ExternalFunctions, BlockAddresses);
 
-    if (!Functions.empty() || !BlockAddresses.empty()) {
-      createCFITableEntries(Functions, BlockAddresses);
+    if (!Functions.empty() || !ExternalFunctions.empty() ||
+        !BlockAddresses.empty()) {
+      createCFITableEntries(Functions, ExternalFunctions, BlockAddresses);
       transformFunctionAddressUses();
       transformBlockAddressUses();
       transformIndirectCalls();
@@ -608,7 +751,7 @@ bool HLFIImpl::run() {
   // Happens last - masks all memory accesses including unsafe stack
   if (Options.EnableHeapMasking) {
     for (Function &F : M) {
-      if (F.isDeclaration())
+      if (shouldSkipFunction(F))
         continue;
 
       SmallVector<Instruction *, 64> Accesses;

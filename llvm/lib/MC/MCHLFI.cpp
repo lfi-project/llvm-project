@@ -43,9 +43,7 @@ void initializeHLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
   assert(TheTarget != nullptr);
 
   // Create the HLFI MC rewriter via the target registry.
-  // The factory function will check if HLFI features are enabled and create
-  // the appropriate rewriter.
-  TheTarget->createMCLFIRewriter(
+  TheTarget->createMCHLFIRewriter(
       Streamer,
       std::unique_ptr<MCRegisterInfo>(TheTarget->createMCRegInfo(TheTriple)),
       std::unique_ptr<MCInstrInfo>(TheTarget->createMCInstrInfo()));

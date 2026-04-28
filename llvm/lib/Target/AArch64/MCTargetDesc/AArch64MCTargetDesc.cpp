@@ -508,21 +508,21 @@ static MCInstrAnalysis *createAArch64InstrAnalysis(const MCInstrInfo *Info) {
 static MCLFIRewriter *createAArch64MCLFIRewriter(MCStreamer &S,
     std::unique_ptr<MCRegisterInfo> &&RegInfo,
     std::unique_ptr<MCInstrInfo> &&InstInfo) {
-  const Triple &TT = S.getContext().getTargetTriple();
-  MCLFIRewriter *RW;
+  // LFI uses the full rewriter with memory sandboxing and CFI.
+  MCLFIRewriter *RW = new AArch64::AArch64MCLFIRewriter(S.getContext(),
+                                                         std::move(RegInfo),
+                                                         std::move(InstInfo));
+  S.setLFIRewriter(RW);
+  return RW;
+}
 
-  if (TT.isHLFI()) {
-    // HLFI uses a simplified rewriter that only handles syscalls and TLS.
-    RW = new AArch64::AArch64MCHLFIRewriter(S.getContext(),
-                                             std::move(RegInfo),
-                                             std::move(InstInfo));
-  } else {
-    // LFI uses the full rewriter with memory sandboxing and CFI.
-    RW = new AArch64::AArch64MCLFIRewriter(S.getContext(),
-                                            std::move(RegInfo),
-                                            std::move(InstInfo));
-  }
-
+static MCLFIRewriter *createAArch64MCHLFIRewriter(MCStreamer &S,
+    std::unique_ptr<MCRegisterInfo> &&RegInfo,
+    std::unique_ptr<MCInstrInfo> &&InstInfo) {
+  // HLFI uses a simplified rewriter that only handles syscalls and TLS.
+  MCLFIRewriter *RW = new AArch64::AArch64MCHLFIRewriter(S.getContext(),
+                                                          std::move(RegInfo),
+                                                          std::move(InstInfo));
   S.setLFIRewriter(RW);
   return RW;
 }
@@ -558,6 +558,9 @@ LLVMInitializeAArch64TargetMC() {
 
     // Register the LFI rewriter.
     TargetRegistry::RegisterMCLFIRewriter(*T, createAArch64MCLFIRewriter);
+
+    // Register the HLFI rewriter.
+    TargetRegistry::RegisterMCHLFIRewriter(*T, createAArch64MCHLFIRewriter);
 
     // Register the obj target streamer.
     TargetRegistry::RegisterObjectTargetStreamer(

@@ -54,6 +54,10 @@ class AArch64TargetAsmStreamer : public AArch64TargetStreamer {
     OS << "\t.variant_pcs\t" << Symbol->getName() << "\n";
   }
 
+  void emitDirectiveHLFICFIEntry(MCSymbol *Symbol) override {
+    OS << "\t.hlfi_cfi_entry\t" << Symbol->getName() << "\n";
+  }
+
   void emitDirectiveArch(StringRef Name) override {
     OS << "\t.arch\t" << Name << "\n";
   }
@@ -456,6 +460,41 @@ void AArch64TargetELFStreamer::emitInst(uint32_t Inst) {
 void AArch64TargetELFStreamer::emitDirectiveVariantPCS(MCSymbol *Symbol) {
   getStreamer().getAssembler().registerSymbol(*Symbol);
   static_cast<MCSymbolELF *>(Symbol)->setOther(ELF::STO_AARCH64_VARIANT_PCS);
+}
+
+void AArch64TargetELFStreamer::emitDirectiveHLFICFIEntry(MCSymbol *Symbol) {
+  MCStreamer &S = getStreamer();
+  MCContext &Ctx = S.getContext();
+
+  // Save current section
+  MCSection *CurSection = S.getCurrentSectionOnly();
+
+  // Get or create the .hlfi_cfi_table section
+  MCSectionELF *TableSec = Ctx.getELFSection(
+      ".hlfi_cfi_table", ELF::SHT_PROGBITS, ELF::SHF_ALLOC | ELF::SHF_WRITE);
+
+  // Get or create the .hlfi_cfi_indices section
+  MCSectionELF *IndicesSec = Ctx.getELFSection(
+      ".hlfi_cfi_indices", ELF::SHT_PROGBITS, ELF::SHF_ALLOC | ELF::SHF_WRITE);
+
+  // Emit 8-byte function pointer in .hlfi_cfi_table
+  S.switchSection(TableSec);
+  S.emitValueToAlignment(Align(8));
+  S.emitSymbolValue(Symbol, 8);
+
+  // Emit 4-byte index slot in .hlfi_cfi_indices (initialized to 0)
+  // Also create a symbol for it: __hlfi_index_<name>
+  S.switchSection(IndicesSec);
+  S.emitValueToAlignment(Align(4));
+
+  // Create the index symbol
+  std::string IndexSymName = ("__hlfi_index_" + Symbol->getName()).str();
+  MCSymbol *IndexSym = Ctx.getOrCreateSymbol(IndexSymName);
+  S.emitLabel(IndexSym);
+  S.emitIntValue(0, 4);  // 32-bit zero, to be patched by llvm-hlfi
+
+  // Restore original section
+  S.switchSection(CurSection);
 }
 
 void AArch64TargetELFStreamer::finish() {

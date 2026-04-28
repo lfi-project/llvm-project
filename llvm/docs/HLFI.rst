@@ -211,6 +211,43 @@ The ``llvm-hlfi`` tool performs post-link operations on HLFI binaries:
 
     llvm-hlfi build obj1.o obj2.o -o cfi_table.bin
 
+Assembly Directive
+------------------
+
+Hand-written assembly can mark functions as valid HLFI indirect call targets
+using the ``.hlfi_cfi_entry`` directive:
+
+.. code-block:: asm
+
+    .globl my_asm_func
+    .hlfi_cfi_entry my_asm_func
+    my_asm_func:
+        add x0, x0, x1
+        ret
+
+This directive:
+
+1. Emits an 8-byte entry in ``.hlfi_cfi_table`` pointing to the symbol
+2. Emits a 4-byte index slot in ``.hlfi_cfi_indices`` (initialized to 0)
+3. Creates a symbol ``__hlfi_index_<name>`` pointing to the index slot
+
+To get the index of a function for indirect calls from assembly:
+
+.. code-block:: asm
+
+    // Load index of my_asm_func into w0
+    adrp x0, __hlfi_index_my_asm_func
+    ldr w0, [x0, :lo12:__hlfi_index_my_asm_func]
+
+    // Load CFI table pointer from HLFI context
+    ldr x1, [x25, #16]
+
+    // Load function pointer from table: table[index]
+    ldr x1, [x1, x0, lsl #3]
+
+    // Call the function
+    blr x1
+
 ELF Sections
 ============
 

@@ -73,6 +73,7 @@
 #include "llvm/Transforms/Instrumentation/GCOVProfiler.h"
 #include "llvm/Transforms/Instrumentation/HWAddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/InstrProfiling.h"
+#include "llvm/Transforms/Instrumentation/HLFI.h"
 #include "llvm/Transforms/Instrumentation/KCFI.h"
 #include "llvm/Transforms/Instrumentation/LowerAllowCheckPass.h"
 #include "llvm/Transforms/Instrumentation/MemProfInstrumentation.h"
@@ -732,6 +733,23 @@ static void addKCFIPass(const Triple &TargetTriple, const LangOptions &LangOpts,
       });
 }
 
+static void addHLFIPass(const Triple &TargetTriple, PassBuilder &PB) {
+  if (!TargetTriple.isHLFI())
+    return;
+
+  // Run HLFI pass early to instrument memory accesses and CFI before
+  // other optimizations run.
+  PB.registerOptimizerEarlyEPCallback(
+      [](ModulePassManager &MPM, OptimizationLevel Level,
+         ThinOrFullLTOPhase) {
+        HLFIOptions Opts;
+        Opts.EnableHeapMasking = true;
+        Opts.EnableForwardCFI = true;
+        Opts.EnableSafeStack = true;
+        MPM.addPass(HLFIPass(Opts));
+      });
+}
+
 static void addSanitizers(const Triple &TargetTriple,
                           const CodeGenOptions &CodeGenOpts,
                           const LangOptions &LangOpts, PassBuilder &PB) {
@@ -1124,6 +1142,7 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
       // Most sanitizers only run during PreLink stage.
       addSanitizers(TargetTriple, CodeGenOpts, LangOpts, PB);
       addKCFIPass(TargetTriple, LangOpts, PB);
+      addHLFIPass(TargetTriple, PB);
 
       PB.registerPipelineStartEPCallback(
           [&](ModulePassManager &MPM, OptimizationLevel Level) {

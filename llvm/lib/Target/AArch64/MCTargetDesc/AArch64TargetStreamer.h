@@ -55,6 +55,10 @@ public:
   /// Callback used to implement the .variant_pcs directive.
   virtual void emitDirectiveVariantPCS(MCSymbol *Symbol) {};
 
+  /// Callback used to implement the .hlfi_cfi_entry directive.
+  /// Emits entries in .hlfi_cfi_table and .hlfi_cfi_indices sections.
+  virtual void emitDirectiveHLFICFIEntry(MCSymbol *Symbol) {};
+
   virtual void emitDirectiveArch(StringRef Name) {};
   virtual void emitDirectiveArchExtension(StringRef Name) {};
 
@@ -137,6 +141,7 @@ private:
                      std::string String) override;
   void emitInst(uint32_t Inst) override;
   void emitDirectiveVariantPCS(MCSymbol *Symbol) override;
+  void emitDirectiveHLFICFIEntry(MCSymbol *Symbol) override;
   void finish() override;
 
 public:

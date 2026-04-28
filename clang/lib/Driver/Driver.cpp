@@ -6917,7 +6917,7 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         TC = std::make_unique<toolchains::OHOS>(*this, Target, Args);
       else if (Target.isWALI())
         TC = std::make_unique<toolchains::WebAssembly>(*this, Target, Args);
-      else if (Target.isLFI())
+      else if (Target.isLFI() || Target.isHLFI())
         TC = std::make_unique<toolchains::LFILinux>(*this, Target, Args);
       else
         TC = std::make_unique<toolchains::Linux>(*this, Target, Args);

@@ -28,6 +28,7 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCHLFI.h"
 #include "llvm/MC/MCLFI.h"
 #include "llvm/MC/MCObjectFileInfo.h"
 #include "llvm/MC/MCObjectWriter.h"
@@ -591,6 +592,8 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
         T, Ctx, std::move(MAB), std::move(OW), std::move(CE), *STI));
     if (T.isLFI())
       initializeLFIMCStreamer(*Str.get(), Ctx, T);
+    if (T.isHLFI())
+      initializeHLFIMCStreamer(*Str.get(), Ctx, T);
     if (T.isOSBinFormatMachO() && T.isOSDarwin()) {
       Triple *TVT = Opts.DarwinTargetVariantTriple
                         ? &*Opts.DarwinTargetVariantTriple

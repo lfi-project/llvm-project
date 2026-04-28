@@ -243,6 +243,11 @@ public:
                          std::unique_ptr<MCRegisterInfo> &&RegInfo,
                          std::unique_ptr<MCInstrInfo> &&InstInfo);
 
+  using MCHLFIRewriterCtorTy =
+      MCLFIRewriter *(*)(MCStreamer & S,
+                         std::unique_ptr<MCRegisterInfo> &&RegInfo,
+                         std::unique_ptr<MCInstrInfo> &&InstInfo);
+
 private:
   /// Next - The next registered target in the linked list, maintained by the
   /// TargetRegistry.
@@ -360,6 +365,10 @@ private:
   // MCLFIRewriterCtorFn - Construction function for this target's
   // MCLFIRewriter, if registered (default = nullptr).
   MCLFIRewriterCtorTy MCLFIRewriterCtorFn = nullptr;
+
+  // MCHLFIRewriterCtorFn - Construction function for this target's
+  // MCHLFIRewriter, if registered (default = nullptr).
+  MCHLFIRewriterCtorTy MCHLFIRewriterCtorFn = nullptr;
 
 public:
   Target() = default;
@@ -607,6 +616,13 @@ public:
                            std::unique_ptr<MCInstrInfo> &&InstInfo) const {
     if (MCLFIRewriterCtorFn)
       MCLFIRewriterCtorFn(S, std::move(RegInfo), std::move(InstInfo));
+  }
+
+  void createMCHLFIRewriter(MCStreamer &S,
+                            std::unique_ptr<MCRegisterInfo> &&RegInfo,
+                            std::unique_ptr<MCInstrInfo> &&InstInfo) const {
+    if (MCHLFIRewriterCtorFn)
+      MCHLFIRewriterCtorFn(S, std::move(RegInfo), std::move(InstInfo));
   }
 
   // TODO(boomanaiden154): Remove this function after LLVM 22 branches.
@@ -1083,6 +1099,10 @@ struct TargetRegistry {
 
   static void RegisterMCLFIRewriter(Target &T, Target::MCLFIRewriterCtorTy Fn) {
     T.MCLFIRewriterCtorFn = Fn;
+  }
+
+  static void RegisterMCHLFIRewriter(Target &T, Target::MCHLFIRewriterCtorTy Fn) {
+    T.MCHLFIRewriterCtorFn = Fn;
   }
 
   /// @}

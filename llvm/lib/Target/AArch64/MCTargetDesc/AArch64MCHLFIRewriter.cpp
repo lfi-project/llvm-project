@@ -151,10 +151,6 @@ bool AArch64::AArch64MCHLFIRewriter::rewriteInst(const MCInst &Inst,
   if (Guard)
     return false;
 
-  // Check if HLFI rewriting is enabled for this subtarget.
-  if (!STI.hasFeature(AArch64::FeatureHLFI))
-    return false;
-
   // System call rewriting.
   if (isSyscall(Inst)) {
     rewriteSyscall(Inst, Out, STI);

@@ -203,6 +203,7 @@ private:
   bool parseDirectiveCFIMTETaggedFrame();
 
   bool parseDirectiveVariantPCS(SMLoc L);
+  bool parseDirectiveHLFICFIEntry(SMLoc L);
 
   bool parseDirectiveSEHAllocStack(SMLoc L);
   bool parseDirectiveSEHPrologEnd(SMLoc L);
@@ -7311,6 +7312,8 @@ bool AArch64AsmParser::ParseDirective(AsmToken DirectiveID) {
     parseDirectiveArchExtension(Loc);
   else if (IDVal == ".variant_pcs")
     parseDirectiveVariantPCS(Loc);
+  else if (IDVal == ".hlfi_cfi_entry")
+    parseDirectiveHLFICFIEntry(Loc);
   else if (IsMachO) {
     if (IDVal == MCLOHDirectiveName())
       parseDirectiveLOH(IDVal, Loc);
@@ -7805,6 +7808,22 @@ bool AArch64AsmParser::parseDirectiveVariantPCS(SMLoc L) {
   if (parseEOL())
     return true;
   getTargetStreamer().emitDirectiveVariantPCS(
+      getContext().getOrCreateSymbol(Name));
+  return false;
+}
+
+/// parseDirectiveHLFICFIEntry
+/// ::= .hlfi_cfi_entry symbolname
+/// Marks a symbol as a valid HLFI indirect branch target.
+/// Emits entries in .hlfi_cfi_table and .hlfi_cfi_indices sections.
+/// Creates __hlfi_index_<symbolname> for accessing the index.
+bool AArch64AsmParser::parseDirectiveHLFICFIEntry(SMLoc L) {
+  StringRef Name;
+  if (getParser().parseIdentifier(Name))
+    return TokError("expected symbol name");
+  if (parseEOL())
+    return true;
+  getTargetStreamer().emitDirectiveHLFICFIEntry(
       getContext().getOrCreateSymbol(Name));
   return false;
 }
