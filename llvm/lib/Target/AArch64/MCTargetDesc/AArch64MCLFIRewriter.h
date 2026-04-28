@@ -13,6 +13,7 @@
 #ifndef LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H
 #define LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H
 
+#include "AArch64AddressingModes.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCRegister.h"
@@ -21,6 +22,7 @@
 namespace llvm {
 class MCContext;
 class MCInst;
+class MCOperand;
 class MCStreamer;
 class MCSubtargetInfo;
 
@@ -51,6 +53,7 @@ private:
   bool Guard = false;
 
   // Instruction classification.
+  bool mayModifyStack(const MCInst &Inst) const;
   bool mayModifyReserved(const MCInst &Inst) const;
 
   // Instruction emission.
@@ -62,6 +65,15 @@ private:
                   const MCSubtargetInfo &STI);
   void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out,
                const MCSubtargetInfo &STI);
+  void emitAddImm(MCRegister Dest, MCRegister Src, int64_t Imm, MCStreamer &Out,
+                  const MCSubtargetInfo &STI);
+  void emitAddReg(MCRegister Dest, MCRegister Src1, MCRegister Src2,
+                  unsigned Shift, MCStreamer &Out, const MCSubtargetInfo &STI);
+  void emitAddRegExtend(MCRegister Dest, MCRegister Src1, MCRegister Src2,
+                        AArch64_AM::ShiftExtendType ExtType, unsigned Shift,
+                        MCStreamer &Out, const MCSubtargetInfo &STI);
+  void emitMemRoW(unsigned Opcode, const MCOperand &DataOp, MCRegister BaseReg,
+                  MCStreamer &Out, const MCSubtargetInfo &STI);
 
   // Rewriting logic.
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
@@ -72,6 +84,18 @@ private:
                              const MCSubtargetInfo &STI);
   void rewriteReturn(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
+
+  // Memory access.
+  void rewriteLoadStore(const MCInst &Inst, MCStreamer &Out,
+                        const MCSubtargetInfo &STI);
+  void rewriteLoadStoreBasic(const MCInst &Inst, MCStreamer &Out,
+                             const MCSubtargetInfo &STI);
+  bool rewriteLoadStoreRoW(const MCInst &Inst, MCStreamer &Out,
+                           const MCSubtargetInfo &STI);
+
+  // Register modification.
+  void rewriteStackModification(const MCInst &Inst, MCStreamer &Out,
+                                const MCSubtargetInfo &STI);
 
   // Link register modification.
   void rewriteLRModification(const MCInst &Inst, MCStreamer &Out,
@@ -84,6 +108,8 @@ private:
                      const MCSubtargetInfo &STI);
   void rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
                       const MCSubtargetInfo &STI);
+  void rewriteDCZVA(const MCInst &Inst, MCStreamer &Out,
+                    const MCSubtargetInfo &STI);
 };
 
 } // namespace llvm
