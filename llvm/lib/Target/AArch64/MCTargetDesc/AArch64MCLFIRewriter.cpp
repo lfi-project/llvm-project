@@ -187,7 +187,7 @@ void AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol, MCStreamer &Out) {
   // targets and the code after the label may use LR for control flow.
   if (DeferredLRGuard && LastSTI) {
     Guard = true;
-    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI);
+    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI, /*ControlFlow=*/true);
     Guard = false;
     DeferredLRGuard = false;
   }
@@ -200,7 +200,7 @@ void AArch64MCLFIRewriter::finish(MCStreamer &Out) {
   // Flush deferred LR guard at end of stream.
   if (DeferredLRGuard && LastSTI) {
     Guard = true;
-    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI);
+    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI, /*ControlFlow=*/true);
     Guard = false;
     DeferredLRGuard = false;
   }
@@ -241,13 +241,26 @@ void AArch64MCLFIRewriter::emitInst(const MCInst &Inst, MCStreamer &Out,
 
 void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
                                        MCStreamer &Out,
-                                       const MCSubtargetInfo &STI) {
+                                       const MCSubtargetInfo &STI,
+                                       bool ControlFlow) {
+  // In large sandbox mode, control flow guards (LR, indirect branches/calls)
+  // can use the cheaper single-instruction 4 GiB guard form because the
+  // sandbox runtime guarantees the code segment lives in the first 4 GiB of
+  // the sandbox region. Data guards must still use the wide mask.
+  bool UseSmallGuard = !isLargeSandbox(STI) || ControlFlow;
+
+  // CF and data guards produce different x28 values for the same Src in large
+  // sandbox mode, so they must not elide each other or share ActiveGuard
+  // state. In small sandbox mode the two forms are identical and the
+  // ControlFlow bit has no semantic effect.
+  bool MixedKind = isLargeSandbox(STI) && ControlFlow;
+
   // Guard elimination: skip if same guard already active.
-  if (!NoLFIGuardElim && Dest == LFIAddrReg && ActiveGuard &&
+  if (!NoLFIGuardElim && !MixedKind && Dest == LFIAddrReg && ActiveGuard &&
       ActiveGuardReg == Src)
     return;
 
-  if (isLargeSandbox(STI)) {
+  if (!UseSmallGuard) {
     // Large sandbox: and x24, Src, #mask; add Dest, x27, x24
     MCInst AndInst;
     AndInst.setOpcode(AArch64::ANDXri);
@@ -262,7 +275,7 @@ void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
     emitAddRegExtend(Dest, LFIBaseReg, LFIOffsetReg, AArch64_AM::UXTX, 0, Out,
                      STI);
   } else {
-    // Standard: add Dest, LFIBaseReg, W(Src), uxtw
+    // Standard / control-flow: add Dest, LFIBaseReg, W(Src), uxtw
     MCInst Inst;
     Inst.setOpcode(AArch64::ADDXrx);
     Inst.addOperand(MCOperand::createReg(Dest));
@@ -273,8 +286,9 @@ void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
     emitInst(Inst, Out, STI);
   }
 
-  // Register Src as an actively guarded value.
-  if (Dest == LFIAddrReg) {
+  // Register Src as an actively guarded value. CF guards in large mode
+  // produce a different value than a data guard would, so don't track them.
+  if (Dest == LFIAddrReg && !MixedKind) {
     ActiveGuard = true;
     ActiveGuardReg = Src;
   }
@@ -399,7 +413,7 @@ void AArch64MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
   MCRegister BranchReg = Inst.getOperand(0).getReg();
 
   // Guard the branch target through X28.
-  emitAddMask(LFIAddrReg, BranchReg, Out, STI);
+  emitAddMask(LFIAddrReg, BranchReg, Out, STI, /*ControlFlow=*/true);
   emitBranch(Inst.getOpcode(), LFIAddrReg, Out, STI);
 }
 
@@ -736,7 +750,7 @@ void AArch64MCLFIRewriter::rewriteAuthenticatedReturn(
   emitInst(Auth, Out, STI);
 
   // Guard LR and emit RET.
-  emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+  emitAddMask(AArch64::LR, AArch64::LR, Out, STI, /*ControlFlow=*/true);
 
   MCInst Ret;
   Ret.setOpcode(AArch64::RET);
@@ -784,7 +798,7 @@ void AArch64MCLFIRewriter::rewriteAuthenticatedBranchOrCall(
   emitInst(Auth, Out, STI);
 
   // Guard the target and branch/call.
-  emitAddMask(LFIAddrReg, TargetReg, Out, STI);
+  emitAddMask(LFIAddrReg, TargetReg, Out, STI, /*ControlFlow=*/true);
   emitBranch(BranchOpcode, LFIAddrReg, Out, STI);
 }
 
@@ -805,7 +819,7 @@ void AArch64MCLFIRewriter::emitSyscall(MCStreamer &Out,
   emitBranch(AArch64::BLR, AArch64::LR, Out, STI);
 
   // Restore LR with guard.
-  emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
+  emitAddMask(AArch64::LR, LFIScratchReg, Out, STI, /*ControlFlow=*/true);
 }
 
 void AArch64MCLFIRewriter::rewriteSyscall(const MCInst &, MCStreamer &Out,
@@ -891,7 +905,7 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   if (DeferredLRGuard) {
     if (isReturn(Inst) || isIndirectBranch(Inst) || isCall(Inst) ||
         isBranch(Inst)) {
-      emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+      emitAddMask(AArch64::LR, AArch64::LR, Out, STI, /*ControlFlow=*/true);
       DeferredLRGuard = false;
     }
   }

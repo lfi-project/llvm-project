@@ -87,7 +87,7 @@ private:
   void emitInst(const MCInst &Inst, MCStreamer &Out,
                 const MCSubtargetInfo &STI);
   void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,
-                   const MCSubtargetInfo &STI);
+                   const MCSubtargetInfo &STI, bool ControlFlow = false);
   void emitBranch(unsigned Opcode, MCRegister Target, MCStreamer &Out,
                   const MCSubtargetInfo &STI);
   void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out,
