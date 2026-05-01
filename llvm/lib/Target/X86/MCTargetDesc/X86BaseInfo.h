@@ -64,6 +64,11 @@ enum IPREFIXES {
   IP_USE_EVEX = 1U << 11,
   IP_USE_DISP8 = 1U << 12,
   IP_USE_DISP32 = 1U << 13,
+  // Set on a direct CALL when the callee is attributed `returns_twice`. The
+  // LFI rewriter uses this to align the call so the address it returns to is
+  // 32-byte aligned and prefixed with ENDBR64, which is required for an
+  // indirect jump (e.g. longjmp) to that address to pass forward-edge CFI.
+  IP_LFI_RETURNS_TWICE = 1U << 14,
 };
 
 enum OperandType : unsigned {

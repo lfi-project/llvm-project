@@ -75,6 +75,7 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_jumpto)
 #elif defined(__x86_64__) && !defined(__arm64ec__)
 .att_syntax
 
+.p2align 5
 DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
 #
 # extern "C" void __libunwind_Registers_x86_64_jumpto(Registers_x86_64 *);

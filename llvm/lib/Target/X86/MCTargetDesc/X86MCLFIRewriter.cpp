@@ -45,7 +45,7 @@ static cl::opt<bool>
     X86LFIHwEndbr("x86-lfi-hw-endbr",
                   cl::desc("Hardware endbr CFI is available; skip software "
                            "endbr comparison checks at indirect branches"),
-                  cl::init(false));
+                  cl::init(true));
 
 static MCRegister getReg64(MCRegister Reg) {
   switch (Reg) {
@@ -329,6 +329,25 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
   Out.emitInstruction(Add, STI);
 }
 
+// CALL64pcrel32 is encoded as a 5-byte E8 + rel32 sequence.
+static constexpr unsigned DirectCallSize = 5;
+
+// Pad before a direct call to a `returns_twice` function so that the byte
+// after the call lands on a 32-byte boundary, then emit ENDBR64 there. This
+// is the address that setjmp saves into the jmp_buf and that longjmp later
+// reaches via an indirect jmp; the alignment + endbr64 lets that indirect
+// jmp pass the forward-edge CFI check.
+void X86::X86MCLFIRewriter::expandReturnsTwiceDirectCall(
+    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
+  Out.emitCodeAlignment(llvm::Align(IndBranchAlignment), &STI);
+  Out.emitFill(IndBranchAlignment - DirectCallSize, /*FillValue=*/0x90);
+  Out.emitInstruction(Inst, STI);
+
+  MCInst Endbr;
+  Endbr.setOpcode(X86::ENDBR64);
+  Out.emitInstruction(Endbr, STI);
+}
+
 // Expand an indirect call or jump (register or memory operand variant) into
 // the sandboxed sequence above followed by the original branch instruction.
 void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
@@ -374,6 +393,9 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   // hit rewriteFSAccess on its own.
   if (isIndirectBranch(Inst) || (isCall(Inst) && !isDirectCall(Inst)))
     return expandIndirectBranch(Inst, Out, STI);
+
+  if (isDirectCall(Inst) && (Inst.getFlags() & X86::IP_LFI_RETURNS_TWICE))
+    return expandReturnsTwiceDirectCall(Inst, Out, STI);
 
   if (isFSAccess(Inst))
     return rewriteFSAccess(Inst, Out, STI);

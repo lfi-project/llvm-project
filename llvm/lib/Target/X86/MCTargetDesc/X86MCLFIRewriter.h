@@ -58,6 +58,8 @@ private:
                             const MCSubtargetInfo &STI);
   void expandIndirectBranch(const MCInst &Inst, MCStreamer &Out,
                             const MCSubtargetInfo &STI);
+  void expandReturnsTwiceDirectCall(const MCInst &Inst, MCStreamer &Out,
+                                    const MCSubtargetInfo &STI);
 };
 
 } // namespace X86
