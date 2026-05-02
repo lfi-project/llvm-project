@@ -23,6 +23,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCObjectStreamer.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCRegisterInfo.h"
@@ -464,6 +465,14 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
     S.MCObjectStreamer::emitInstruction(Inst, STI);
     return;
   }
+
+  // Run the LFI rewriter (if any) outside of emitInstructionBegin/End. The
+  // rewriter may emit nested instructions or bundle_lock/unlock directives
+  // that would corrupt the Begin/End bookkeeping for the original
+  // instruction.
+  if (S.getLFIRewriter() &&
+      S.getLFIRewriter()->rewriteInst(Inst, S, STI))
+    return;
 
   auto &Backend = static_cast<X86AsmBackend &>(S.getAssembler().getBackend());
   Backend.emitInstructionBegin(S, Inst, STI);

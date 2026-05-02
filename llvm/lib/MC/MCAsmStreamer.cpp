@@ -448,6 +448,8 @@ public:
   /// hasRawTextSupport() predicate.
   void emitRawTextImpl(StringRef String) override;
 
+  void initSections(const MCSubtargetInfo &STI) override;
+
   void finishImpl() override;
 
   void emitDwarfUnitLength(uint64_t Length, const Twine &Comment) override;
@@ -2615,6 +2617,12 @@ void MCAsmStreamer::emitRawTextImpl(StringRef String) {
   String.consume_back("\n");
   OS << String;
   EmitEOL();
+}
+
+void MCAsmStreamer::initSections(const MCSubtargetInfo &STI) {
+  MCStreamer::initSections(STI);
+  if (getContext().getTargetTriple().isLFI())
+    emitLFIBundleAlign(*this, getContext());
 }
 
 void MCAsmStreamer::finishImpl() {
