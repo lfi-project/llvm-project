@@ -47,6 +47,24 @@ private:
   bool isFSAccess(const MCInst &Inst);
   void rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI);
+
+  // Emit the mask sequence (andl $-32, %eX; addq %r14, %rX) that turns
+  // an arbitrary register value into a valid sandbox address aligned to
+  // a bundle boundary.
+  void emitSandboxBranchReg(MCRegister Reg, MCStreamer &Out,
+                            const MCSubtargetInfo &STI);
+
+  void rewriteIndirectJumpReg(MCRegister Reg, MCStreamer &Out,
+                              const MCSubtargetInfo &STI);
+  void rewriteIndirectCallReg(MCRegister Reg, MCStreamer &Out,
+                              const MCSubtargetInfo &STI);
+
+  void rewriteIndirectBranch(const MCInst &Inst, MCStreamer &Out,
+                             const MCSubtargetInfo &STI);
+  void rewriteDirectCall(const MCInst &Inst, MCStreamer &Out,
+                         const MCSubtargetInfo &STI);
+  void rewriteReturn(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI);
 };
 
 } // namespace X86

@@ -50,6 +50,16 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
   }
 }
 
+void emitLFIBundleAlign(MCStreamer &Streamer, MCContext &Ctx) {
+  const Triple &TheTriple = Ctx.getTargetTriple();
+  assert(TheTriple.isLFI());
+
+  // X86 LFI relies on bundle alignment to keep indirect-branch targets and
+  // direct-call return addresses aligned to 32-byte bundles.
+  if (TheTriple.getArch() == Triple::x86_64)
+    Streamer.emitBundleAlignMode(Align(32));
+}
+
 void emitLFINoteSection(MCStreamer &Streamer, MCContext &Ctx) {
   const Triple &TheTriple = Ctx.getTargetTriple();
   assert(TheTriple.isLFI());

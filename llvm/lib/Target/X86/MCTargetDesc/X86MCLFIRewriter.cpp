@@ -27,12 +27,34 @@ static constexpr MCRegister LFIBaseReg = X86::R14;
 static constexpr MCRegister LFIScratchReg = X86::R11;
 static constexpr MCRegister LFITPReg = X86::R15;
 
+// Bundle size for control-flow alignment. Indirect branch targets must be
+// aligned to a multiple of this size.
+static constexpr unsigned BundleSize = 32;
+
 // Byte offset into the context register file (pointed to by R15) where the
 // thread pointer is stored.
 static constexpr int TPOffset = 16;
 
 static bool isSyscall(const MCInst &Inst) {
   return Inst.getOpcode() == X86::SYSCALL;
+}
+
+static bool isDirectCall(const MCInst &Inst) {
+  switch (Inst.getOpcode()) {
+  case X86::CALLpcrel32:
+  case X86::CALL64pcrel32:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static MCRegister getReg32(MCRegister Reg) {
+  return getX86SubSuperRegister(Reg, 32, false);
+}
+
+static MCRegister getReg64(MCRegister Reg) {
+  return getX86SubSuperRegister(Reg, 64, false);
 }
 
 // Find the index of the first memory operand with %fs segment override.
@@ -181,6 +203,121 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
   Out.emitInstruction(Modified, STI);
 }
 
+// Emit:
+// andl $-BundleSize, %eX
+// addq %r14, %rX
+// This zeroes the top 32 bits and bottom log2(BundleSize) bits of the target,
+// then fills in the top 32 bits with the sandbox base.
+void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
+                                                 MCStreamer &Out,
+                                                 const MCSubtargetInfo &STI) {
+  MCRegister Reg32 = getReg32(Reg);
+  MCRegister Reg64 = getReg64(Reg);
+
+  MCInst And;
+  And.setOpcode(X86::AND32ri8);
+  And.addOperand(MCOperand::createReg(Reg32));
+  And.addOperand(MCOperand::createReg(Reg32));
+  And.addOperand(MCOperand::createImm(-static_cast<int>(BundleSize)));
+  Out.emitInstruction(And, STI);
+
+  MCInst Add;
+  Add.setOpcode(X86::ADD64rr);
+  Add.addOperand(MCOperand::createReg(Reg64));
+  Add.addOperand(MCOperand::createReg(Reg64));
+  Add.addOperand(MCOperand::createReg(LFIBaseReg));
+  Out.emitInstruction(Add, STI);
+}
+
+void X86::X86MCLFIRewriter::rewriteIndirectJumpReg(MCRegister Reg,
+                                                   MCStreamer &Out,
+                                                   const MCSubtargetInfo &STI) {
+  Out.emitBundleLock(/*AlignToEnd=*/false, STI);
+  emitSandboxBranchReg(Reg, Out, STI);
+
+  MCInst Jmp;
+  Jmp.setOpcode(X86::JMP64r);
+  Jmp.addOperand(MCOperand::createReg(getReg64(Reg)));
+  Out.emitInstruction(Jmp, STI);
+
+  Out.emitBundleUnlock(STI);
+}
+
+void X86::X86MCLFIRewriter::rewriteIndirectCallReg(MCRegister Reg,
+                                                   MCStreamer &Out,
+                                                   const MCSubtargetInfo &STI) {
+  Out.emitBundleLock(/*AlignToEnd=*/true, STI);
+  emitSandboxBranchReg(Reg, Out, STI);
+
+  MCInst Call;
+  Call.setOpcode(X86::CALL64r);
+  Call.addOperand(MCOperand::createReg(getReg64(Reg)));
+  Out.emitInstruction(Call, STI);
+
+  Out.emitBundleUnlock(STI);
+}
+
+void X86::X86MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
+                                                  MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI) {
+  MCRegister Target;
+  if (mayLoad(Inst)) {
+    // Indirect jmp/call through memory: load the target address into %r11
+    // first, then dispatch via the register-based rewrite. The load itself
+    // is currently emitted unsandboxed (memory sandboxing is handled
+    // separately).
+    Target = LFIScratchReg;
+
+    MCInst Mov;
+    Mov.setOpcode(X86::MOV64rm);
+    Mov.addOperand(MCOperand::createReg(Target));
+    Mov.addOperand(Inst.getOperand(0));
+    Mov.addOperand(Inst.getOperand(1));
+    Mov.addOperand(Inst.getOperand(2));
+    Mov.addOperand(Inst.getOperand(3));
+    Mov.addOperand(Inst.getOperand(4));
+    Out.emitInstruction(Mov, STI);
+  } else {
+    Target = Inst.getOperand(0).getReg();
+  }
+
+  if (isCall(Inst))
+    rewriteIndirectCallReg(Target, Out, STI);
+  else
+    rewriteIndirectJumpReg(Target, Out, STI);
+}
+
+void X86::X86MCLFIRewriter::rewriteDirectCall(const MCInst &Inst,
+                                              MCStreamer &Out,
+                                              const MCSubtargetInfo &STI) {
+  // Direct call instructions must be placed at the end of a bundle so that
+  // the return address is bundle-aligned.
+  Out.emitBundleLock(/*AlignToEnd=*/true, STI);
+  Out.emitInstruction(Inst, STI);
+  Out.emitBundleUnlock(STI);
+}
+
+void X86::X86MCLFIRewriter::rewriteReturn(const MCInst &Inst, MCStreamer &Out,
+                                          const MCSubtargetInfo &STI) {
+  // popq %r11
+  MCInst Pop;
+  Pop.setOpcode(X86::POP64r);
+  Pop.addOperand(MCOperand::createReg(LFIScratchReg));
+  Out.emitInstruction(Pop, STI);
+
+  // ret with immediate: pop additional bytes from the stack with addq.
+  if (Inst.getOpcode() == X86::RETI32 || Inst.getOpcode() == X86::RETI64) {
+    MCInst Add;
+    Add.setOpcode(X86::ADD64ri32);
+    Add.addOperand(MCOperand::createReg(X86::RSP));
+    Add.addOperand(MCOperand::createReg(X86::RSP));
+    Add.addOperand(Inst.getOperand(0));
+    Out.emitInstruction(Add, STI);
+  }
+
+  rewriteIndirectJumpReg(LFIScratchReg, Out, STI);
+}
+
 void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
   if (mayModifyRegister(Inst, LFIBaseReg) || mayModifyRegister(Inst, LFITPReg))
@@ -188,6 +325,15 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
 
   if (isSyscall(Inst))
     return rewriteSyscall(Inst, Out, STI);
+
+  if (isDirectCall(Inst))
+    return rewriteDirectCall(Inst, Out, STI);
+
+  if (isReturn(Inst))
+    return rewriteReturn(Inst, Out, STI);
+
+  if (isIndirectBranch(Inst) || isCall(Inst))
+    return rewriteIndirectBranch(Inst, Out, STI);
 
   if (isFSAccess(Inst))
     return rewriteFSAccess(Inst, Out, STI);

@@ -475,10 +475,84 @@ In the following assembly rewrites, some shorthand is used.
 * ``%rN`` or ``%eN``: refers to any general-purpose non-reserved register.
 * ``{a,b,c}``: matches any of ``a``, ``b``, or ``c``.
 
+Instructions placed between ``.bundle_lock`` and ``.bundle_unlock`` directives
+must all be placed inside the same bundle. The directive ``.bundle_lock
+align_to_end`` ensures that the last instruction in the ``.bundle_lock``
+sequence is placed at the end of the bundle.
+
 Control flow
 ~~~~~~~~~~~~
 
-**Note**: these rewrites have not been implemented.
+Indirect jumps are rewritten to first apply a mask that zeroes the top 32 bits
+and bottom 5 bits of the target. An ``addq`` instruction is then used to fill
+in the top 32 bits with the sandbox base.
+
+Indirect calls are similar, but the call instruction must be placed at the
+end of the bundle so that the return address is bundle-aligned. Direct calls
+must also be placed at the end of a bundle.
+
+The addressing mode ``LFI:N(...)`` specifies to apply an LFI addressing mode
+transformation (see the Memory accesses section) when rewriting the addressing
+mode.
+
++------------------+------------------------------+
+|     Original     |          Rewritten           |
++------------------+------------------------------+
+| .. code-block::  | .. code-block::              |
+|                  |                              |
+|    jmpq *%rX     |    .bundle_lock              |
+|                  |    andl $0xffffffe0, %eX     |
+|                  |    addq %r14, %rX            |
+|                  |    jmpq *%rX                 |
+|                  |    .bundle_unlock            |
+|                  |                              |
++------------------+------------------------------+
+| .. code-block::  | .. code-block::              |
+|                  |                              |
+|    jmpq *N(...)  |    movq LFI:N(...), %r11     |
+|                  |    .bundle_lock              |
+|                  |    andl $0xffffffe0, %r11d   |
+|                  |    addq %r14, %r11           |
+|                  |    jmpq *%r11                |
+|                  |    .bundle_unlock            |
+|                  |                              |
++------------------+------------------------------+
+| .. code-block::  | .. code-block::              |
+|                  |                              |
+|    callq *%rX    |    .bundle_lock align_to_end |
+|                  |    andl $0xffffffe0, %eX     |
+|                  |    addq %r14, %rX            |
+|                  |    callq *%rX                |
+|                  |    .bundle_unlock            |
+|                  |                              |
++------------------+------------------------------+
+| .. code-block::  | .. code-block::              |
+|                  |                              |
+|    callq *N(...) |    movq LFI:N(...), %r11     |
+|                  |    .bundle_lock align_to_end |
+|                  |    andl $0xffffffe0, %r11d   |
+|                  |    addq %r14, %r11           |
+|                  |    callq *%r11               |
+|                  |    .bundle_unlock            |
+|                  |                              |
++------------------+------------------------------+
+| .. code-block::  | .. code-block::              |
+|                  |                              |
+|    ret           |    popq %r11                 |
+|                  |    .bundle_lock              |
+|                  |    andl $0xffffffe0, %r11d   |
+|                  |    addq %r14, %r11           |
+|                  |    jmpq *%r11                |
+|                  |    .bundle_unlock            |
+|                  |                              |
++------------------+------------------------------+
+| .. code-block::  | .. code-block::              |
+|                  |                              |
+|    call ...      |    .bundle_lock align_to_end |
+|                  |    call ...                  |
+|                  |    .bundle_unlock            |
+|                  |                              |
++------------------+------------------------------+
 
 Memory accesses
 ~~~~~~~~~~~~~~~
