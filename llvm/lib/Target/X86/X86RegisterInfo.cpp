@@ -621,6 +621,9 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   if (MF.getSubtarget<X86Subtarget>().isLFI()) {
     for (MCRegAliasIterator AI(X86::R11, this, true); AI.isValid(); ++AI)
       Reserved.set(*AI);
+    // R13 is the data stack pointer; %rsp is the control flow stack.
+    for (MCRegAliasIterator AI(X86::R13, this, true); AI.isValid(); ++AI)
+      Reserved.set(*AI);
     for (MCRegAliasIterator AI(X86::R14, this, true); AI.isValid(); ++AI)
       Reserved.set(*AI);
     for (MCRegAliasIterator AI(X86::R15, this, true); AI.isValid(); ++AI)

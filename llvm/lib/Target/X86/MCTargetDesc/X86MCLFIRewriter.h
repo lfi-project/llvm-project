@@ -60,6 +60,38 @@ private:
                             const MCSubtargetInfo &STI);
   void expandReturnsTwiceDirectCall(const MCInst &Inst, MCStreamer &Out,
                                     const MCSubtargetInfo &STI);
+
+  /// Rewrite an explicit %rsp-modifying instruction by demoting it to its
+  /// 32-bit form (writing to %r13d, which clears the upper 32 bits) and
+  /// re-folding the sandbox base into %r13.
+  void rewriteRSPModify(const MCInst &Inst, MCStreamer &Out,
+                        const MCSubtargetInfo &STI);
+
+  /// Workaround for the high-byte + REX encoding restriction. When an
+  /// instruction has both a high-byte register operand (AH/BH/CH/DH) and an
+  /// %rsp memory operand, a naive substitution to %r13 would require a REX
+  /// prefix that cannot coexist with the high-byte register. This routes
+  /// the address through %rsp (a legacy register that doesn't need REX).
+  void rewriteHighByteRSPMem(const MCInst &Inst, MCStreamer &Out,
+                             const MCSubtargetInfo &STI);
+
+  /// Expand RDSSPQ %rX into a direct read of %rsp, which holds the CFS
+  /// (shadow stack) pointer in the dual-stack scheme.
+  void expandRDSSP(const MCInst &Inst, MCStreamer &Out,
+                   const MCSubtargetInfo &STI);
+
+  /// Expand INCSSPQ %rX into an LFI runtime call. The count register is
+  /// passed through the runtime-call ctxreg slot; the runtime stub adds
+  /// count*8 to %rsp after a bounds check against the CFS top.
+  void expandINCSSP(const MCInst &Inst, MCStreamer &Out,
+                    const MCSubtargetInfo &STI);
+
+  void expandPush(const MCInst &Inst, MCStreamer &Out,
+                  const MCSubtargetInfo &STI);
+  void expandPop(const MCInst &Inst, MCStreamer &Out,
+                 const MCSubtargetInfo &STI);
+  void expandLeave(const MCInst &Inst, MCStreamer &Out,
+                   const MCSubtargetInfo &STI);
 };
 
 } // namespace X86

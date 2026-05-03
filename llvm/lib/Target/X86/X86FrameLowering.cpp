@@ -46,10 +46,22 @@ STATISTIC(NumFunctionUsingPush2Pop2, "Number of functions using push2/pop2");
 
 using namespace llvm;
 
+// LFI splits the data and control stacks: %rsp holds return addresses (CFS)
+// while %r13 holds the data stack pointer. Since `call` does not push onto the
+// data stack in this scheme, the local area starts at offset 0 from the
+// data-stack pointer at function entry rather than the usual -8.
+static int getX86LocalAreaOffset(const X86Subtarget &STI) {
+  if (!STI.is64Bit())
+    return -4;
+  if (STI.isLFI())
+    return 0;
+  return -8;
+}
+
 X86FrameLowering::X86FrameLowering(const X86Subtarget &STI,
                                    MaybeAlign StackAlignOverride)
     : TargetFrameLowering(StackGrowsDown, StackAlignOverride.valueOrOne(),
-                          STI.is64Bit() ? -8 : -4),
+                          getX86LocalAreaOffset(STI)),
       STI(STI), TII(*STI.getInstrInfo()), TRI(STI.getRegisterInfo()) {
   // Cache a bunch of frame-related predicates for this subtarget.
   SlotSize = TRI->getSlotSize();
