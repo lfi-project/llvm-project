@@ -56,8 +56,30 @@ private:
                     const MCSubtargetInfo &STI);
   void emitSandboxBranchReg(MCRegister Reg, MCStreamer &Out,
                             const MCSubtargetInfo &STI);
+
+  /// Push the upcoming call's return address onto the shadow call stack and
+  /// return the symbol that emitShadowCallEpilogue must bind after the call.
+  MCSymbol *emitShadowCallPrologue(MCStreamer &Out,
+                                   const MCSubtargetInfo &STI);
+
+  /// Bind the post-call label and undo the SCS prologue's stack swap. If
+  /// \p ReturnsTwice is true, aligns the label to 32 bytes and inserts an
+  /// endbr64, so longjmp's indirect jump back to it passes the forward-edge
+  /// CFI check.
+  void emitShadowCallEpilogue(MCSymbol *RetLabel, MCStreamer &Out,
+                              const MCSubtargetInfo &STI,
+                              bool ReturnsTwice = false);
+
+  void expandDirectCall(const MCInst &Inst, MCStreamer &Out,
+                        const MCSubtargetInfo &STI);
   void expandIndirectBranch(const MCInst &Inst, MCStreamer &Out,
                             const MCSubtargetInfo &STI);
+  void expandReturn(const MCInst &Inst, MCStreamer &Out,
+                    const MCSubtargetInfo &STI);
+  void expandRDSSP(const MCInst &Inst, MCStreamer &Out,
+                   const MCSubtargetInfo &STI);
+  void expandINCSSP(const MCInst &Inst, MCStreamer &Out,
+                    const MCSubtargetInfo &STI);
   void expandReturnsTwiceDirectCall(const MCInst &Inst, MCStreamer &Out,
                                     const MCSubtargetInfo &STI);
 };

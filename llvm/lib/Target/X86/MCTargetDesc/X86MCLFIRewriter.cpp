@@ -31,9 +31,20 @@ static constexpr MCRegister LFIBaseReg = X86::R14;
 static constexpr MCRegister LFIScratchReg = X86::R11;
 static constexpr MCRegister LFITPReg = X86::R15;
 
-// Byte offset into the context register file (pointed to by R15) where the
-// thread pointer is stored.
+// Byte offsets into the context register file (pointed to by R15).
+//
+//   16 : thread pointer
+//   24 : temporary save slot used by the SCS prologue
+//   32 : shadow call stack pointer
+//   40 : argument/return slot for LFI runtime calls
 static constexpr int TPOffset = 16;
+static constexpr int SCSTempOffset = 24;
+static constexpr int SCSOffset = 32;
+static constexpr int RtSlotOffset = 40;
+
+// Runtime entry-point offsets within the %r14 jump table.
+static constexpr unsigned RtSyscallOffset = 0;
+static constexpr unsigned RtSCSUnwindOffset = 48;
 
 // Forward-edge CFI alignment for valid indirect branch targets.
 static constexpr int IndBranchAlignment = 32;
@@ -45,7 +56,13 @@ static cl::opt<bool>
     X86LFIHwEndbr("x86-lfi-hw-endbr",
                   cl::desc("Hardware endbr CFI is available; skip software "
                            "endbr comparison checks at indirect branches"),
-                  cl::init(true));
+                  cl::init(false));
+
+static cl::opt<bool>
+    X86LFIHwShstk("x86-lfi-hw-shstk",
+                  cl::desc("Hardware shadow call stack is available; skip "
+                           "software SCS rewrites"),
+                  cl::init(false));
 
 static MCRegister getReg64(MCRegister Reg) {
   switch (Reg) {
@@ -84,6 +101,14 @@ static bool isDirectCall(const MCInst &Inst) {
   }
 }
 
+static bool isRDSSP(const MCInst &Inst) {
+  return Inst.getOpcode() == X86::RDSSPQ;
+}
+
+static bool isINCSSP(const MCInst &Inst) {
+  return Inst.getOpcode() == X86::INCSSPQ;
+}
+
 // Find the index of the first memory operand with %fs segment override.
 // Returns -1 if not found.
 static int findFSMemOperand(const MCInst &Inst, const MCInstrInfo &InstInfo) {
@@ -99,12 +124,17 @@ static int findFSMemOperand(const MCInst &Inst, const MCInstrInfo &InstInfo) {
   return -1;
 }
 
-// syscall
-// ->
-// leaq .Ltmp(%rip), %r11
-// jmpq *(%r14)
-// .Ltmp:
-static void emitLFICall(MCStreamer &Out, const MCSubtargetInfo &STI) {
+// Emit an LFI runtime call to the entry at RtOffset(%r14):
+//
+//   leaq .Ltmp(%rip), %r11
+//   jmpq *RtOffset(%r14)
+//   .Ltmp:
+//
+// The runtime preserves %r15 and %r14 and restores control via %r11; only
+// %r11 is guaranteed clobbered. Arguments and return values flow through
+// RtSlotOffset(%r15) (caller is responsible for setting/reading it).
+static void emitLFICall(unsigned RtOffset, MCStreamer &Out,
+                        const MCSubtargetInfo &STI) {
   MCSymbol *Symbol = Out.getContext().createTempSymbol();
 
   // leaq .Ltmp(%rip), %r11
@@ -119,13 +149,13 @@ static void emitLFICall(MCStreamer &Out, const MCSubtargetInfo &STI) {
   Lea.addOperand(MCOperand::createReg(X86::NoRegister));
   Out.emitInstruction(Lea, STI);
 
-  // jmpq *(%r14)
+  // jmpq *RtOffset(%r14)
   MCInst Jmp;
   Jmp.setOpcode(X86::JMP64m);
   Jmp.addOperand(MCOperand::createReg(LFIBaseReg));
   Jmp.addOperand(MCOperand::createImm(1));
   Jmp.addOperand(MCOperand::createReg(X86::NoRegister));
-  Jmp.addOperand(MCOperand::createImm(0));
+  Jmp.addOperand(MCOperand::createImm(RtOffset));
   Jmp.addOperand(MCOperand::createReg(X86::NoRegister));
   Out.emitInstruction(Jmp, STI);
 
@@ -134,21 +164,41 @@ static void emitLFICall(MCStreamer &Out, const MCSubtargetInfo &STI) {
 
 void X86::X86MCLFIRewriter::rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
                                            const MCSubtargetInfo &STI) {
-  emitLFICall(Out, STI);
+  emitLFICall(RtSyscallOffset, Out, STI);
+}
+
+// Emit: movq Offset(%r15), %DstReg
+static void emitMovFromR15Slot(MCRegister DstReg, int Offset, MCStreamer &Out,
+                               const MCSubtargetInfo &STI) {
+  MCInst Mov;
+  Mov.setOpcode(X86::MOV64rm);
+  Mov.addOperand(MCOperand::createReg(DstReg));
+  Mov.addOperand(MCOperand::createReg(LFITPReg));
+  Mov.addOperand(MCOperand::createImm(1));
+  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
+  Mov.addOperand(MCOperand::createImm(Offset));
+  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
+  Out.emitInstruction(Mov, STI);
+}
+
+// Emit: movq %SrcReg, Offset(%r15)
+static void emitMovToR15Slot(MCRegister SrcReg, int Offset, MCStreamer &Out,
+                             const MCSubtargetInfo &STI) {
+  MCInst Mov;
+  Mov.setOpcode(X86::MOV64mr);
+  Mov.addOperand(MCOperand::createReg(LFITPReg));
+  Mov.addOperand(MCOperand::createImm(1));
+  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
+  Mov.addOperand(MCOperand::createImm(Offset));
+  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
+  Mov.addOperand(MCOperand::createReg(SrcReg));
+  Out.emitInstruction(Mov, STI);
 }
 
 // Emit: movq TPOffset(%r15), %Reg
 static void emitTPLoad(MCRegister Reg, MCStreamer &Out,
                        const MCSubtargetInfo &STI) {
-  MCInst Mov;
-  Mov.setOpcode(X86::MOV64rm);
-  Mov.addOperand(MCOperand::createReg(Reg));
-  Mov.addOperand(MCOperand::createReg(LFITPReg));
-  Mov.addOperand(MCOperand::createImm(1));
-  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
-  Mov.addOperand(MCOperand::createImm(TPOffset));
-  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
-  Out.emitInstruction(Mov, STI);
+  emitMovFromR15Slot(Reg, TPOffset, Out, STI);
 }
 
 bool X86::X86MCLFIRewriter::isFSAccess(const MCInst &Inst) {
@@ -337,6 +387,9 @@ static constexpr unsigned DirectCallSize = 5;
 // is the address that setjmp saves into the jmp_buf and that longjmp later
 // reaches via an indirect jmp; the alignment + endbr64 lets that indirect
 // jmp pass the forward-edge CFI check.
+//
+// Only used in hardware-shstk mode. In software-shstk mode the equivalent
+// alignment + endbr64 is emitted at the SCS RetLabel by emitShadowCallEpilogue.
 void X86::X86MCLFIRewriter::expandReturnsTwiceDirectCall(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
   Out.emitCodeAlignment(llvm::Align(IndBranchAlignment), &STI);
@@ -348,11 +401,135 @@ void X86::X86MCLFIRewriter::expandReturnsTwiceDirectCall(
   Out.emitInstruction(Endbr, STI);
 }
 
+// Push the return address of the upcoming call onto the shadow call stack.
+//
+//   movq %rsp, SCSTempOffset(%r15)   ; save real rsp to temp slot
+//   movq SCSOffset(%r15), %rsp       ; load SCS pointer
+//   leaq RetLabel(%rip), %r11        ; compute return address
+//   pushq %r11                       ; push return address onto SCS
+//   movq %rsp, SCSOffset(%r15)       ; save updated SCS pointer
+//   movq SCSTempOffset(%r15), %rsp   ; restore real rsp
+//
+// Returns the RetLabel that is bound after the call by emitShadowCallEpilogue.
+MCSymbol *
+X86::X86MCLFIRewriter::emitShadowCallPrologue(MCStreamer &Out,
+                                              const MCSubtargetInfo &STI) {
+  MCSymbol *RetLabel = Out.getContext().createTempSymbol();
+
+  emitMovToR15Slot(X86::RSP, SCSTempOffset, Out, STI);
+  emitMovFromR15Slot(X86::RSP, SCSOffset, Out, STI);
+
+  // leaq RetLabel(%rip), %r11
+  MCInst Lea;
+  Lea.setOpcode(X86::LEA64r);
+  Lea.addOperand(MCOperand::createReg(LFIScratchReg));
+  Lea.addOperand(MCOperand::createReg(X86::RIP));
+  Lea.addOperand(MCOperand::createImm(1));
+  Lea.addOperand(MCOperand::createReg(X86::NoRegister));
+  Lea.addOperand(MCOperand::createExpr(
+      MCSymbolRefExpr::create(RetLabel, Out.getContext())));
+  Lea.addOperand(MCOperand::createReg(X86::NoRegister));
+  Out.emitInstruction(Lea, STI);
+
+  // pushq %r11
+  MCInst Push;
+  Push.setOpcode(X86::PUSH64r);
+  Push.addOperand(MCOperand::createReg(LFIScratchReg));
+  Out.emitInstruction(Push, STI);
+
+  emitMovToR15Slot(X86::RSP, SCSOffset, Out, STI);
+  emitMovFromR15Slot(X86::RSP, SCSTempOffset, Out, STI);
+
+  return RetLabel;
+}
+
+// Bind the RetLabel after a call and undo the SCS prologue's bookkeeping:
+//
+//   RetLabel:
+//   [ endbr64 ]                            ; iff ReturnsTwice
+//   movq %rsp, SCSOffset(%r15)             ; save SCS ptr (callee's ret popped it)
+//   movq %r11, %rsp                        ; restore real rsp from r11
+//   popq %r11                              ; discard real return addr from real stack
+//
+// The callee's ret (in expandReturn) saves the real rsp into %r11 before
+// switching to the SCS, so %r11 holds the real rsp when control reaches
+// RetLabel. For ReturnsTwice calls, expandDirectCall has already padded
+// before the callq so the label here lands on a 32-byte boundary; the
+// endbr64 at that boundary is the CFI landing pad both for setjmp's normal
+// return and for longjmp's indirect jump back into the call site.
+void X86::X86MCLFIRewriter::emitShadowCallEpilogue(MCSymbol *RetLabel,
+                                                   MCStreamer &Out,
+                                                   const MCSubtargetInfo &STI,
+                                                   bool ReturnsTwice) {
+  Out.emitLabel(RetLabel);
+
+  if (ReturnsTwice) {
+    MCInst Endbr;
+    Endbr.setOpcode(X86::ENDBR64);
+    Out.emitInstruction(Endbr, STI);
+  }
+
+  emitMovToR15Slot(X86::RSP, SCSOffset, Out, STI);
+
+  // movq %r11, %rsp
+  MCInst RestoreRsp;
+  RestoreRsp.setOpcode(X86::MOV64rr);
+  RestoreRsp.addOperand(MCOperand::createReg(X86::RSP));
+  RestoreRsp.addOperand(MCOperand::createReg(LFIScratchReg));
+  Out.emitInstruction(RestoreRsp, STI);
+
+  // popq %r11
+  MCInst Pop;
+  Pop.setOpcode(X86::POP64r);
+  Pop.addOperand(MCOperand::createReg(LFIScratchReg));
+  Out.emitInstruction(Pop, STI);
+}
+
+// Expand a direct call. In software-shstk mode, wrap with the SCS
+// prologue/epilogue. In hardware-shstk mode, the call passes through; only
+// returns_twice callees need the post-call alignment + endbr64.
+void X86::X86MCLFIRewriter::expandDirectCall(const MCInst &Inst,
+                                             MCStreamer &Out,
+                                             const MCSubtargetInfo &STI) {
+  bool ReturnsTwice = Inst.getFlags() & X86::IP_LFI_RETURNS_TWICE;
+
+  if (X86LFIHwShstk) {
+    if (ReturnsTwice)
+      return expandReturnsTwiceDirectCall(Inst, Out, STI);
+    Out.emitInstruction(Inst, STI);
+    return;
+  }
+
+  MCSymbol *RetLabel = emitShadowCallPrologue(Out, STI);
+  if (ReturnsTwice) {
+    // Pad so the byte after the callq lands on a 32-byte boundary; the
+    // epilogue then binds RetLabel and emits endbr64 at exactly that
+    // boundary. The address callq pushes onto the real stack therefore
+    // matches RetLabel (the address the SCS prologue pushed) and is itself
+    // a valid CFI landing pad, so a libc setjmp that reads the real-stack
+    // return address and a longjmp that indirect-jumps to it both pass the
+    // forward-edge CFI check.
+    Out.emitCodeAlignment(llvm::Align(IndBranchAlignment), &STI);
+    Out.emitFill(IndBranchAlignment - DirectCallSize, /*FillValue=*/0x90);
+  }
+  Out.emitInstruction(Inst, STI);
+  emitShadowCallEpilogue(RetLabel, Out, STI, ReturnsTwice);
+}
+
 // Expand an indirect call or jump (register or memory operand variant) into
 // the sandboxed sequence above followed by the original branch instruction.
+// In software-shstk mode an indirect *call* is wrapped in the SCS
+// prologue/epilogue. The prologue runs before the target load because both
+// the prologue and the load clobber %r11.
 void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
+  bool IsCall = isCall(Inst);
+
+  MCSymbol *RetLabel = nullptr;
+  if (!X86LFIHwShstk && IsCall)
+    RetLabel = emitShadowCallPrologue(Out, STI);
+
   MCRegister Target;
   if (mayLoad(Inst)) {
     // Indirect jmp/call through memory — load address into the scratch
@@ -374,9 +551,96 @@ void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
   emitSandboxBranchReg(Target, Out, STI);
 
   MCInst Branch;
-  Branch.setOpcode(isCall(Inst) ? X86::CALL64r : X86::JMP64r);
+  Branch.setOpcode(IsCall ? X86::CALL64r : X86::JMP64r);
   Branch.addOperand(MCOperand::createReg(getReg64(Target)));
   Out.emitInstruction(Branch, STI);
+
+  if (!X86LFIHwShstk && IsCall)
+    emitShadowCallEpilogue(RetLabel, Out, STI);
+}
+
+// Expand a return through the shadow call stack:
+//
+//   [ addq $imm, %rsp ]              ; iff RETI{32,64}
+//   movq %rsp, %r11                  ; save real rsp; the caller's epilogue
+//                                    ;  reads it back from %r11
+//   movq SCSOffset(%r15), %rsp       ; switch rsp to the SCS top
+//   ret                               ; pops SCS top into %rip
+//
+// In hardware-shstk mode the original ret is emitted unchanged.
+void X86::X86MCLFIRewriter::expandReturn(const MCInst &Inst, MCStreamer &Out,
+                                         const MCSubtargetInfo &STI) {
+  if (X86LFIHwShstk) {
+    Out.emitInstruction(Inst, STI);
+    return;
+  }
+
+  // For ret $imm, fold the immediate into the real rsp before stashing it.
+  unsigned Opcode = Inst.getOpcode();
+  if ((Opcode == X86::RETI32 || Opcode == X86::RETI64) &&
+      Inst.getNumOperands() > 0) {
+    MCInst Add;
+    Add.setOpcode(X86::ADD64ri32);
+    MCOperand StackPointer = MCOperand::createReg(X86::RSP);
+    Add.addOperand(StackPointer);
+    Add.addOperand(StackPointer);
+    Add.addOperand(Inst.getOperand(0));
+    Out.emitInstruction(Add, STI);
+  }
+
+  // movq %rsp, %r11
+  MCInst SaveRsp;
+  SaveRsp.setOpcode(X86::MOV64rr);
+  SaveRsp.addOperand(MCOperand::createReg(LFIScratchReg));
+  SaveRsp.addOperand(MCOperand::createReg(X86::RSP));
+  Out.emitInstruction(SaveRsp, STI);
+
+  // movq SCSOffset(%r15), %rsp
+  emitMovFromR15Slot(X86::RSP, SCSOffset, Out, STI);
+
+  // retq
+  MCInst Ret;
+  Ret.setOpcode(X86::RET64);
+  Out.emitInstruction(Ret, STI);
+}
+
+// Expand rdsspq into a direct load of the SCS pointer slot.
+//
+//   rdsspq %rX  →  movq SCSOffset(%r15), %rX
+//
+// rdsspq's destination operand is tied src=dst, so the MCInst has the same
+// register in both slots; we only consume operand 0. In hardware-shstk mode
+// the instruction passes through unchanged.
+void X86::X86MCLFIRewriter::expandRDSSP(const MCInst &Inst, MCStreamer &Out,
+                                        const MCSubtargetInfo &STI) {
+  if (X86LFIHwShstk) {
+    Out.emitInstruction(Inst, STI);
+    return;
+  }
+
+  emitMovFromR15Slot(Inst.getOperand(0).getReg(), SCSOffset, Out, STI);
+}
+
+// Expand incsspq %rX into an LFI runtime call to SCS unwind. The unwind
+// count is passed through the runtime-call slot at RtSlotOffset(%r15):
+//
+//   incsspq %rX  →  movq %rX, RtSlotOffset(%r15)
+//                   leaq .Ltmp(%rip), %r11
+//                   jmpq *RtSCSUnwindOffset(%r14)
+//                   .Ltmp:
+//
+// The slot store happens before emitLFICall's leaq so that an %r11 source
+// operand is read before %r11 is clobbered. In hardware-shstk mode the
+// instruction passes through unchanged.
+void X86::X86MCLFIRewriter::expandINCSSP(const MCInst &Inst, MCStreamer &Out,
+                                         const MCSubtargetInfo &STI) {
+  if (X86LFIHwShstk) {
+    Out.emitInstruction(Inst, STI);
+    return;
+  }
+
+  emitMovToR15Slot(Inst.getOperand(0).getReg(), RtSlotOffset, Out, STI);
+  emitLFICall(RtSCSUnwindOffset, Out, STI);
 }
 
 void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
@@ -394,8 +658,17 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   if (isIndirectBranch(Inst) || (isCall(Inst) && !isDirectCall(Inst)))
     return expandIndirectBranch(Inst, Out, STI);
 
-  if (isDirectCall(Inst) && (Inst.getFlags() & X86::IP_LFI_RETURNS_TWICE))
-    return expandReturnsTwiceDirectCall(Inst, Out, STI);
+  if (isDirectCall(Inst))
+    return expandDirectCall(Inst, Out, STI);
+
+  if (isReturn(Inst))
+    return expandReturn(Inst, Out, STI);
+
+  if (isRDSSP(Inst))
+    return expandRDSSP(Inst, Out, STI);
+
+  if (isINCSSP(Inst))
+    return expandINCSSP(Inst, Out, STI);
 
   if (isFSAccess(Inst))
     return rewriteFSAccess(Inst, Out, STI);
