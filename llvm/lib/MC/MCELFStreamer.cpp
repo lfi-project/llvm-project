@@ -94,8 +94,13 @@ void MCELFStreamer::changeSection(MCSection *Section, uint32_t Subsection) {
       BundleBA = nullptr;
     }
 
-    // Ensure the previous section gets aligned if necessary.
-    if (Asm.isBundlingEnabled() && CF->getParent()->hasInstructions())
+    // Ensure the previous section gets aligned if necessary. Only apply
+    // bundle alignment to sections that will contain executable code; data
+    // sections (e.g. .init_array) must keep their natural alignment so the
+    // linker can pack entries from multiple input objects contiguously.
+    auto *NewSectionELF = static_cast<const MCSectionELF *>(Section);
+    if (Asm.isBundlingEnabled() && CF->getParent()->hasInstructions() &&
+        (NewSectionELF->getFlags() & ELF::SHF_EXECINSTR))
       Section->ensureMinAlignment(Align(Asm.getBundleAlignSize()));
   }
   auto *SectionELF = static_cast<const MCSectionELF *>(Section);
