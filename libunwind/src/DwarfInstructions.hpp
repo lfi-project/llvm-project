@@ -66,8 +66,32 @@ private:
   static pint_t getCFA(A &addressSpace, const PrologInfo &prolog,
                        const R &registers) {
     if (prolog.cfaRegister != 0) {
-      uintptr_t cfaRegister = registers.getRegister((int)prolog.cfaRegister);
-      return (pint_t)(cfaRegister + prolog.cfaRegisterOffset);
+      int cfaReg = (int)prolog.cfaRegister;
+#if defined(__LFI__) && defined(_LIBUNWIND_TARGET_X86_64)
+      // The LFI x86-64 ABI puts the data stack in %r13 and reserves %rsp for
+      // the control flow stack (return addresses only). The compiler still
+      // emits SysV-standard CFI that anchors CFA to %rsp before the frame
+      // pointer is set up, so reroute those references to %r13. Frame-pointer
+      // (%rbp) anchored entries already point at the data stack and don't
+      // need translation.
+      if (cfaReg == UNW_X86_64_RSP)
+        cfaReg = UNW_X86_64_R13;
+#endif
+      uintptr_t cfaRegister = registers.getRegister(cfaReg);
+      pint_t cfa = (pint_t)(cfaRegister + prolog.cfaRegisterOffset);
+#if defined(__LFI__) && defined(_LIBUNWIND_TARGET_X86_64)
+      // The compiler emits `.cfi_def_cfa_offset` values that include the
+      // standard SysV +8 for the would-be return-address slot, but it also
+      // emits `.cfi_offset` directives that locate saved registers relative
+      // to the *true* LFI CFA (no retaddr slot). The two conventions are
+      // inconsistent: the directives are 8 bytes off relative to each
+      // other. We compensate by subtracting 8 from the CFA we just
+      // computed, so subsequent `mem[CFA + offset]` lookups land on the
+      // correct data-stack memory.
+      if (R::getArch() == REGISTERS_X86_64)
+        cfa -= 8;
+#endif
+      return cfa;
     }
     if (prolog.cfaExpression != 0)
       return evaluateExpression((pint_t)prolog.cfaExpression, addressSpace,
@@ -264,7 +288,22 @@ int DwarfInstructions<A, R>::stepWithDwarf(
       //
       // We set the SP here to the CFA, allowing for it to be overridden
       // by a CFI directive later on.
-      newRegisters.setSP(cfa);
+#if defined(__LFI__) && defined(_LIBUNWIND_TARGET_X86_64)
+      // In the LFI dual-stack scheme, the "stack pointer at call site" is
+      // split: the data-stack pointer (%r13) equals the CFA (caller's
+      // %r13 at the call site, since the data stack has no retaddr slot),
+      // and %rsp is the CFS top, which advances by 8 per frame as we step
+      // out. getCFA above already returns the true LFI CFA (it subtracts
+      // the 8-byte offset that the compiler bakes into .cfi_def_cfa_offset
+      // for SysV consistency).
+      if (R::getArch() == REGISTERS_X86_64) {
+        newRegisters.setRegister(UNW_X86_64_R13, cfa);
+        newRegisters.setSP(registers.getSP() + 8);
+      } else
+#endif
+      {
+        newRegisters.setSP(cfa);
+      }
 
       typename R::reg_t returnAddress = 0;
       constexpr int lastReg = R::lastDwarfRegNum();
@@ -299,6 +338,15 @@ int DwarfInstructions<A, R>::stepWithDwarf(
             returnAddress = registers.getRegister(cieInfo.returnAddressRegister);
         }
       }
+
+#if defined(__LFI__) && defined(_LIBUNWIND_TARGET_X86_64)
+      // The default x86-64 CIE rule says "RA at CFA - 8", which under LFI
+      // points at a stack-arg slot on the data stack rather than the actual
+      // return address. The real RA always sits at the top of the control
+      // flow stack, i.e. at *(rsp).
+      if (R::getArch() == REGISTERS_X86_64)
+        returnAddress = (typename R::reg_t)addressSpace.get64(registers.getSP());
+#endif
 
       isSignalFrame = cieInfo.isSignalFrame;
 

@@ -137,20 +137,50 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
   movq  %rdi, 32(PTR)
   movq  %rsi, 40(PTR)
   movq  %rbp, 48(PTR)
+#if defined(__LFI__)
+  // In the LFI dual-stack scheme on x86-64:
+  //   * the architectural %rsp is the control flow stack pointer (CFS)
+  //   * the architectural %r13 is the data stack pointer (DSP)
+  // The LFI rewriter retargets every "%rsp" reference in this asm to %r13,
+  // so a plain `movq %rsp, ...` would actually save the DSP (which we also
+  // save below at offset 104). To get the real CFS pointer we use rdsspq,
+  // which the rewriter expands to `movq %rsp, %rax` and so reads the raw
+  // hardware register. The +8 mirrors the vanilla path: it advances past
+  // the consumed return address so the saved value matches caller's CFS
+  // top at the call site.
+  rdsspq %rax
+  addq  $8, %rax
+  movq  %rax, 56(PTR)
+#else
   movq  %rsp, 56(PTR)
   addq  $8,   56(PTR)
+#endif
   movq  %r8,  64(PTR)
   movq  %r9,  72(PTR)
   movq  %r10, 80(PTR)
   movq  %r11, 88(PTR)
   movq  %r12, 96(PTR)
-#if !defined(__LFI__)
+#if defined(__LFI__)
+  // %r13 is the data stack pointer and varies per function — save it.
+  // %r14 (sandbox base) and %r15 (context register) are constant per
+  // sandbox; the runtime restores them from elsewhere on resume, so
+  // saving them here would just clobber the host's copy.
+  movq  %r13,104(PTR)
+  // Same trick as above for reading the return address: a plain
+  // `movq (%rsp), ...` would be rewritten to `movq (%r13), ...` (data
+  // stack), but the return address actually lives at the top of the CFS,
+  // i.e. at *(real %rsp). Use rdsspq to get the raw register, then read
+  // through it.
+  rdsspq %rax
+  movq  (%rax),TMP
+  movq  TMP,128(PTR)
+#else
   movq  %r13,104(PTR)
   movq  %r14,112(PTR)
   movq  %r15,120(PTR)
-#endif
   movq  (%rsp),TMP
   movq  TMP,128(PTR) # store return address as rip
+#endif
   # skip rflags
   # skip cs
   # skip fs

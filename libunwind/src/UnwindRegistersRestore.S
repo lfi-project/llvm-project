@@ -92,6 +92,52 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
 #endif
 
   _LIBUNWIND_CET_ENDBR
+#if defined(__LFI__)
+  // LFI dual-stack restore. The vanilla path stages rdi+rip on the new
+  // %rsp and then pops them after restoring %rsp, which we can't do here:
+  // the LFI rewriter retargets %rsp pushes/pops to %r13, so the stack
+  // dance would land on the data stack rather than the CFS. Instead:
+  //   1. Use rdsspq to read the real %rsp (CFS top), compute the number
+  //      of CFS slots between it and the saved CFS top, and incsspq that
+  //      many entries. The runtime stub bounds-checks against
+  //      CTXREG_CFS_BOUND_OFFSET, so a malformed jmp_buf can't drive
+  //      %rsp out of the CFS region.
+  //   2. Load saved register values directly. Order matters: %rdi holds
+  //      the context pointer until the very last load. We use %r11 to
+  //      stage the saved %rip and jmpq through it (which the rewriter
+  //      sandboxes — landing pads are 32-byte aligned + endbr64 by the
+  //      X86 LFI rewrite pass, so this works for C++ exception resume).
+  //   3. Restoring %r13 (the data stack pointer) is written here as
+  //      `movq ..., %rsp`. The rewriter retargets that to a safe %r13
+  //      update (32-bit demote + reguard). A direct `movq ..., %r13`
+  //      would be rejected by the rewriter as an illegal modification
+  //      of a reserved register.
+  rdsspq %r11
+  movq   56(%rdi), %rcx   # rcx = target CFS top (saved by __unw_getcontext)
+  subq   %r11, %rcx       # rcx = bytes to advance %rsp
+  shrq   $3, %rcx         # rcx = number of CFS entries
+  incsspq %rcx            # rewriter -> mov %rcx,RtSlot(%r15); call lfi_inc_ssp
+
+  movq    0(%rdi), %rax
+  movq    8(%rdi), %rbx
+  # %rcx (saved value) restored just before the jmp
+  movq   24(%rdi), %rdx
+  # %rdi restored last
+  movq   40(%rdi), %rsi
+  movq   48(%rdi), %rbp
+  movq   64(%rdi), %r8
+  movq   72(%rdi), %r9
+  movq   80(%rdi), %r10
+  # %r11 used to hold rip for the jmp
+  movq   96(%rdi), %r12
+  movq  104(%rdi), %rsp   # rewriter -> safe %r13 update (data stack ptr)
+  # %r14, %r15 are sandbox-invariant — leave the host's copies alone.
+
+  movq   16(%rdi), %rcx   # restore %rcx
+  movq  128(%rdi), %r11   # %r11 = saved rip
+  movq   32(%rdi), %rdi   # restore %rdi (last)
+  jmpq   *%r11            # rewriter sandboxes this as an indirect jump
+#else
   movq  56(%rdi), %rax # rax holds new stack pointer
   subq  $16, %rax
   movq  %rax, 56(%rdi)
@@ -113,11 +159,9 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
   movq   80(%rdi), %r10
   movq   88(%rdi), %r11
   movq   96(%rdi), %r12
-#if !defined(__LFI__)
   movq  104(%rdi), %r13
   movq  112(%rdi), %r14
   movq  120(%rdi), %r15
-#endif
   # skip rflags
   # skip cs
   # skip fs
@@ -145,6 +189,7 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
   pop    %rdi      # rdi was saved here earlier
   pop    %rcx
   jmpq   *%rcx
+#endif
 
 
 #elif defined(__powerpc64__)
