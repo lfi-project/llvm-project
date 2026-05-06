@@ -28,6 +28,8 @@ public:
 
   void AddCXXStdlibLibArgs(const llvm::opt::ArgList &Args,
                            llvm::opt::ArgStringList &CmdArgs) const override;
+
+  SanitizerMask getDefaultSanitizers() const override;
 };
 
 } // end namespace toolchains

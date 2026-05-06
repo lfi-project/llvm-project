@@ -767,6 +767,11 @@ public:
   }
 
   BuiltinVaListKind getBuiltinVaListKind() const override {
+    // LFI uses a Wasm-style varargs ABI: variadic args are packed into a
+    // buffer on the unsafe stack and a hidden pointer is passed; va_list is
+    // just a char* into that buffer.
+    if (getTriple().isLFI())
+      return TargetInfo::CharPtrBuiltinVaList;
     return TargetInfo::X86_64ABIBuiltinVaList;
   }
 

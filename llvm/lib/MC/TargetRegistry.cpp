@@ -98,6 +98,11 @@ MCStreamer *Target::createAsmStreamer(MCContext &Ctx,
                                 std::move(CE), std::move(TAB));
 
   createAsmTargetStreamer(*S, OSRef, Printer);
+  // Inline-asm parsed by the AsmPrinter goes through this streamer; make sure
+  // the LFI directive parser is wired up so .lfi_rewrite_disable/_enable are
+  // recognized in inline asm under -S.
+  if (Ctx.getTargetTriple().isLFI())
+    initializeLFIMCStreamer(*S, Ctx, Ctx.getTargetTriple());
   return S;
 }
 

@@ -45,7 +45,7 @@ static cl::opt<bool>
     X86LFIHwEndbr("x86-lfi-hw-endbr",
                   cl::desc("Hardware endbr CFI is available; skip software "
                            "endbr comparison checks at indirect branches"),
-                  cl::init(true));
+                  cl::init(false));
 
 static MCRegister getReg64(MCRegister Reg) {
   switch (Reg) {

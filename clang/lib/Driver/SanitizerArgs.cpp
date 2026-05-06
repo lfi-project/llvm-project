@@ -1177,9 +1177,12 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
   }
 
   if (AllAddedKinds & SanitizerKind::SafeStack) {
-    // SafeStack runtime is built into the system on Android and Fuchsia.
-    SafeStackRuntime =
-        !TC.getTriple().isAndroid() && !TC.getTriple().isOSFuchsia();
+    // SafeStack runtime is built into the system on Android and Fuchsia, and
+    // on LFI (provided by lfi-runtime, which allocates the unsafe stack and
+    // populates the per-thread pointer slot in the context register file).
+    SafeStackRuntime = !TC.getTriple().isAndroid() &&
+                       !TC.getTriple().isOSFuchsia() &&
+                       !TC.getTriple().isLFI();
   }
 
   if (AllAddedKinds & SanitizerKind::AllocToken) {

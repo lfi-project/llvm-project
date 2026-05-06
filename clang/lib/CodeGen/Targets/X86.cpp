@@ -2271,8 +2271,11 @@ ABIArgInfo X86_64ABIInfo::getIndirectResult(QualType Ty,
                                                           Size));
   }
 
+  // For LFI, pass indirect args by-pointer rather than by-value: SafeStack
+  // needs the copy to live in an alloca that it can move to the unsafe stack.
   return ABIArgInfo::getIndirect(CharUnits::fromQuantity(Align),
-                                 getDataLayout().getAllocaAddrSpace());
+                                 getDataLayout().getAllocaAddrSpace(),
+                                 /*ByVal=*/!getTarget().getTriple().isLFI());
 }
 
 /// The ABI specifies that a value should be passed in a full vector XMM/YMM
@@ -3052,6 +3055,15 @@ static Address EmitX86_64VAArgFromMemory(CodeGenFunction &CGF,
 
 RValue X86_64ABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
                                 QualType Ty, AggValueSlot Slot) const {
+  // LFI uses a Wasm-style varargs ABI: va_list is a char* into a packed
+  // buffer of variadic args, each occupying an 8-byte slot.
+  if (getTarget().getTriple().isLFI()) {
+    return emitVoidPtrVAArg(CGF, VAListAddr, Ty, /*IsIndirect=*/false,
+                            CGF.getContext().getTypeInfoInChars(Ty),
+                            CharUnits::fromQuantity(8),
+                            /*AllowHigherAlign=*/false, Slot);
+  }
+
   // Assume that va_list type is correct; should be pointer to LLVM type:
   // struct {
   //   i32 gp_offset;

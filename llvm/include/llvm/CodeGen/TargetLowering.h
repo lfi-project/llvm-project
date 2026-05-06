@@ -2204,6 +2204,22 @@ public:
   getSafeStackPointerLocation(IRBuilderBase &IRB,
                               const LibcallLoweringInfo &Libcalls) const;
 
+  /// Returns the current value of the unsafe stack pointer, read from a
+  /// target-defined location. Returns nullptr if the target does not support
+  /// direct access; the SafeStack pass then falls back to
+  /// getSafeStackPointerLocation and a load.
+  virtual Value *getSafeStackPointer(IRBuilderBase &IRB) const {
+    return nullptr;
+  }
+
+  /// Stores Pointer as the new value of the unsafe stack pointer in a
+  /// target-defined location. Returns Pointer on success, or nullptr if the
+  /// target does not support direct access (the SafeStack pass then falls back
+  /// to getSafeStackPointerLocation and a store).
+  virtual Value *setSafeStackPointer(IRBuilderBase &IRB, Value *Pointer) const {
+    return nullptr;
+  }
+
   /// Returns the name of the symbol used to emit stack probes or the empty
   /// string if not applicable.
   virtual bool hasStackProbeSymbol(const MachineFunction &MF) const { return false; }

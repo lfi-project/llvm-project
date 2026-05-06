@@ -26,6 +26,7 @@
 #include "llvm/CodeGen/WinEHFuncInfo.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Transforms/CFGuard.h"
 
@@ -663,6 +664,45 @@ Value *X86TargetLowering::getSafeStackPointerLocation(
   }
 
   return TargetLowering::getSafeStackPointerLocation(IRB, Libcalls);
+}
+
+// LFI stores the unsafe stack pointer at offset 24 in the context register
+// file (pointed to by %r15). The accessing instructions are wrapped in
+// .lfi_rewrite_disable / .lfi_rewrite_enable so the LFI rewriter does not
+// transform the privileged %r15 access.
+static constexpr int LFIUnsafeStackPtrOffset = 24;
+
+Value *X86TargetLowering::getSafeStackPointer(IRBuilderBase &IRB) const {
+  if (!Subtarget.isLFI())
+    return nullptr;
+
+  FunctionType *AsmFnTy = FunctionType::get(IRB.getPtrTy(), false);
+  std::string AsmStr =
+      ".lfi_rewrite_disable\n\tmovq " +
+      std::to_string(LFIUnsafeStackPtrOffset) +
+      "(%r15), $0\n\t.lfi_rewrite_enable";
+  InlineAsm *Asm = InlineAsm::get(AsmFnTy, AsmStr, "=r",
+                                  /*hasSideEffects=*/true,
+                                  /*isAlignStack=*/false);
+  return IRB.CreateCall(AsmFnTy, Asm);
+}
+
+Value *X86TargetLowering::setSafeStackPointer(IRBuilderBase &IRB,
+                                              Value *Pointer) const {
+  if (!Subtarget.isLFI())
+    return nullptr;
+
+  FunctionType *AsmFnTy =
+      FunctionType::get(IRB.getVoidTy(), {IRB.getPtrTy()}, false);
+  std::string AsmStr =
+      ".lfi_rewrite_disable\n\tmovq $0, " +
+      std::to_string(LFIUnsafeStackPtrOffset) +
+      "(%r15)\n\t.lfi_rewrite_enable";
+  InlineAsm *Asm = InlineAsm::get(AsmFnTy, AsmStr, "r",
+                                  /*hasSideEffects=*/true,
+                                  /*isAlignStack=*/false);
+  IRB.CreateCall(AsmFnTy, Asm, {Pointer});
+  return Pointer;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1716,6 +1756,32 @@ SDValue X86TargetLowering::LowerFormalArguments(
 
   CCInfo.AnalyzeArguments(Ins, CC_X86);
 
+  // LFI uses a Wasm-style varargs ABI: the variadic arguments are packed by
+  // the SafeStack pass into a buffer on the unsafe stack, and the caller
+  // passes a hidden pointer to that buffer in the next available GPR (or on
+  // the stack if all GPRs are used). Capture the hidden pointer here and
+  // store it so LowerVASTART can find it.
+  if (Subtarget.isLFI() && IsVarArg) {
+    ArrayRef<MCPhysReg> ArgGPRs = get64BitArgumentGPRs(CallConv, Subtarget);
+    unsigned NextGPR = CCInfo.getFirstUnallocated(ArgGPRs);
+
+    if (NextGPR < ArgGPRs.size()) {
+      Register VReg = MF.addLiveIn(ArgGPRs[NextGPR], &X86::GR64RegClass);
+      SDValue HiddenPtr = DAG.getCopyFromReg(Chain, dl, VReg, MVT::i64);
+      int FI = MFI.CreateStackObject(8, Align(8), false);
+      Chain = DAG.getStore(
+          Chain, dl, HiddenPtr, DAG.getFrameIndex(FI, MVT::i64),
+          MachinePointerInfo::getFixedStack(MF, FI));
+      FuncInfo->setVarArgsFrameIndex(FI);
+    } else {
+      // GPRs exhausted: hidden pointer is the first stack arg after the
+      // fixed-arg stack region.
+      unsigned StackOff = CCInfo.getStackSize();
+      int FI = MFI.CreateFixedObject(8, StackOff, true);
+      FuncInfo->setVarArgsFrameIndex(FI);
+    }
+  }
+
   // In vectorcall calling convention a second pass is required for the HVA
   // types.
   if (CallingConv::X86_VectorCall == CallConv) {
@@ -1876,7 +1942,7 @@ SDValue X86TargetLowering::LowerFormalArguments(
                          MF.getTarget().Options.GuaranteedTailCallOpt))
     StackSize = GetAlignedArgumentStackSize(StackSize, DAG);
 
-  if (IsVarArg)
+  if (IsVarArg && !Subtarget.isLFI())
     VarArgsLoweringHelper(FuncInfo, dl, DAG, Subtarget, CallConv, CCInfo)
         .lowerVarArgsParameters(Chain, StackSize);
 

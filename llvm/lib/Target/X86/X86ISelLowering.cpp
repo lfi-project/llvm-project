@@ -26639,6 +26639,17 @@ SDValue X86TargetLowering::LowerVASTART(SDValue Op, SelectionDAG &DAG) const {
     return DAG.getStore(Op.getOperand(0), DL, FR, Ptr, MachinePointerInfo(SV));
   }
 
+  if (Subtarget.isLFI()) {
+    // LFI varargs: VarArgsFrameIndex holds the slot containing the hidden
+    // pointer (set up by LowerFormalArguments). Load it and store the
+    // pointer value into the va_list (which is just a char*).
+    SDValue FI = DAG.getFrameIndex(FuncInfo->getVarArgsFrameIndex(), PtrVT);
+    SDValue HiddenPtr = DAG.getLoad(PtrVT, DL, Op.getOperand(0), FI,
+                                    MachinePointerInfo());
+    return DAG.getStore(HiddenPtr.getValue(1), DL, HiddenPtr, Ptr,
+                        MachinePointerInfo(SV));
+  }
+
   // __va_list_tag:
   //   gp_offset         (0 - 6 * 8)
   //   fp_offset         (48 - 48 + 8 * 16)
@@ -26685,8 +26696,10 @@ SDValue X86TargetLowering::LowerVAARG(SDValue Op, SelectionDAG &DAG) const {
   assert(Op.getNumOperands() == 4);
 
   MachineFunction &MF = DAG.getMachineFunction();
-  if (Subtarget.isCallingConvWin64(MF.getFunction().getCallingConv()))
-    // The Win64 ABI uses char* instead of a structure.
+  if (Subtarget.isCallingConvWin64(MF.getFunction().getCallingConv()) ||
+      Subtarget.isLFI())
+    // Win64 and LFI both use char*-style va_list rather than the SysV
+    // gp/fp/overflow_arg_area structure.
     return DAG.expandVAArg(Op.getNode());
 
   SDValue Chain = Op.getOperand(0);
@@ -26743,8 +26756,9 @@ static SDValue LowerVACOPY(SDValue Op, const X86Subtarget &Subtarget,
   // where a va_list is still an i8*.
   assert(Subtarget.is64Bit() && "This code only handles 64-bit va_copy!");
   if (Subtarget.isCallingConvWin64(
-        DAG.getMachineFunction().getFunction().getCallingConv()))
-    // Probably a Win64 va_copy.
+        DAG.getMachineFunction().getFunction().getCallingConv()) ||
+      Subtarget.isLFI())
+    // Win64 and LFI use char*-style va_list; va_copy is a pointer copy.
     return DAG.expandVACopy(Op.getNode());
 
   SDValue Chain = Op.getOperand(0);

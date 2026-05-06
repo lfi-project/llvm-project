@@ -647,6 +647,10 @@ namespace llvm {
     Value *getSafeStackPointerLocation(
         IRBuilderBase &IRB, const LibcallLoweringInfo &Libcalls) const override;
 
+    Value *getSafeStackPointer(IRBuilderBase &IRB) const override;
+    Value *setSafeStackPointer(IRBuilderBase &IRB,
+                               Value *Pointer) const override;
+
     std::pair<SDValue, SDValue> BuildFILD(EVT DstVT, EVT SrcVT, const SDLoc &DL,
                                           SDValue Chain, SDValue Pointer,
                                           MachinePointerInfo PtrInfo,
