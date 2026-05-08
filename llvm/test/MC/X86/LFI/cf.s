@@ -12,7 +12,7 @@ jmpq *%rax
 
 // Indirect jump through memory.
 jmpq *(%rdi)
-// CHECK:      movq (%rdi), %r11
+// CHECK:      movq %gs:(%edi), %r11
 // CHECK-NEXT: .bundle_lock
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: addq %r14, %r11
@@ -21,7 +21,7 @@ jmpq *(%rdi)
 
 // Indirect jump through a complex memory addressing mode.
 jmpq *8(%rdi, %rsi, 4)
-// CHECK:      movq 8(%rdi,%rsi,4), %r11
+// CHECK:      movq %gs:8(%edi,%esi,4), %r11
 // CHECK-NEXT: .bundle_lock
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: addq %r14, %r11
@@ -39,7 +39,7 @@ callq *%rcx
 
 // Indirect call through memory.
 callq *(%rdx)
-// CHECK:      movq (%rdx), %r11
+// CHECK:      movq %gs:(%edx), %r11
 // CHECK-NEXT: .bundle_lock align_to_end
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: addq %r14, %r11
@@ -62,10 +62,14 @@ ret
 // CHECK-NEXT: .bundle_unlock
 
 // Return with immediate: pop additional stack bytes after popping the
-// return address.
+// return address. The post-pop addq is itself a stack modification and so
+// gets sandboxed (demoted to addl plus a lea fixup).
 retq $16
 // CHECK:      popq %r11
-// CHECK-NEXT: addq $16, %rsp
+// CHECK-NEXT: .bundle_lock
+// CHECK-NEXT: addl $16, %esp
+// CHECK-NEXT: leaq (%rsp,%r14), %rsp
+// CHECK-NEXT: .bundle_unlock
 // CHECK-NEXT: .bundle_lock
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: addq %r14, %r11
