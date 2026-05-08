@@ -483,6 +483,8 @@ sequence is placed at the end of the bundle.
 Control flow
 ~~~~~~~~~~~~
 
+**Note**: these rewrites have not been implemented.
+
 Indirect jumps are rewritten to first apply a mask that zeroes the top 32 bits
 and bottom 5 bits of the target. An ``addq`` instruction is then used to fill
 in the top 32 bits with the sandbox base.
@@ -521,8 +523,8 @@ mode.
 |                  |                              |
 |    callq *%rX    |    .bundle_lock align_to_end |
 |                  |    andl $0xffffffe0, %eX     |
-|                  |    addq %r14, %rX            |
-|                  |    callq *%rX                |
+|                  |    addq %r14, %r11           |
+|                  |    callq *%r11               |
 |                  |    .bundle_unlock            |
 |                  |                              |
 +------------------+------------------------------+
@@ -559,15 +561,106 @@ Memory accesses
 
 **Note**: these rewrites have not been implemented.
 
+Memory accesses are transformed to safe versions by rewriting the addressing
+mode. The rewrite prefixes the addressing mode with ``%gs:`` to make the access
+relative to the sandbox base. All registers must be changed to the 32-bit form
+(``%eX``).
+
+The stack ``%rsp`` may be accessed directly because it is always guaranteed to
+contain a valid sandbox address. ``lea`` instructions do not need rewriting for
+their addressing mode since they do not actually perform a memory access.
+
++--------------------+--------------------+
+|      Original      |     Rewritten      |
++--------------------+--------------------+
+| .. code-block::    | .. code-block::    |
+|                    |                    |
+|    lea N(...), ... |    lea N(...), ... |
+|                    |                    |
++--------------------+--------------------+
+
++-------------------+-----------------------+
+|     Original      |       Rewritten       |
++-------------------+-----------------------+
+| .. code-block::   | .. code-block::       |
+|                   |                       |
+|    N(%rsp)        |    N(%rsp)            |
+|                   |                       |
++-------------------+-----------------------+
+| .. code-block::   | .. code-block::       |
+|                   |                       |
+|    N(%rip)        |    N(%rip)            |
+|                   |                       |
++-------------------+-----------------------+
+| .. code-block::   | .. code-block::       |
+|                   |                       |
+|    N(%rX)         |    %gs:N(%eX)         |
+|                   |                       |
++-------------------+-----------------------+
+| .. code-block::   | .. code-block::       |
+|                   |                       |
+|    N(%rX, %rY, S) |    %gs:N(%eX, %eY, S) |
+|                   |                       |
++-------------------+-----------------------+
+| .. code-block::   | .. code-block::       |
+|                   |                       |
+|    N(, %rX, S)    |    N(, %eX, S)        |
+|                   |                       |
++-------------------+-----------------------+
+
 String instructions
 ~~~~~~~~~~~~~~~~~~~
 
 **Note**: these rewrites have not been implemented.
 
+String instructions perform memory accesses using specific registers. Those
+registers must be manually guarded before the instruction.
+
++-----------------+----------------------------+
+|    Original     |         Rewritten          |
++-----------------+----------------------------+
+| .. code-block:: | .. code-block::            |
+|                 |                            |
+|    rep? stosq   |    .bundle_lock            |
+|                 |    movl %edi, %edi         |
+|                 |    leaq (%r14, %rdi), %rdi |
+|                 |    rep? stosq              |
+|                 |    .bundle_unlock          |
+|                 |                            |
++-----------------+----------------------------+
+| .. code-block:: | .. code-block::            |
+|                 |                            |
+|    rep? movsq   |    .bundle_lock            |
+|                 |    movl %edi, %edi         |
+|                 |    leaq (%r14, %rdi), %rdi |
+|                 |    movl %esi, %esi         |
+|                 |    leaq (%r14, %rsi), %rsi |
+|                 |    rep? movsq              |
+|                 |    .bundle_unlock          |
+|                 |                            |
++-----------------+----------------------------+
+
 Stack modification
 ~~~~~~~~~~~~~~~~~~
 
 **Note**: these rewrites have not been implemented.
+
+Since the stack pointer must always contain a valid sandbox address, any
+modification to the stack pointer must be rewritten to modify it via ``%esp``
+and then re-guard it with ``leaq (%rsp, %r14), %rsp``. We use this guard form
+instead of ``addq %r14, %rsp`` to avoid modifying the flags.
+
++------------------+----------------------------+
+|     Original     |         Rewritten          |
++------------------+----------------------------+
+| .. code-block::  | .. code-block::            |
+|                  |                            |
+|    MOD ..., %rsp |    .bundle_lock            |
+|                  |    MOD ..., %esp           |
+|                  |    leaq (%rsp, %r14), %rsp |
+|                  |    .bundle_unlock          |
+|                  |                            |
++------------------+----------------------------+
 
 System instructions
 ~~~~~~~~~~~~~~~~~~~
