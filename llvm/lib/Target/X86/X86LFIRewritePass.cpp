@@ -15,9 +15,19 @@
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/Support/Alignment.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 
 using namespace llvm;
+
+// When set, also align the targets of direct branches to a bundle boundary,
+// so that every direct branch lands at the start of a bundle. This is not
+// required for soundness (the assembler/linker resolves direct branches at
+// compile time), but it simplifies verification.
+static cl::opt<bool> AlignDirectBranches(
+    "x86-lfi-align-direct-branches",
+    cl::desc("Align the targets of direct branches to a bundle boundary"),
+    cl::init(true), cl::Hidden);
 
 namespace {
 class X86LFIRewritePass : public MachineFunctionPass {
@@ -58,7 +68,8 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
       static_cast<const X86TargetMachine *>(&MF.getTarget());
 
   for (MachineBasicBlock &MBB : MF) {
-    if (MBB.hasAddressTaken() || JumpTableTargets.count(&MBB)) {
+    if (MBB.hasAddressTaken() || JumpTableTargets.count(&MBB) ||
+        AlignDirectBranches) {
       MBB.setAlignment(llvm::Align(32));
       Modified = true;
     }

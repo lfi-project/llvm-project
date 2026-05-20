@@ -158,10 +158,10 @@ public:
       AlignBranchType = X86AlignBranchKindLoc;
     if (X86PadMaxPrefixSize.getNumOccurrences())
       TargetPrefixMax = X86PadMaxPrefixSize;
-    else if (STI.getTargetTriple().isLFI())
-      // For LFI, default to using up to 5 prefix bytes for padding so that the
-      // bundle-NOP optimization (optimizeBundleNops) is enabled out of the box.
-      TargetPrefixMax = 5;
+    // else if (STI.getTargetTriple().isLFI())
+    //   // For LFI, default to using up to 5 prefix bytes for padding so that the
+    //   // bundle-NOP optimization (optimizeBundleNops) is enabled out of the box.
+    //   TargetPrefixMax = 5;
 
     AllowAutoPadding =
         AlignBoundary != Align(1) && AlignBranchType != X86::AlignBranchNone;

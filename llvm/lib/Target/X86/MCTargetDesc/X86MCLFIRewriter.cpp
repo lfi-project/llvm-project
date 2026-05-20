@@ -47,7 +47,7 @@ bool X86::X86MCLFIRewriter::hasSegue(const MCSubtargetInfo &STI) const {
 }
 
 bool X86::X86MCLFIRewriter::hasNoLFILoads(const MCSubtargetInfo &STI) const {
-  return true || STI.hasFeature(X86::FeatureNoLFILoads);
+  return STI.hasFeature(X86::FeatureNoLFILoads);
 }
 
 bool X86::X86MCLFIRewriter::hasNoLFIStores(const MCSubtargetInfo &STI) const {
