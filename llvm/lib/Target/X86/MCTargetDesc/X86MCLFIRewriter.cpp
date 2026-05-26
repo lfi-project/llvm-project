@@ -363,12 +363,18 @@ static bool isGR64OrNone(MCRegister Reg) {
 
 // syscall
 // ->
+// .bundle_lock
 // leaq .Ltmp(%rip), %r11
 // jmpq *(%r14)
 // .Ltmp:
+// .bundle_unlock
+//
+// The leaq and jmpq must execute atomically as a single bundle so the
+// runtime always sees %r11 holding the post-syscall return address.
 void X86::X86MCLFIRewriter::rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
                                            const MCSubtargetInfo &STI) {
   Out.emitBundleLock(/*AlignToEnd=*/false, STI);
+
   MCSymbol *Symbol = Out.getContext().createTempSymbol();
 
   MCInst Lea;
@@ -1248,18 +1254,18 @@ void X86::X86MCLFIRewriter::rewriteStringOperation(
   case X86::CMPSQ:
     // Both operands are loads.
     if (!SkipLoads) {
-      fixupStringOpReg(Inst.getOperand(1), Large, Out, STI);
       fixupStringOpReg(Inst.getOperand(0), Large, Out, STI);
+      fixupStringOpReg(Inst.getOperand(1), Large, Out, STI);
     }
     break;
   case X86::MOVSB:
   case X86::MOVSW:
   case X86::MOVSL:
   case X86::MOVSQ:
-    if (!SkipLoads)
-      fixupStringOpReg(Inst.getOperand(1), Large, Out, STI);
     if (!SkipStores)
       fixupStringOpReg(Inst.getOperand(0), Large, Out, STI);
+    if (!SkipLoads)
+      fixupStringOpReg(Inst.getOperand(1), Large, Out, STI);
     break;
   case X86::STOSB:
   case X86::STOSW:
