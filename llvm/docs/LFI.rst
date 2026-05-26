@@ -675,7 +675,7 @@ handler table is stored at the address pointed to by ``r14``.
 | .. code-block::   | .. code-block::               |
 |                   |                               |
 |    syscall        |    leaq .Ltmp(%rip), %r11     |
-|                   |    jmpq *(%r14)               |
+|                   |    jmpq *-8(%r14)             |
 |                   |    .Ltmp:                     |
 |                   |                               |
 +-------------------+-------------------------------+
