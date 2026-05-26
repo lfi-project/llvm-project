@@ -72,6 +72,9 @@ class MCAsmStreamer final : public MCAsmBaseStreamer {
                                raw_svector_ostream &OS) const;
   void emitCFIStartProcImpl(MCDwarfFrameInfo &Frame) override;
   void emitCFIEndProcImpl(MCDwarfFrameInfo &Frame) override;
+  void emitBundleAlignMode(Align Alignment) override;
+  void emitBundleLock(bool AlignToEnd, const MCSubtargetInfo &STI) override;
+  void emitBundleUnlock(const MCSubtargetInfo &STI) override;
 
   /// Helper to emit common .loc directive flags, isa, and discriminator.
   void emitDwarfLocDirectiveFlags(unsigned Flags, unsigned Isa,
@@ -444,6 +447,8 @@ public:
   /// string in the output .s file. This capability is indicated by the
   /// hasRawTextSupport() predicate.
   void emitRawTextImpl(StringRef String) override;
+
+  void initSections(const MCSubtargetInfo &STI) override;
 
   void finishImpl() override;
 
@@ -2564,6 +2569,24 @@ void MCAsmStreamer::emitPseudoProbe(uint64_t Guid, uint64_t Index,
   EmitEOL();
 }
 
+void MCAsmStreamer::emitBundleAlignMode(Align Alignment) {
+  OS << "\t.bundle_align_mode " << Log2(Alignment);
+  EmitEOL();
+}
+
+void MCAsmStreamer::emitBundleLock(bool AlignToEnd,
+                                   const MCSubtargetInfo &STI) {
+  OS << "\t.bundle_lock";
+  if (AlignToEnd)
+    OS << " align_to_end";
+  EmitEOL();
+}
+
+void MCAsmStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
+  OS << "\t.bundle_unlock";
+  EmitEOL();
+}
+
 void MCAsmStreamer::emitRelocDirective(const MCExpr &Offset, StringRef Name,
                                        const MCExpr *Expr, SMLoc) {
   OS << "\t.reloc ";
@@ -2594,6 +2617,12 @@ void MCAsmStreamer::emitRawTextImpl(StringRef String) {
   String.consume_back("\n");
   OS << String;
   EmitEOL();
+}
+
+void MCAsmStreamer::initSections(const MCSubtargetInfo &STI) {
+  MCStreamer::initSections(STI);
+  if (getContext().getTargetTriple().isLFI())
+    emitLFIBundleAlign(*this, getContext());
 }
 
 void MCAsmStreamer::finishImpl() {

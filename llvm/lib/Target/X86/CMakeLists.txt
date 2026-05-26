@@ -64,6 +64,7 @@ set(sources
   X86InsertX87Wait.cpp
   X86InterleavedAccess.cpp
   X86InstCombineIntrinsic.cpp
+  X86LFIRewritePass.cpp
   X86InstrFMA3Info.cpp
   X86InstrFoldTables.cpp
   X86InstrInfo.cpp
