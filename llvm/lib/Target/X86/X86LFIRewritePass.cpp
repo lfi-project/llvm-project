@@ -27,7 +27,7 @@ using namespace llvm;
 static cl::opt<bool> AlignDirectBranches(
     "x86-lfi-align-direct-branches",
     cl::desc("Align the targets of direct branches to a bundle boundary"),
-    cl::init(true), cl::Hidden);
+    cl::init(false), cl::Hidden);
 
 namespace {
 class X86LFIRewritePass : public MachineFunctionPass {

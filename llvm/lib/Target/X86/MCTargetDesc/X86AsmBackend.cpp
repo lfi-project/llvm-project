@@ -117,6 +117,10 @@ cl::opt<bool> X86PadForBranchAlign(
     "x86-pad-for-branch-align", cl::init(true), cl::Hidden,
     cl::desc("Pad previous instructions to implement branch alignment"));
 
+cl::opt<bool> X86PadForBundleAlign(
+    "x86-pad-for-bundle-align", cl::init(true), cl::Hidden,
+    cl::desc("Pad previous instructions to implement bundle alignment for LFI"));
+
 class X86AsmBackend : public MCAsmBackend {
   const MCSubtargetInfo &STI;
   std::unique_ptr<const MCInstrInfo> MCII;
@@ -158,10 +162,10 @@ public:
       AlignBranchType = X86AlignBranchKindLoc;
     if (X86PadMaxPrefixSize.getNumOccurrences())
       TargetPrefixMax = X86PadMaxPrefixSize;
-    // else if (STI.getTargetTriple().isLFI())
-    //   // For LFI, default to using up to 5 prefix bytes for padding so that the
-    //   // bundle-NOP optimization (optimizeBundleNops) is enabled out of the box.
-    //   TargetPrefixMax = 5;
+    else if (STI.getTargetTriple().isLFI() && X86PadForBundleAlign)
+      // For LFI, default to using up to 5 prefix bytes for padding so that the
+      // bundle-NOP optimization (optimizeBundleNops) is enabled out of the box.
+      TargetPrefixMax = 5;
 
     AllowAutoPadding =
         AlignBoundary != Align(1) && AlignBranchType != X86::AlignBranchNone;
