@@ -76,6 +76,14 @@ on AArch64 and ``r15`` on X86-64. The layout is as follows:
 | 16     | 8      | Virtual thread pointer (used for TP access). |
 +--------+--------+----------------------------------------------+
 
+On X86-64 the context register defaults to ``r15``, but it may optionally be
+relocated into the ``%gs`` segment base using the ``+lfi-gs-context`` option
+(see `GS context mode`_). The context block is then addressed through the
+``%gs`` segment override (for example, ``%gs:16`` reads the thread pointer)
+instead of relative to ``r15``, which frees ``r15`` for use as a
+general-purpose register. This option requires Segue to be disabled, since
+``%gs`` can no longer also hold the sandbox base.
+
 Linker Support
 ++++++++++++++
 
@@ -451,6 +459,35 @@ X86-64
 
 The X86-64 LFI target is ``x86_64_lfi``.
 
+Compiler Options
+================
+
+The X86-64 LFI target has several configuration options, specified as target
+features.
+
+* ``+no-lfi-loads``: disable sandboxing for loads, creating a stores-only
+  sandbox that may read, but not write, outside the sandbox region.
+* ``+no-lfi-stores``: disable sandboxing for stores.
+* ``+no-lfi-segue``: disable use of the ``%gs`` segment for memory sandboxing
+  (Segue). Effective addresses are instead computed into the scratch register
+  and combined with the sandbox base ``%r14``.
+* ``+lfi-gs-context``: place the context register in the ``%gs`` segment base
+  instead of ``r15`` (see `GS context mode`_). Requires ``+no-lfi-segue``.
+
+GS context mode
+~~~~~~~~~~~~~~~
+
+By default the X86-64 context register is ``r15``. With ``+lfi-gs-context``,
+the context register file is instead addressed through the ``%gs`` segment
+base: the thread pointer is read from ``%gs:16`` rather than ``16(%r15)``, and
+``r15`` becomes an unreserved general-purpose register.
+
+Because the ``%gs`` segment base can only hold one value, it cannot
+simultaneously serve as the sandbox base (Segue) and as the context register.
+``+lfi-gs-context`` therefore requires Segue to be disabled, and memory
+accesses use the non-Segue sandboxing sequence. Enabling both Segue and
+``+lfi-gs-context`` is an error.
+
 Reserved Registers
 ==================
 
@@ -458,10 +495,13 @@ The X86-64 LFI target reserves the following registers:
 
 * ``r14``: always holds the sandbox base address. Also used as the runtime call
   table pointer (the runtime call table is stored at the sandbox base).
-* ``gs``: always holds the sandbox base address (used as a segment register for
-  memory access sandboxing).
+* ``gs``: in the default configuration, holds the sandbox base address (used as
+  a segment register for memory access sandboxing, i.e. Segue). In
+  `GS context mode`_ it instead holds the context register base.
 * ``rsp``: always holds an address within the sandbox.
-* ``r15``: context register (see `Context Register`_).
+* ``r15``: context register (see `Context Register`_). In `GS context mode`_,
+  this role moves to ``%gs`` and ``r15`` becomes an unreserved general-purpose
+  register.
 * ``r11``: scratch register.
 
 Assembly Rewrites
@@ -684,9 +724,12 @@ Thread pointer
 ~~~~~~~~~~~~~~
 
 Thread pointer accesses via the ``%fs`` segment (used for TLS) are rewritten to
-use the virtual thread pointer from the context register (``r15``) at offset 16
+use the virtual thread pointer stored at offset 16 in the context register file
 (see `Context Register`_). The rewrite handles any load or store instruction
 with an ``%fs``-segment memory operand. ``Op`` represents any such instruction.
+
+In the default configuration the context register is ``r15`` and the thread
+pointer is read from ``16(%r15)``:
 
 +--------------------------------------+----------------------------------------+
 |              Original                |              Rewritten                 |
@@ -718,6 +761,47 @@ with an ``%fs``-segment memory operand. ``Op`` represents any such instruction.
 | .. code-block::                      | .. code-block::                        |
 |                                      |                                        |
 |    Op %rS, %fs:N(%rX, %rY, S)        |    movq 16(%r15), %r11                 |
+|                                      |    leaq (%r11, %rX), %r11              |
+|                                      |    Op %rS, N(%r11, %rY, S)             |
+|                                      |                                        |
++--------------------------------------+----------------------------------------+
+
+In `GS context mode`_ the context register file is addressed through the
+``%gs`` segment base, so each ``16(%r15)`` above becomes ``%gs:16`` and each
+``movq 16(%r15), ...`` thread-pointer load becomes ``movq %gs:16, ...``. The
+trailing non-``%fs`` accesses are sandboxed by the standard (non-Segue)
+load/store path:
+
++--------------------------------------+----------------------------------------+
+|              Original                |              Rewritten                 |
++--------------------------------------+----------------------------------------+
+| .. code-block::                      | .. code-block::                        |
+|                                      |                                        |
+|    Op %fs:0, %rD                     |    Op %gs:16, %rD                      |
+|                                      |                                        |
++--------------------------------------+----------------------------------------+
+| .. code-block::                      | .. code-block::                        |
+|                                      |                                        |
+|    Op %fs:(%rX), %rD                 |    movq %gs:16, %rD                    |
+|                                      |    Op (%rD, %rX), %rD                  |
+|                                      |                                        |
++--------------------------------------+----------------------------------------+
+| .. code-block::                      | .. code-block::                        |
+|                                      |                                        |
+|    Op %rS, %fs:(%rX)                 |    movq %gs:16, %r11                   |
+|                                      |    Op %rS, (%r11, %rX)                 |
+|                                      |                                        |
++--------------------------------------+----------------------------------------+
+| .. code-block::                      | .. code-block::                        |
+|                                      |                                        |
+|    Op %fs:N(%rX, %rY, S), %rD        |    movq %gs:16, %r11                   |
+|                                      |    leaq (%r11, %rX), %r11              |
+|                                      |    Op N(%r11, %rY, S), %rD             |
+|                                      |                                        |
++--------------------------------------+----------------------------------------+
+| .. code-block::                      | .. code-block::                        |
+|                                      |                                        |
+|    Op %rS, %fs:N(%rX, %rY, S)        |    movq %gs:16, %r11                   |
 |                                      |    leaq (%r11, %rX), %r11              |
 |                                      |    Op %rS, N(%r11, %rY, S)             |
 |                                      |                                        |

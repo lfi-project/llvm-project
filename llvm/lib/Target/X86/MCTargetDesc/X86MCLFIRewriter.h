@@ -41,6 +41,10 @@ private:
   /// Recursion guard to prevent infinite loops when emitting instructions.
   bool Guard = false;
 
+  /// Set once the subtarget feature configuration has been validated, so the
+  /// check (and any diagnostic) is only performed a single time.
+  bool ConfigChecked = false;
+
   /// Accumulated prefix instructions (LOCK, REP, etc.) to emit alongside the
   /// next non-prefix instruction.
   SmallVector<MCInst, 2> Prefixes;
@@ -49,6 +53,10 @@ private:
   bool hasSegue(const MCSubtargetInfo &STI) const;
   bool hasNoLFILoads(const MCSubtargetInfo &STI) const;
   bool hasNoLFIStores(const MCSubtargetInfo &STI) const;
+
+  /// Returns true if the context register is the %gs segment base (instead of
+  /// r15). Requires Segue to be disabled.
+  bool hasGSContext(const MCSubtargetInfo &STI) const;
 
   /// Main dispatch function for instruction rewriting.
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
@@ -98,7 +106,8 @@ private:
   bool isFSAccess(const MCInst &Inst);
 
   /// Rewrite a %fs-segmented memory access into a thread-pointer-relative
-  /// access via the context register (R15).
+  /// access via the context register: r15 by default, or the %gs segment base
+  /// in GS-context mode.
   void rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI);
 

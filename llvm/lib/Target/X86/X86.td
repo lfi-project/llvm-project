@@ -492,6 +492,8 @@ def FeatureNoLFIStores : SubtargetFeature<"no-lfi-stores", "NoLFIStores", "true"
   "Disable LFI sandboxing for store instructions">;
 def FeatureNoLFISegue : SubtargetFeature<"no-lfi-segue", "NoLFISegue", "true",
   "Disable LFI use of GS segment for memory sandboxing">;
+def FeatureLFIGSContext : SubtargetFeature<"lfi-gs-context", "LFIGSContext", "true",
+  "Use the GS segment as the LFI context register instead of r15 (requires no-lfi-segue)">;
 
 //===----------------------------------------------------------------------===//
 // X86 Subtarget Tuning features

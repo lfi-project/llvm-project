@@ -46,8 +46,12 @@ bool X86::X86MCLFIRewriter::hasSegue(const MCSubtargetInfo &STI) const {
   return !STI.hasFeature(X86::FeatureNoLFISegue);
 }
 
+bool X86::X86MCLFIRewriter::hasGSContext(const MCSubtargetInfo &STI) const {
+  return STI.hasFeature(X86::FeatureLFIGSContext);
+}
+
 bool X86::X86MCLFIRewriter::hasNoLFILoads(const MCSubtargetInfo &STI) const {
-  return true || STI.hasFeature(X86::FeatureNoLFILoads);
+  return STI.hasFeature(X86::FeatureNoLFILoads);
 }
 
 bool X86::X86MCLFIRewriter::hasNoLFIStores(const MCSubtargetInfo &STI) const {
@@ -354,17 +358,20 @@ static int findFSMemOperand(const MCInst &Inst, const MCInstrInfo &InstInfo) {
   return -1;
 }
 
-// Emit: movq TPOffset(%r15), %Reg
-static void emitTPLoad(MCRegister Reg, MCStreamer &Out,
+// Emit the thread-pointer load from the context register file:
+//   movq TPOffset(%r15), %Reg      (default, context register is r15)
+//   movq %gs:TPOffset, %Reg        (GS-context mode)
+static void emitTPLoad(MCRegister Reg, bool GSContext, MCStreamer &Out,
                        const MCSubtargetInfo &STI) {
   MCInst Mov;
   Mov.setOpcode(X86::MOV64rm);
   Mov.addOperand(MCOperand::createReg(Reg));
-  Mov.addOperand(MCOperand::createReg(LFITPReg));
+  Mov.addOperand(MCOperand::createReg(GSContext ? X86::NoRegister : LFITPReg));
   Mov.addOperand(MCOperand::createImm(1));
   Mov.addOperand(MCOperand::createReg(X86::NoRegister));
   Mov.addOperand(MCOperand::createImm(TPOffset));
-  Mov.addOperand(MCOperand::createReg(X86::NoRegister));
+  Mov.addOperand(
+      MCOperand::createReg(GSContext ? LFIBaseSeg : X86::NoRegister));
   Out.emitInstruction(Mov, STI);
 }
 
@@ -374,7 +381,10 @@ bool X86::X86MCLFIRewriter::isFSAccess(const MCInst &Inst) {
 }
 
 // Rewrite %fs-segment memory accesses to use the virtual thread pointer stored
-// at TPOffset(%r15). Example rewrites:
+// at TPOffset in the context register file. In the default configuration the
+// context register is r15 and the thread pointer lives at TPOffset(%r15); in
+// GS-context mode each TPOffset(%r15) below is instead %gs:TPOffset. Example
+// rewrites (default configuration):
 //
 // movq %fs:0, %rax
 // ->
@@ -402,12 +412,15 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
   bool HasDisp = !Inst.getOperand(MemIdx + 3).isImm() ||
                  Inst.getOperand(MemIdx + 3).getImm() != 0;
 
-  // %fs:0 -> TPOffset(%r15)
+  bool GSContext = hasGSContext(STI);
+
+  // %fs:0 -> TPOffset(%r15)   (or %gs:TPOffset in GS-context mode)
   if (!HasBase && !HasIndex && !HasDisp) {
     MCInst Modified(Inst);
-    Modified.getOperand(MemIdx).setReg(LFITPReg);
+    Modified.getOperand(MemIdx).setReg(GSContext ? X86::NoRegister : LFITPReg);
     Modified.getOperand(MemIdx + 3).setImm(TPOffset);
-    Modified.getOperand(MemIdx + 4).setReg(X86::NoRegister);
+    Modified.getOperand(MemIdx + 4).setReg(GSContext ? LFIBaseSeg
+                                                     : X86::NoRegister);
     return Out.emitInstruction(Modified, STI);
   }
 
@@ -423,7 +436,7 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
       TPDest = DestReg;
   }
 
-  emitTPLoad(TPDest, Out, STI);
+  emitTPLoad(TPDest, GSContext, Out, STI);
 
   // Both slots occupied: fold base into TPDest via lea.
   if (HasBase && HasIndex) {
@@ -1183,8 +1196,11 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
     return;
   }
 
+  // r14 is always reserved. r15 is reserved as the context register only when
+  // GS-context mode is off; in GS-context mode the context register file is
+  // addressed via %gs and r15 is an ordinary general-purpose register.
   if (mayModifyRegister(Inst, LFIBaseReg) ||
-      mayModifyRegister(Inst, LFITPReg))
+      (!hasGSContext(STI) && mayModifyRegister(Inst, LFITPReg)))
     return error(Inst, "illegal modification of reserved LFI register");
 
   if (isSyscall(Inst))
@@ -1211,8 +1227,9 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   if (isFSAccess(Inst))
     return rewriteFSAccess(Inst, Out, STI);
 
-  // Reject sandbox-incompatible uses of the %gs segment, which is reserved
-  // for memory sandboxing.
+  // Reject sandbox-incompatible uses of the %gs segment, which is reserved by
+  // the LFI ABI (as the sandbox base for memory sandboxing, or as the context
+  // register in GS-context mode).
   for (unsigned I = 0, E = Inst.getNumOperands(); I < E; ++I) {
     if (Inst.getOperand(I).isReg() &&
         Inst.getOperand(I).getReg() == X86::GS)
@@ -1229,6 +1246,16 @@ bool X86::X86MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
   if (!Enabled || Guard)
     return false;
   Guard = true;
+
+  // GS-context mode repurposes the %gs segment base as the context register,
+  // so %gs can no longer hold the sandbox base for Segue. Diagnose this
+  // invalid combination once.
+  if (!ConfigChecked) {
+    ConfigChecked = true;
+    if (hasGSContext(STI) && hasSegue(STI))
+      error(Inst, "lfi-gs-context requires Segue to be disabled "
+                  "(add +no-lfi-segue)");
+  }
 
   doRewriteInst(Inst, Out, STI, /*EmitPrefixes=*/true);
 
