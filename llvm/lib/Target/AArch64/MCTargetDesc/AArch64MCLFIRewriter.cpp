@@ -69,6 +69,7 @@ static bool isNotMemAccess(const MCInst &Inst) {
   case AArch64::DMB:
   case AArch64::DSB:
   case AArch64::ISB:
+  case AArch64::CLREX:
   case AArch64::HINT:
     return true;
   default:
