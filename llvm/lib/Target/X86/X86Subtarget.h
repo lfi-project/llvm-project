@@ -311,6 +311,15 @@ public:
 
   bool isLFI() const { return TargetTriple.isLFI(); }
 
+  /// Returns true if the LFI large-sandbox scheme is enabled, which supports
+  /// any power-of-two sandbox size and reserves r13 as the mask register.
+  bool isLFILargeSandbox() const { return LFILargeSandbox; }
+
+  /// Returns true if the LFI context register file is addressed through the
+  /// %gs segment base instead of r15, which frees r15 as a general-purpose
+  /// register (see GS context mode).
+  bool isLFIGSContext() const { return LFIGSContext; }
+
   bool isTargetWindowsMSVC() const {
     return TargetTriple.isWindowsMSVCEnvironment();
   }

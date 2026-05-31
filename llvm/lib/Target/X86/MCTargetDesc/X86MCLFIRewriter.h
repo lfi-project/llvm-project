@@ -54,6 +54,11 @@ private:
   bool hasNoLFILoads(const MCSubtargetInfo &STI) const;
   bool hasNoLFIStores(const MCSubtargetInfo &STI) const;
 
+  /// Returns true if the large-sandbox scheme is enabled, which supports any
+  /// power-of-two sandbox size by masking addresses with the r13 mask register
+  /// instead of relying on a fixed 4GiB truncation. Implies Segue is disabled.
+  bool hasLargeSandbox(const MCSubtargetInfo &STI) const;
+
   /// Returns true if the context register is the %gs segment base (instead of
   /// r15). Requires Segue to be disabled.
   bool hasGSContext(const MCSubtargetInfo &STI) const;

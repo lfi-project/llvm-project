@@ -64,6 +64,12 @@ enum IPREFIXES {
   IP_USE_EVEX = 1U << 11,
   IP_USE_DISP8 = 1U << 12,
   IP_USE_DISP32 = 1U << 13,
+
+  // Not an instruction prefix, but stored in the same MCInst::Flags field. Set
+  // by X86MCInstLower on a sandboxed memory access when a late LFI pass has
+  // proved EFLAGS is dead across it, so the LFI rewriter may mask the address
+  // with the cheaper flag-clobbering andq instead of pext.
+  IP_LFI_FLAGS_DEAD = 1U << 16,
 };
 
 enum OperandType : unsigned {

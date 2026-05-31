@@ -37,6 +37,34 @@ private:
 char X86LFIRewritePass::ID = 0;
 } // namespace
 
+// In large-sandbox mode the LFI rewriter masks addresses with andq when it can
+// (it clobbers EFLAGS) and falls back to the slower flag-preserving pext
+// otherwise. Mark each memory access that neither reads nor writes EFLAGS and
+// across which EFLAGS is dead with a dead implicit EFLAGS def. X86MCInstLower
+// turns that marker into the IP_LFI_FLAGS_DEAD MCInst flag, letting the
+// rewriter use the cheaper andq for that access.
+static bool markDeadFlagsMemOps(MachineBasicBlock &MBB,
+                                const TargetRegisterInfo *TRI) {
+  SmallVector<MachineInstr *, 16> ToMark;
+  for (MachineBasicBlock::iterator I = MBB.begin(), E = MBB.end(); I != E; ++I) {
+    MachineInstr &MI = *I;
+    if (!MI.mayLoad() && !MI.mayStore())
+      continue;
+    const MCInstrDesc &Desc = MI.getDesc();
+    if (Desc.hasImplicitDefOfPhysReg(X86::EFLAGS) ||
+        Desc.hasImplicitUseOfPhysReg(X86::EFLAGS))
+      continue;
+    // Compute liveness on the unmodified block, then mark, so the queries are
+    // not perturbed by the markers we add.
+    if (MBB.computeRegisterLiveness(TRI, X86::EFLAGS, I) ==
+        MachineBasicBlock::LQR_Dead)
+      ToMark.push_back(&MI);
+  }
+  for (MachineInstr *MI : ToMark)
+    MI->addRegisterDead(X86::EFLAGS, TRI, /*AddIfNotFound=*/true);
+  return !ToMark.empty();
+}
+
 bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
   bool Modified = false;
 
@@ -44,6 +72,12 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
   Subtarget = &MF.getSubtarget<X86Subtarget>();
 
   MF.setAlignment(llvm::Align(32));
+
+  if (Subtarget->isLFILargeSandbox()) {
+    const TargetRegisterInfo *TRI = Subtarget->getRegisterInfo();
+    for (MachineBasicBlock &MBB : MF)
+      Modified |= markDeadFlagsMemOps(MBB, TRI);
+  }
 
   // LLVM does not consider basic blocks which are the targets of jump tables
   // to be address-taken (the address can't escape anywhere else), but they are

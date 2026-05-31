@@ -35,6 +35,13 @@ protected:
   std::unique_ptr<MCInstrInfo> InstInfo;
   std::unique_ptr<MCRegisterInfo> RegInfo;
 
+  /// Set by the .lfi_flags_dead directive to assert that the flags are dead at
+  /// the current location. While active, the target rewriter may use a cheaper
+  /// flag-clobbering sandboxing sequence (e.g. andq instead of pext) for
+  /// load/store instructions. The target rewriter clears this once it reaches
+  /// an instruction that redefines the flags.
+  bool FlagsDeadActive = false;
+
 public:
   MCLFIRewriter(MCContext &Ctx, std::unique_ptr<MCRegisterInfo> &&RI,
                 std::unique_ptr<MCInstrInfo> &&II)
@@ -44,6 +51,10 @@ public:
 
   void disable() { Enabled = false; }
   void enable() { Enabled = true; }
+
+  /// Assert that the flags are dead at the current location (see the
+  /// .lfi_flags_dead assembler directive).
+  void markFlagsDead() { FlagsDeadActive = true; }
 
   LLVM_ABI bool isCall(const MCInst &Inst) const;
   LLVM_ABI bool isBranch(const MCInst &Inst) const;

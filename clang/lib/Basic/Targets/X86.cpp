@@ -455,6 +455,16 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasJMPABS = true;
     } else if (Feature == "+branch-hint") {
       HasBranchHint = true;
+    } else if (Feature == "+no-lfi-loads") {
+      HasLFINoLoads = true;
+    } else if (Feature == "+no-lfi-stores") {
+      HasLFINoStores = true;
+    } else if (Feature == "+no-lfi-segue") {
+      HasLFINoSegue = true;
+    } else if (Feature == "+lfi-gs-context") {
+      HasLFIGSContext = true;
+    } else if (Feature == "+lfi-large-sandbox") {
+      HasLFILargeSandbox = true;
     }
 
     X86SSEEnum Level = llvm::StringSwitch<X86SSEEnum>(Feature)
@@ -536,6 +546,19 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
 
   if (getTriple().isLFI()) {
     Builder.defineMacro("__LFI__");
+    // Communicate the enabled LFI subtarget features. Each macro mirrors one
+    // configuration knob (see clang's -mlfi= option) and is defined to 1 only
+    // when that feature is active.
+    if (HasLFINoLoads)
+      Builder.defineMacro("__LFI_NO_LOADS__");
+    if (HasLFINoStores)
+      Builder.defineMacro("__LFI_NO_STORES__");
+    if (HasLFINoSegue)
+      Builder.defineMacro("__LFI_NO_SEGUE__");
+    if (HasLFIGSContext)
+      Builder.defineMacro("__LFI_GS_CONTEXT__");
+    if (HasLFILargeSandbox)
+      Builder.defineMacro("__LFI_LARGE_SANDBOX__");
   }
 
   Builder.defineMacro("__SEG_GS");

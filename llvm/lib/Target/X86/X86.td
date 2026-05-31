@@ -494,6 +494,10 @@ def FeatureNoLFISegue : SubtargetFeature<"no-lfi-segue", "NoLFISegue", "true",
   "Disable LFI use of GS segment for memory sandboxing">;
 def FeatureLFIGSContext : SubtargetFeature<"lfi-gs-context", "LFIGSContext", "true",
   "Use the GS segment as the LFI context register instead of r15 (requires no-lfi-segue)">;
+def FeatureLFILargeSandbox : SubtargetFeature<"lfi-large-sandbox", "LFILargeSandbox", "true",
+  "Use the LFI large-sandbox scheme, supporting any power-of-two sandbox size "
+  "(reserves r13 as the mask register and implies no-lfi-segue)",
+  [FeatureNoLFISegue]>;
 
 //===----------------------------------------------------------------------===//
 // X86 Subtarget Tuning features

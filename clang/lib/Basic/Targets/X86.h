@@ -182,6 +182,14 @@ class LLVM_LIBRARY_VISIBILITY X86TargetInfo : public TargetInfo {
   bool HasInlineAsmUseGPR32 = false;
   bool HasBranchHint = false;
 
+  // LFI (Lightweight Fault Isolation) sandboxing configuration. Mirrors the
+  // corresponding X86 subtarget features; used to define the __LFI_*__ macros.
+  bool HasLFINoLoads = false;
+  bool HasLFINoStores = false;
+  bool HasLFINoSegue = false;
+  bool HasLFIGSContext = false;
+  bool HasLFILargeSandbox = false;
+
 protected:
   llvm::X86::CPUKind CPU = llvm::X86::CK_None;
 

@@ -30,6 +30,9 @@ static constexpr MCRegister LFIBaseReg = X86::R14;
 static constexpr MCRegister LFIScratchReg = X86::R11;
 static constexpr MCRegister LFITPReg = X86::R15;
 static constexpr MCRegister LFIBaseSeg = X86::GS;
+// In large-sandbox mode this register holds the sandbox size mask (2^k - 1),
+// used to confine an address to the sandbox.
+static constexpr MCRegister LFIMaskReg = X86::R13;
 
 // Indirect branch targets must be aligned to a multiple of this size.
 static constexpr unsigned BundleSize = 32;
@@ -48,6 +51,10 @@ bool X86::X86MCLFIRewriter::hasSegue(const MCSubtargetInfo &STI) const {
 
 bool X86::X86MCLFIRewriter::hasGSContext(const MCSubtargetInfo &STI) const {
   return STI.hasFeature(X86::FeatureLFIGSContext);
+}
+
+bool X86::X86MCLFIRewriter::hasLargeSandbox(const MCSubtargetInfo &STI) const {
+  return STI.hasFeature(X86::FeatureLFILargeSandbox);
 }
 
 bool X86::X86MCLFIRewriter::hasNoLFILoads(const MCSubtargetInfo &STI) const {
@@ -198,6 +205,33 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
                                                  const MCSubtargetInfo &STI) {
   MCRegister Reg32 = getReg32(Reg);
   MCRegister Reg64 = getReg64(Reg);
+
+  // Large-sandbox mode masks the target to the sandbox with %r13, then aligns
+  // it to a bundle boundary by clearing the low bits, then adds the base. Both
+  // masks clobber the flags, which is harmless for control flow.
+  if (hasLargeSandbox(STI)) {
+    MCInst AndMask;
+    AndMask.setOpcode(X86::AND64rr);
+    AndMask.addOperand(MCOperand::createReg(Reg64));
+    AndMask.addOperand(MCOperand::createReg(Reg64));
+    AndMask.addOperand(MCOperand::createReg(LFIMaskReg));
+    Out.emitInstruction(AndMask, STI);
+
+    MCInst AndAlign;
+    AndAlign.setOpcode(X86::AND64ri8);
+    AndAlign.addOperand(MCOperand::createReg(Reg64));
+    AndAlign.addOperand(MCOperand::createReg(Reg64));
+    AndAlign.addOperand(MCOperand::createImm(-static_cast<int>(BundleSize)));
+    Out.emitInstruction(AndAlign, STI);
+
+    MCInst Add;
+    Add.setOpcode(X86::ADD64rr);
+    Add.addOperand(MCOperand::createReg(Reg64));
+    Add.addOperand(MCOperand::createReg(Reg64));
+    Add.addOperand(MCOperand::createReg(LFIBaseReg));
+    Out.emitInstruction(Add, STI);
+    return;
+  }
 
   MCInst And;
   And.setOpcode(X86::AND32ri8);
@@ -567,6 +601,89 @@ void X86::X86MCLFIRewriter::emitSandboxMemOp(MCInst &Inst, int MemIdx,
   }
   MCRegister ScratchReg32 = getReg32(ScratchReg);
   MCRegister ScratchReg64 = getReg64(ScratchReg);
+
+  // Large-sandbox mode: compute the full effective address into the scratch
+  // register, mask it to the sandbox size with %r13, and access via
+  // (%r14, scratch). The mask cannot be folded into a 32-bit truncation as in
+  // the fixed-4GiB scheme, so it is emitted explicitly. When the instruction
+  // being rewritten does not itself define EFLAGS, the mask is placed before a
+  // memory access that must preserve the flags, so pext is used instead of andq
+  // to avoid clobbering them.
+  if (hasLargeSandbox(STI)) {
+    // The mask is emitted before the memory access, so the cheaper
+    // flag-clobbering andq is only safe when the access overwrites EFLAGS
+    // itself without also reading them (e.g. add, but not adc/sbb), or when a
+    // late pass has proved EFLAGS is dead across the access
+    // (IP_LFI_FLAGS_DEAD). Otherwise the flags are preserved with pext.
+    const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
+    bool WritesFlags = Desc.hasImplicitDefOfPhysReg(X86::EFLAGS);
+    bool ReadsFlags = Desc.hasImplicitUseOfPhysReg(X86::EFLAGS);
+    bool FlagsDead = (Inst.getFlags() & X86::IP_LFI_FLAGS_DEAD) != 0;
+    bool PreserveFlags = ReadsFlags || (!WritesFlags && !FlagsDead);
+
+    // A bare base register can be masked directly; otherwise compute the
+    // effective address with a 64-bit lea first.
+    MCRegister AddrReg;
+    bool OnlyBase = Base.getReg() != X86::NoRegister &&
+                    Index.getReg() == X86::NoRegister && Offset.isImm() &&
+                    Offset.getImm() == 0;
+    if (OnlyBase) {
+      AddrReg = getReg64(Base.getReg());
+    } else {
+      MCInst Lea;
+      Lea.setOpcode(X86::LEA64r);
+      Lea.addOperand(MCOperand::createReg(ScratchReg64));
+      Lea.addOperand(MCOperand::createReg(getReg64(Base.getReg())));
+      Lea.addOperand(Scale);
+      Lea.addOperand(MCOperand::createReg(getReg64(Index.getReg())));
+      Lea.addOperand(Offset);
+      Lea.addOperand(MCOperand::createReg(X86::NoRegister));
+      // Canonicalize "(,%index,1)" into "(%index)".
+      if (Base.getReg() == X86::NoRegister && Scale.isImm() &&
+          Scale.getImm() == 1) {
+        Lea.getOperand(1).setReg(getReg64(Index.getReg()));
+        Lea.getOperand(3).setReg(X86::NoRegister);
+      }
+      Out.emitInstruction(Lea, STI);
+      AddrReg = ScratchReg64;
+    }
+
+    if (PreserveFlags) {
+      // pext %r13, %AddrReg, %scratch
+      MCInst Pext;
+      Pext.setOpcode(X86::PEXT64rr);
+      Pext.addOperand(MCOperand::createReg(ScratchReg64));
+      Pext.addOperand(MCOperand::createReg(AddrReg));
+      Pext.addOperand(MCOperand::createReg(LFIMaskReg));
+      Out.emitInstruction(Pext, STI);
+    } else {
+      if (AddrReg != ScratchReg64) {
+        MCInst Mov;
+        Mov.setOpcode(X86::MOV64rr);
+        Mov.addOperand(MCOperand::createReg(ScratchReg64));
+        Mov.addOperand(MCOperand::createReg(AddrReg));
+        Out.emitInstruction(Mov, STI);
+      }
+      // andq %r13, %scratch
+      MCInst And;
+      And.setOpcode(X86::AND64rr);
+      And.addOperand(MCOperand::createReg(ScratchReg64));
+      And.addOperand(MCOperand::createReg(ScratchReg64));
+      And.addOperand(MCOperand::createReg(LFIMaskReg));
+      Out.emitInstruction(And, STI);
+    }
+
+    Base.setReg(LFIBaseReg);
+    Scale.setImm(1);
+    Index.setReg(ScratchReg64);
+    if (Offset.isImm()) {
+      Offset.setImm(0);
+    } else {
+      Inst.erase(Inst.begin() + MemIdx + 3);
+      Inst.insert(Inst.begin() + MemIdx + 3, MCOperand::createImm(0));
+    }
+    return;
+  }
 
   // Case 5a: absolute base + non-absolute index, zero offset. Fold the index
   // into the scratch register and use the original (absolute) base.
@@ -1049,10 +1166,23 @@ static void clearHighBits(const MCOperand &Reg, MCStreamer &Out,
 }
 
 // Force the implicit %rsi/%rdi register used by string ops to a sandbox-valid
-// pointer (movl %eX,%eX; leaq (%r14,%rX),%rX).
-static void fixupStringOpReg(const MCOperand &Op, MCStreamer &Out,
+// pointer. The fixed-4GiB scheme truncates the pointer to 32 bits (movl
+// %eX,%eX); large-sandbox mode instead masks it to the sandbox size with %r13.
+// pext is used so the mask does not clobber the flags, since the string
+// instruction does not necessarily set them (e.g. rep movs).
+static void fixupStringOpReg(const MCOperand &Op, bool Large, MCStreamer &Out,
                              const MCSubtargetInfo &STI) {
-  clearHighBits(Op, Out, STI);
+  if (Large) {
+    MCRegister Reg = getReg64(Op.getReg());
+    MCInst Pext;
+    Pext.setOpcode(X86::PEXT64rr);
+    Pext.addOperand(MCOperand::createReg(Reg));
+    Pext.addOperand(MCOperand::createReg(Reg));
+    Pext.addOperand(MCOperand::createReg(LFIMaskReg));
+    Out.emitInstruction(Pext, STI);
+  } else {
+    clearHighBits(Op, Out, STI);
+  }
 
   MCInst Lea;
   Lea.setOpcode(X86::LEA64r);
@@ -1070,6 +1200,7 @@ void X86::X86MCLFIRewriter::rewriteStringOperation(
     bool EmitPrefixes) {
   bool SkipLoads = hasNoLFILoads(STI);
   bool SkipStores = hasNoLFIStores(STI);
+  bool Large = hasLargeSandbox(STI);
 
   Out.emitBundleLock(/*AlignToEnd=*/false, STI);
 
@@ -1080,8 +1211,8 @@ void X86::X86MCLFIRewriter::rewriteStringOperation(
   case X86::CMPSQ:
     // Both operands are loads.
     if (!SkipLoads) {
-      fixupStringOpReg(Inst.getOperand(1), Out, STI);
-      fixupStringOpReg(Inst.getOperand(0), Out, STI);
+      fixupStringOpReg(Inst.getOperand(1), Large, Out, STI);
+      fixupStringOpReg(Inst.getOperand(0), Large, Out, STI);
     }
     break;
   case X86::MOVSB:
@@ -1089,16 +1220,16 @@ void X86::X86MCLFIRewriter::rewriteStringOperation(
   case X86::MOVSL:
   case X86::MOVSQ:
     if (!SkipLoads)
-      fixupStringOpReg(Inst.getOperand(1), Out, STI);
+      fixupStringOpReg(Inst.getOperand(1), Large, Out, STI);
     if (!SkipStores)
-      fixupStringOpReg(Inst.getOperand(0), Out, STI);
+      fixupStringOpReg(Inst.getOperand(0), Large, Out, STI);
     break;
   case X86::STOSB:
   case X86::STOSW:
   case X86::STOSL:
   case X86::STOSQ:
     if (!SkipStores)
-      fixupStringOpReg(Inst.getOperand(0), Out, STI);
+      fixupStringOpReg(Inst.getOperand(0), Large, Out, STI);
     break;
   }
 
@@ -1138,12 +1269,14 @@ void X86::X86MCLFIRewriter::rewriteStackModification(MCRegister StackReg,
   }
 
   if (Inst.getOpcode() == X86::POP64r) {
-    // Transform "pop %rsp" into:
+    // Transform "pop %rsp" into a pop into the scratch register followed by a
+    // masked rebuild of %rsp:
     //   pop %r11
     //   .bundle_lock
-    //   movl %r11d, %esp
-    //   leaq (%rsp,%r14), %rsp
+    //   movl %r11d, %esp           (fixed-4GiB)   OR   pext %r13, %r11, %r11
+    //   leaq (%rsp,%r14), %rsp     (fixed-4GiB)   OR   leaq (%r14,%r11), %rsp
     //   .bundle_unlock
+    // In large-sandbox mode pext preserves the flags, which "pop" does not set.
     MCInst PopR11;
     PopR11.setOpcode(X86::POP64r);
     PopR11.addOperand(MCOperand::createReg(LFIScratchReg));
@@ -1151,33 +1284,71 @@ void X86::X86MCLFIRewriter::rewriteStackModification(MCRegister StackReg,
 
     Out.emitBundleLock(/*AlignToEnd=*/false, STI);
 
-    MCInst MovR11ToESP;
-    MovR11ToESP.setOpcode(X86::MOV32rr);
-    MovR11ToESP.addOperand(MCOperand::createReg(getReg32(StackReg)));
-    MovR11ToESP.addOperand(MCOperand::createReg(X86::R11D));
-    Out.emitInstruction(MovR11ToESP, STI);
+    if (hasLargeSandbox(STI)) {
+      MCInst Pext;
+      Pext.setOpcode(X86::PEXT64rr);
+      Pext.addOperand(MCOperand::createReg(LFIScratchReg));
+      Pext.addOperand(MCOperand::createReg(LFIScratchReg));
+      Pext.addOperand(MCOperand::createReg(LFIMaskReg));
+      Out.emitInstruction(Pext, STI);
 
-    emitStackFixup(StackReg, Out, STI);
+      MCInst Lea;
+      Lea.setOpcode(X86::LEA64r);
+      Lea.addOperand(MCOperand::createReg(StackReg));
+      Lea.addOperand(MCOperand::createReg(LFIBaseReg));
+      Lea.addOperand(MCOperand::createImm(1));
+      Lea.addOperand(MCOperand::createReg(LFIScratchReg));
+      Lea.addOperand(MCOperand::createImm(0));
+      Lea.addOperand(MCOperand::createReg(X86::NoRegister));
+      Out.emitInstruction(Lea, STI);
+    } else {
+      MCInst MovR11ToESP;
+      MovR11ToESP.setOpcode(X86::MOV32rr);
+      MovR11ToESP.addOperand(MCOperand::createReg(getReg32(StackReg)));
+      MovR11ToESP.addOperand(MCOperand::createReg(X86::R11D));
+      Out.emitInstruction(MovR11ToESP, STI);
+
+      emitStackFixup(StackReg, Out, STI);
+    }
 
     Out.emitBundleUnlock(STI);
     return;
   }
 
-  // For other %rsp modifications, demote the instruction to a 32-bit form so
-  // the high 32 bits of %rsp are zeroed, then restore the sandbox base with a
-  // lea fixup.
-  MCInst SandboxedInst(Inst);
-  demoteInst(SandboxedInst, *InstInfo);
+  // For other %rsp modifications: in the fixed-4GiB scheme demote the
+  // instruction to a 32-bit form so the high 32 bits of %rsp are zeroed; in
+  // large-sandbox mode keep the 64-bit instruction and mask %rsp to the sandbox
+  // size afterwards. Either way the sandbox base is restored with a lea fixup.
+  bool Large = hasLargeSandbox(STI);
 
+  MCInst SandboxedInst(Inst);
+  if (!Large)
+    demoteInst(SandboxedInst, *InstInfo);
+
+  // emitSandboxMemOps opens a bundle lock itself when it sandboxes a memory
+  // operand (the non-Segue path). The %rsp modification and its fixup must live
+  // in that same bundle, so only open one ourselves when it did not, and close
+  // a single bundle at the end. Opening a second lock here would nest, which
+  // the bundler does not allow.
   bool BundleLockOpened =
       emitSandboxMemOps(SandboxedInst, X86::R11D, Out, STI,
                         /*EmitInstructions=*/true);
-
-  Out.emitBundleLock(/*AlignToEnd=*/false, STI);
+  if (!BundleLockOpened)
+    Out.emitBundleLock(/*AlignToEnd=*/false, STI);
 
   emitInstruction(SandboxedInst, Out, STI, EmitPrefixes);
-  if (BundleLockOpened)
-    Out.emitBundleUnlock(STI);
+
+  if (Large) {
+    // pext %r13, %rsp, %rsp masks %rsp to a sandbox offset without clobbering
+    // the flags (the modifying instruction may have set them).
+    MCInst Pext;
+    Pext.setOpcode(X86::PEXT64rr);
+    Pext.addOperand(MCOperand::createReg(StackReg));
+    Pext.addOperand(MCOperand::createReg(StackReg));
+    Pext.addOperand(MCOperand::createReg(LFIMaskReg));
+    Out.emitInstruction(Pext, STI);
+  }
+
   emitStackFixup(StackReg, Out, STI);
 
   Out.emitBundleUnlock(STI);
@@ -1257,7 +1428,22 @@ bool X86::X86MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
                   "(add +no-lfi-segue)");
   }
 
-  doRewriteInst(Inst, Out, STI, /*EmitPrefixes=*/true);
+  // While a `.lfi_flags_dead` window is active, tag each instruction with
+  // IP_LFI_FLAGS_DEAD so the large-sandbox memory rewrite may mask addresses
+  // with the cheaper flag-clobbering andq instead of pext. The window ends at
+  // the first instruction that redefines the flags, since that produces a
+  // fresh (potentially live) flags value. Prefixes are emitted ahead of the
+  // instruction they apply to, so they neither carry the annotation nor end
+  // the window.
+  if (FlagsDeadActive && !isPrefix(Inst)) {
+    MCInst Annotated(Inst);
+    Annotated.setFlags(Annotated.getFlags() | X86::IP_LFI_FLAGS_DEAD);
+    doRewriteInst(Annotated, Out, STI, /*EmitPrefixes=*/true);
+    if (InstInfo->get(Inst.getOpcode()).hasImplicitDefOfPhysReg(X86::EFLAGS))
+      FlagsDeadActive = false;
+  } else {
+    doRewriteInst(Inst, Out, STI, /*EmitPrefixes=*/true);
+  }
 
   Guard = false;
   return true;
