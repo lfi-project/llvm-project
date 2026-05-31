@@ -253,6 +253,17 @@ void AArch64MCLFIRewriter::emitBranch(unsigned Opcode, MCRegister Target,
   emitInst(Branch, Out, STI);
 }
 
+void AArch64MCLFIRewriter::emitPendingTLSDescCall(MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI) {
+  if (!PendingTLSDescCall)
+    return;
+  MCInst Marker;
+  Marker.setOpcode(AArch64::TLSDESCCALL);
+  Marker.addOperand(MCOperand::createExpr(PendingTLSDescCall));
+  PendingTLSDescCall = nullptr;
+  emitInst(Marker, Out, STI);
+}
+
 void AArch64MCLFIRewriter::emitMov(MCRegister Dest, MCRegister Src,
                                    MCStreamer &Out,
                                    const MCSubtargetInfo &STI) {
@@ -343,6 +354,9 @@ void AArch64MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
 
   // Guard the branch target through X28.
   emitAddMask(LFIAddrReg, BranchReg, Out, STI);
+
+  emitPendingTLSDescCall(Out, STI);
+
   emitBranch(Inst.getOpcode(), LFIAddrReg, Out, STI);
 }
 
@@ -809,6 +823,11 @@ void AArch64MCLFIRewriter::rewriteDCZVA(const MCInst &Inst, MCStreamer &Out,
 
 void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI) {
+  if (Inst.getOpcode() == AArch64::TLSDESCCALL) {
+    PendingTLSDescCall = Inst.getOperand(0).getExpr();
+    return;
+  }
+
   // Reserved register modification is an error.
   if (mayModifyReserved(Inst)) {
     error(Inst, "illegal modification of reserved LFI register");
