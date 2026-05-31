@@ -21,6 +21,7 @@
 
 namespace llvm {
 class MCContext;
+class MCExpr;
 class MCInst;
 class MCOperand;
 class MCStreamer;
@@ -72,6 +73,12 @@ private:
   bool ActiveGuard = false;
   MCRegister ActiveGuardReg;
 
+  /// Deferred `.tlsdesccall` symbol. The directive emits no bytes but anchors a
+  /// zero-size R_AARCH64_TLSDESC_CALL relocation to the following BLR. Because
+  /// LFI inserts a guard before that BLR, the marker is deferred and re-emitted
+  /// between the guard and the branch so the relocation stays on the BLR.
+  const MCExpr *PendingTLSDescCall = nullptr;
+
   // Instruction classification.
   bool mayModifyStack(const MCInst &Inst) const;
   bool mayModifyReserved(const MCInst &Inst,
@@ -90,6 +97,7 @@ private:
                    const MCSubtargetInfo &STI, bool ControlFlow = false);
   void emitBranch(unsigned Opcode, MCRegister Target, MCStreamer &Out,
                   const MCSubtargetInfo &STI);
+  void emitPendingTLSDescCall(MCStreamer &Out, const MCSubtargetInfo &STI);
   void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out,
                const MCSubtargetInfo &STI);
   void emitAddImm(MCRegister Dest, MCRegister Src, int64_t Imm, MCStreamer &Out,
