@@ -44,8 +44,8 @@ static constexpr MCRegister LFIOffsetReg = AArch64::X24;
 
 // Offset into the context register block (pointed to by LFICtxReg) where the
 // thread pointer is stored. This is a scaled offset (multiplied by 8 for
-// 64-bit loads), so a value of 4 means an actual byte offset of 32.
-static constexpr unsigned LFITPOffset = 4;
+// 64-bit loads), so a value of 2 means an actual byte offset of 16.
+static constexpr unsigned LFITPOffset = 2;
 
 static unsigned convertUiToRoW(unsigned Op);
 static unsigned convertPreToRoW(unsigned Op);
