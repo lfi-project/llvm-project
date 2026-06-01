@@ -27,24 +27,24 @@ using namespace llvm;
 
 namespace llvm::AArch64 {
 struct LFIVariantEntry {
-  unsigned Inst;
+  unsigned LFIInst;
   uint8_t AddrMode;
   uint8_t Log2Size;
   unsigned RoWInst;
 };
 struct PairVariantEntry {
-  unsigned Inst;
+  unsigned LFIInst;
   bool IsPre;
   uint8_t Scale;
   unsigned BaseInst;
 };
 struct SIMDPostEntry {
-  unsigned Inst;
+  unsigned LFIInst;
   uint8_t NaturalOffset;
   unsigned BaseInst;
 };
 struct MemInfoEntry {
-  unsigned Inst;
+  unsigned LFIInst;
   uint8_t BaseIdx;
   uint8_t OffsetIdx;
   bool HasOffset;

@@ -80,6 +80,9 @@ def SMEMatrixTileD : SMEMatrixTypeEnum<4>;
 def SMEMatrixTileQ : SMEMatrixTypeEnum<5>;
 def SMEMatrixArray : SMEMatrixTypeEnum<6>;
 
+
+include "AArch64LFIInstrFormats.td"
+
 // AArch64 Instruction Format
 class AArch64Inst<Format f, string cstr> : Instruction {
   field bits<32> Inst; // Instruction encoding.
@@ -3843,7 +3846,12 @@ def uimm12s16 : uimm12_scaled<16>;
 
 class BaseLoadStoreUI<bits<2> sz, bit V, bits<2> opc, dag oops, dag iops,
                       string asm, list<dag> pattern>
-    : I<oops, iops, asm, "\t$Rt, [$Rn, $offset]", "", pattern> {
+    : I<oops, iops, asm, "\t$Rt, [$Rn, $offset]", "", pattern>,
+      LFIScalarVariant {
+  let IsLFIMem = 1;
+  let BaseIdx = 1;
+  let OffsetIdx = 2;
+  let HasOffset = 1;
   bits<5> Rt;
 
   bits<5> Rn;
@@ -4081,7 +4089,8 @@ def ro128 : ROAddrMode<ro_Windexed128, ro_Xindexed128, ro_Wextend128,
 
 class LoadStore8RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
                    dag outs, list<dag> pat>
-    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat> {
+    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat>,
+      LFILoadStoreRO<sz, V> {
   bits<5> Rt;
   bits<5> Rn;
   bits<5> Rm;
@@ -4160,7 +4169,8 @@ multiclass Store8RO<bits<2> sz, bit V, bits<2> opc, DAGOperand regtype,
 
 class LoadStore16RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
                     dag outs, list<dag> pat>
-    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat> {
+    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat>,
+      LFILoadStoreRO<sz, V> {
   bits<5> Rt;
   bits<5> Rn;
   bits<5> Rm;
@@ -4232,7 +4242,8 @@ multiclass Store16RO<bits<2> sz, bit V, bits<2> opc, DAGOperand regtype,
 
 class LoadStore32RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
                     dag outs, list<dag> pat>
-    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat> {
+    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat>,
+      LFILoadStoreRO<sz, V> {
   bits<5> Rt;
   bits<5> Rn;
   bits<5> Rm;
@@ -4304,7 +4315,8 @@ multiclass Store32RO<bits<2> sz, bit V, bits<2> opc, DAGOperand regtype,
 
 class LoadStore64RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
                     dag outs, list<dag> pat>
-    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat> {
+    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat>,
+      LFILoadStoreRO<sz, V> {
   bits<5> Rt;
   bits<5> Rn;
   bits<5> Rm;
@@ -4376,7 +4388,8 @@ multiclass Store64RO<bits<2> sz, bit V, bits<2> opc, DAGOperand regtype,
 
 class LoadStore128RO<bits<2> sz, bit V, bits<2> opc, string asm, dag ins,
                      dag outs, list<dag> pat>
-    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat> {
+    : I<ins, outs, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat>,
+      LFILoadStoreRO<sz, V> {
   bits<5> Rt;
   bits<5> Rn;
   bits<5> Rm;
@@ -4446,7 +4459,9 @@ let mayLoad = 0, mayStore = 0, hasSideEffects = 1 in
 class BasePrefetchRO<bits<2> sz, bit V, bits<2> opc, dag outs, dag ins,
                      string asm, list<dag> pat>
     : I<outs, ins, asm, "\t$Rt, [$Rn, $Rm, $extend]", "", pat>,
+      LFILoadStoreRO<sz, V>,
       Sched<[WriteLD]> {
+  let Log2Size = 3;
   bits<5> Rt;
   bits<5> Rn;
   bits<5> Rm;
@@ -4653,7 +4668,14 @@ multiclass StoreUnprivileged<bits<2> sz, bit V, bits<2> opc,
 
 class BaseLoadStorePreIdx<bits<2> sz, bit V, bits<2> opc, dag oops, dag iops,
                           string asm, string cstr, list<dag> pat>
-    : I<oops, iops, asm, "\t$Rt, [$Rn, $offset]!", cstr, pat> {
+    : I<oops, iops, asm, "\t$Rt, [$Rn, $offset]!", cstr, pat>,
+      LFIScalarVariant {
+  let IsLFIMem = 1;
+  let BaseIdx = 2;
+  let OffsetIdx = 3;
+  let HasOffset = 1;
+  let IsPrePost = 1;
+
   bits<5> Rt;
   bits<5> Rn;
   bits<9> offset;
@@ -4699,7 +4721,14 @@ class StorePreIdx<bits<2> sz, bit V, bits<2> opc, RegisterOperand regtype,
 
 class BaseLoadStorePostIdx<bits<2> sz, bit V, bits<2> opc, dag oops, dag iops,
                           string asm, string cstr, list<dag> pat>
-    : I<oops, iops, asm, "\t$Rt, [$Rn], $offset", cstr, pat> {
+    : I<oops, iops, asm, "\t$Rt, [$Rn], $offset", cstr, pat>,
+      LFIScalarVariant {
+  let IsLFIMem = 1;
+  let BaseIdx = 2;
+  let OffsetIdx = 3;
+  let HasOffset = 1;
+  let IsPrePost = 1;
+
   bits<5> Rt;
   bits<5> Rn;
   bits<9> offset;
@@ -4748,7 +4777,13 @@ class StorePostIdx<bits<2> sz, bit V, bits<2> opc, RegisterOperand regtype,
 
 class BaseLoadStorePairOffset<bits<2> opc, bit V, bit L, dag oops, dag iops,
                               string asm>
-    : I<oops, iops, asm, "\t$Rt, $Rt2, [$Rn, $offset]", "", []> {
+    : I<oops, iops, asm, "\t$Rt, $Rt2, [$Rn, $offset]", "", []>,
+      LFIInstruction {
+  let LFIInst = !cast<Instruction>(NAME);
+  let IsLFIMem = 1;
+  let BaseIdx = 2;
+  let OffsetIdx = 3;
+  let HasOffset = 1;
   bits<5> Rt;
   bits<5> Rt2;
   bits<5> Rn;
@@ -4839,7 +4874,24 @@ multiclass StoreAcquirePairOffset<bits<4> opc, string asm> {
 // (pre-indexed)
 class BaseLoadStorePairPreIdx<bits<2> opc, bit V, bit L, dag oops, dag iops,
                               string asm>
-    : I<oops, iops, asm, "\t$Rt, $Rt2, [$Rn, $offset]!", "$Rn = $wback,@earlyclobber $wback", []> {
+    : I<oops, iops, asm, "\t$Rt, $Rt2, [$Rn, $offset]!", "$Rn = $wback,@earlyclobber $wback", []>,
+      LFIInstruction {
+  let LFIInst = !cast<Instruction>(NAME);
+  let IsLFIMem = 1;
+  let BaseIdx = 3;
+  let OffsetIdx = 4;
+  let HasOffset = 1;
+  let IsPrePost = 1;
+
+  let HasPairVariant = 1;
+  let IsPre = 1;
+  let BaseInst = !cast<Instruction>(!subst("pre", "i", NAME));
+  let Scale = !cond(
+    !ne(NAME, !subst("LDPQ", "", !subst("STPQ", "", NAME))) : 16,
+    !ne(NAME, !subst("LDPD", "", !subst("STPD", "", NAME))) : 8,
+    !ne(NAME, !subst("LDPX", "", !subst("STPX", "", NAME))) : 8,
+    1 : 4
+  );
   bits<5> Rt;
   bits<5> Rt2;
   bits<5> Rn;
@@ -4880,7 +4932,24 @@ class StorePairPreIdx<bits<2> opc, bit V, RegisterOperand regtype,
 
 class BaseLoadStorePairPostIdx<bits<2> opc, bit V, bit L, dag oops, dag iops,
                               string asm>
-    : I<oops, iops, asm, "\t$Rt, $Rt2, [$Rn], $offset", "$Rn = $wback,@earlyclobber $wback", []> {
+    : I<oops, iops, asm, "\t$Rt, $Rt2, [$Rn], $offset", "$Rn = $wback,@earlyclobber $wback", []>,
+      LFIInstruction {
+  let LFIInst = !cast<Instruction>(NAME);
+  let IsLFIMem = 1;
+  let BaseIdx = 3;
+  let OffsetIdx = 4;
+  let HasOffset = 1;
+  let IsPrePost = 1;
+
+  let HasPairVariant = 1;
+  let IsPre = 0;
+  let BaseInst = !cast<Instruction>(!subst("post", "i", NAME));
+  let Scale = !cond(
+    !ne(NAME, !subst("LDPQ", "", !subst("STPQ", "", NAME))) : 16,
+    !ne(NAME, !subst("LDPD", "", !subst("STPD", "", NAME))) : 8,
+    !ne(NAME, !subst("LDPX", "", !subst("STPX", "", NAME))) : 8,
+    1 : 4
+  );
   bits<5> Rt;
   bits<5> Rt2;
   bits<5> Rn;
@@ -10969,7 +11038,11 @@ multiclass SIMDVectorLShiftLongBHSD<bit U, bits<5> opc, string asm,
 
 class BaseSIMDLdSt<bit Q, bit L, bits<4> opcode, bits<2> size,
                    string asm, dag oops, dag iops, list<dag> pattern>
-  : I<oops, iops, asm, "\t$Vt, [$Rn]", "", pattern> {
+  : I<oops, iops, asm, "\t$Vt, [$Rn]", "", pattern>,
+    LFIInstruction {
+  let LFIInst = !cast<Instruction>(NAME);
+  let IsLFIMem = 1;
+  let BaseIdx = 1;
   bits<5> Vt;
   bits<5> Rn;
   let Inst{31} = 0;
@@ -10985,7 +11058,27 @@ class BaseSIMDLdSt<bit Q, bit L, bits<4> opcode, bits<2> size,
 
 class BaseSIMDLdStPost<bit Q, bit L, bits<4> opcode, bits<2> size,
                        string asm, dag oops, dag iops>
-  : I<oops, iops, asm, "\t$Vt, [$Rn], $Xm", "$Rn = $wback", []> {
+  : I<oops, iops, asm, "\t$Vt, [$Rn], $Xm", "$Rn = $wback", []>,
+    LFIInstruction {
+  let LFIInst = !cast<Instruction>(NAME);
+  let IsLFIMem = 1;
+  let BaseIdx = 2;
+  let OffsetIdx = 3;
+  let HasOffset = 1;
+  let IsPrePost = 1;
+
+  let HasSIMDPost = 1;
+  let BaseInst = !cast<Instruction>(!subst("_POST", "", NAME));
+  let NaturalOffset = !mul(
+    !cond(
+      !ne(NAME, !subst("One", "", NAME)) : 1,
+      !ne(NAME, !subst("Two", "", NAME)) : 2,
+      !ne(NAME, !subst("Three", "", NAME)) : 3,
+      !ne(NAME, !subst("Four", "", NAME)) : 4,
+      1 : 1
+    ),
+    !cond(Q : 16, 1 : 8)
+  );
   bits<5> Vt;
   bits<5> Rn;
   bits<5> Xm;
@@ -11307,7 +11400,11 @@ class BaseSIMDLdR<bit Q, bit R, bits<3> opcode, bit S, bits<2> size, string asm,
                   DAGOperand listtype>
   : BaseSIMDLdStSingle<1, R, opcode, asm, "\t$Vt, [$Rn]", "",
                        (outs listtype:$Vt), (ins GPR64sp:$Rn),
-                       []> {
+                       []>,
+    LFIInstruction {
+  let LFIInst = !cast<Instruction>(NAME);
+  let IsLFIMem = 1;
+  let BaseIdx = 1;
   let Inst{30} = Q;
   let Inst{23} = 0;
   let Inst{20-16} = 0b00000;
@@ -11320,7 +11417,33 @@ class BaseSIMDLdRPost<bit Q, bit R, bits<3> opcode, bit S, bits<2> size,
   : BaseSIMDLdStSingle<1, R, opcode, asm, "\t$Vt, [$Rn], $Xm",
                        "$Rn = $wback",
                        (outs GPR64sp:$wback, listtype:$Vt),
-                       (ins GPR64sp:$Rn, GPR64pi:$Xm), []> {
+                       (ins GPR64sp:$Rn, GPR64pi:$Xm), []>,
+    LFIInstruction {
+  let LFIInst = !cast<Instruction>(NAME);
+  let IsLFIMem = 1;
+  let BaseIdx = 2;
+  let OffsetIdx = 3;
+  let HasOffset = 1;
+  let IsPrePost = 1;
+
+  let HasSIMDPost = 1;
+  let BaseInst = !cast<Instruction>(!subst("_POST", "", NAME));
+  let NaturalOffset = !mul(
+    !cond(
+      !ne(NAME, !subst("LD1R", "", NAME)) : 1,
+      !ne(NAME, !subst("LD2R", "", NAME)) : 2,
+      !ne(NAME, !subst("LD3R", "", NAME)) : 3,
+      !ne(NAME, !subst("LD4R", "", NAME)) : 4,
+      1 : 1
+    ),
+    !cond(
+      !ne(NAME, !subst("b_POST", "", NAME)) : 1,
+      !ne(NAME, !subst("h_POST", "", NAME)) : 2,
+      !ne(NAME, !subst("s_POST", "", NAME)) : 4,
+      !ne(NAME, !subst("d_POST", "", NAME)) : 8,
+      1 : 1
+    )
+  );
   bits<5> Xm;
   let Inst{30} = Q;
   let Inst{23} = 1;
@@ -11428,7 +11551,8 @@ multiclass SIMDLdR<bit R, bits<3> opcode, bit S, string asm, string Count,
 class SIMDLdStSingleB<bit L, bit R, bits<3> opcode, string asm,
                       dag oops, dag iops, list<dag> pattern>
   : BaseSIMDLdStSingle<L, R, opcode, asm, "\t$Vt$idx, [$Rn]", "", oops, iops,
-                       pattern> {
+                       pattern>,
+    LFILaneBaseStore {
   // idx encoded in Q:S:size fields.
   bits<4> idx;
   let Inst{30} = idx{3};
@@ -11440,7 +11564,8 @@ class SIMDLdStSingleB<bit L, bit R, bits<3> opcode, string asm,
 class SIMDLdStSingleBTied<bit L, bit R, bits<3> opcode, string asm,
                       dag oops, dag iops, list<dag> pattern>
   : BaseSIMDLdStSingleTied<L, R, opcode, asm, "\t$Vt$idx, [$Rn]", "",
-                           oops, iops, pattern> {
+                           oops, iops, pattern>,
+    LFILaneBaseLoadTied {
   // idx encoded in Q:S:size fields.
   bits<4> idx;
   let Inst{30} = idx{3};
@@ -11452,7 +11577,8 @@ class SIMDLdStSingleBTied<bit L, bit R, bits<3> opcode, string asm,
 class SIMDLdStSingleBPost<bit L, bit R, bits<3> opcode, string asm,
                           dag oops, dag iops>
   : BaseSIMDLdStSingle<L, R, opcode, asm, "\t$Vt$idx, [$Rn], $Xm",
-                       "$Rn = $wback", oops, iops, []> {
+                       "$Rn = $wback", oops, iops, []>,
+    LFILanePostStore<1> {
   // idx encoded in Q:S:size fields.
   bits<4> idx;
   bits<5> Xm;
@@ -11465,7 +11591,8 @@ class SIMDLdStSingleBPost<bit L, bit R, bits<3> opcode, string asm,
 class SIMDLdStSingleBTiedPost<bit L, bit R, bits<3> opcode, string asm,
                           dag oops, dag iops>
   : BaseSIMDLdStSingleTied<L, R, opcode, asm, "\t$Vt$idx, [$Rn], $Xm",
-                           "$Rn = $wback", oops, iops, []> {
+                           "$Rn = $wback", oops, iops, []>,
+    LFILanePostLoadTied<1> {
   // idx encoded in Q:S:size fields.
   bits<4> idx;
   bits<5> Xm;
@@ -11479,7 +11606,8 @@ class SIMDLdStSingleBTiedPost<bit L, bit R, bits<3> opcode, string asm,
 class SIMDLdStSingleH<bit L, bit R, bits<3> opcode, bit size, string asm,
                       dag oops, dag iops, list<dag> pattern>
   : BaseSIMDLdStSingle<L, R, opcode, asm, "\t$Vt$idx, [$Rn]", "", oops, iops,
-                       pattern> {
+                       pattern>,
+    LFILaneBaseStore {
   // idx encoded in Q:S:size<1> fields.
   bits<3> idx;
   let Inst{30} = idx{2};
@@ -11492,7 +11620,8 @@ class SIMDLdStSingleH<bit L, bit R, bits<3> opcode, bit size, string asm,
 class SIMDLdStSingleHTied<bit L, bit R, bits<3> opcode, bit size, string asm,
                       dag oops, dag iops, list<dag> pattern>
   : BaseSIMDLdStSingleTied<L, R, opcode, asm, "\t$Vt$idx, [$Rn]", "",
-                           oops, iops, pattern> {
+                           oops, iops, pattern>,
+    LFILaneBaseLoadTied {
   // idx encoded in Q:S:size<1> fields.
   bits<3> idx;
   let Inst{30} = idx{2};
@@ -11506,7 +11635,8 @@ class SIMDLdStSingleHTied<bit L, bit R, bits<3> opcode, bit size, string asm,
 class SIMDLdStSingleHPost<bit L, bit R, bits<3> opcode, bit size, string asm,
                           dag oops, dag iops>
   : BaseSIMDLdStSingle<L, R, opcode, asm, "\t$Vt$idx, [$Rn], $Xm",
-                       "$Rn = $wback", oops, iops, []> {
+                       "$Rn = $wback", oops, iops, []>,
+    LFILanePostStore<2> {
   // idx encoded in Q:S:size<1> fields.
   bits<3> idx;
   bits<5> Xm;
@@ -11520,7 +11650,8 @@ class SIMDLdStSingleHPost<bit L, bit R, bits<3> opcode, bit size, string asm,
 class SIMDLdStSingleHTiedPost<bit L, bit R, bits<3> opcode, bit size, string asm,
                           dag oops, dag iops>
   : BaseSIMDLdStSingleTied<L, R, opcode, asm, "\t$Vt$idx, [$Rn], $Xm",
-                           "$Rn = $wback", oops, iops, []> {
+                           "$Rn = $wback", oops, iops, []>,
+    LFILanePostLoadTied<2> {
   // idx encoded in Q:S:size<1> fields.
   bits<3> idx;
   bits<5> Xm;
@@ -11534,7 +11665,8 @@ class SIMDLdStSingleHTiedPost<bit L, bit R, bits<3> opcode, bit size, string asm
 class SIMDLdStSingleS<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
   : BaseSIMDLdStSingle<L, R, opcode, asm, "\t$Vt$idx, [$Rn]", "", oops, iops,
-                       pattern> {
+                       pattern>,
+    LFILaneBaseStore {
   // idx encoded in Q:S fields.
   bits<2> idx;
   let Inst{30} = idx{1};
@@ -11546,7 +11678,8 @@ class SIMDLdStSingleS<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
 class SIMDLdStSingleSTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
   : BaseSIMDLdStSingleTied<L, R, opcode, asm, "\t$Vt$idx, [$Rn]", "",
-                           oops, iops, pattern> {
+                           oops, iops, pattern>,
+    LFILaneBaseLoadTied {
   // idx encoded in Q:S fields.
   bits<2> idx;
   let Inst{30} = idx{1};
@@ -11558,7 +11691,8 @@ class SIMDLdStSingleSTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm
 class SIMDLdStSingleSPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>
   : BaseSIMDLdStSingle<L, R, opcode, asm, "\t$Vt$idx, [$Rn], $Xm",
-                       "$Rn = $wback", oops, iops, []> {
+                       "$Rn = $wback", oops, iops, []>,
+    LFILanePostStore<4> {
   // idx encoded in Q:S fields.
   bits<2> idx;
   bits<5> Xm;
@@ -11571,7 +11705,8 @@ class SIMDLdStSingleSPost<bit L, bit R, bits<3> opcode, bits<2> size,
 class SIMDLdStSingleSTiedPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>
   : BaseSIMDLdStSingleTied<L, R, opcode, asm, "\t$Vt$idx, [$Rn], $Xm",
-                           "$Rn = $wback", oops, iops, []> {
+                           "$Rn = $wback", oops, iops, []>,
+    LFILanePostLoadTied<4> {
   // idx encoded in Q:S fields.
   bits<2> idx;
   bits<5> Xm;
@@ -11584,7 +11719,8 @@ class SIMDLdStSingleSTiedPost<bit L, bit R, bits<3> opcode, bits<2> size,
 class SIMDLdStSingleD<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
   : BaseSIMDLdStSingle<L, R, opcode, asm, "\t$Vt$idx, [$Rn]", "", oops, iops,
-                       pattern> {
+                       pattern>,
+    LFILaneBaseStore {
   // idx encoded in Q field.
   bits<1> idx;
   let Inst{30} = idx;
@@ -11596,7 +11732,8 @@ class SIMDLdStSingleD<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
 class SIMDLdStSingleDTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm,
                       dag oops, dag iops, list<dag> pattern>
   : BaseSIMDLdStSingleTied<L, R, opcode, asm, "\t$Vt$idx, [$Rn]", "",
-                           oops, iops, pattern> {
+                           oops, iops, pattern>,
+    LFILaneBaseLoadTied {
   // idx encoded in Q field.
   bits<1> idx;
   let Inst{30} = idx;
@@ -11608,7 +11745,8 @@ class SIMDLdStSingleDTied<bit L, bit R, bits<3> opcode, bits<2> size, string asm
 class SIMDLdStSingleDPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>
   : BaseSIMDLdStSingle<L, R, opcode, asm, "\t$Vt$idx, [$Rn], $Xm",
-                       "$Rn = $wback", oops, iops, []> {
+                       "$Rn = $wback", oops, iops, []>,
+    LFILanePostStore<8> {
   // idx encoded in Q field.
   bits<1> idx;
   bits<5> Xm;
@@ -11621,7 +11759,8 @@ class SIMDLdStSingleDPost<bit L, bit R, bits<3> opcode, bits<2> size,
 class SIMDLdStSingleDTiedPost<bit L, bit R, bits<3> opcode, bits<2> size,
                           string asm, dag oops, dag iops>
   : BaseSIMDLdStSingleTied<L, R, opcode, asm, "\t$Vt$idx, [$Rn], $Xm",
-                           "$Rn = $wback", oops, iops, []> {
+                           "$Rn = $wback", oops, iops, []>,
+    LFILanePostLoadTied<8> {
   // idx encoded in Q field.
   bits<1> idx;
   bits<5> Xm;
