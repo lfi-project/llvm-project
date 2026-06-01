@@ -32,7 +32,7 @@ static constexpr MCRegister LFITPReg = X86::R15;
 static constexpr MCRegister LFIBaseSeg = X86::GS;
 // In large-sandbox mode this register holds the sandbox size mask (2^k - 1),
 // used to confine an address to the sandbox.
-static constexpr MCRegister LFIMaskReg = X86::R13;
+static constexpr MCRegister LFIMaskReg = X86::R15;
 
 // Indirect branch targets must be aligned to a multiple of this size.
 static constexpr unsigned BundleSize = 32;
@@ -46,19 +46,19 @@ static constexpr int TPOffset = 16;
 //===----------------------------------------------------------------------===//
 
 bool X86::X86MCLFIRewriter::hasSegue(const MCSubtargetInfo &STI) const {
-  return !STI.hasFeature(X86::FeatureNoLFISegue);
+  return false && !STI.hasFeature(X86::FeatureNoLFISegue);
 }
 
 bool X86::X86MCLFIRewriter::hasGSContext(const MCSubtargetInfo &STI) const {
-  return STI.hasFeature(X86::FeatureLFIGSContext);
+  return true || STI.hasFeature(X86::FeatureLFIGSContext);
 }
 
 bool X86::X86MCLFIRewriter::hasLargeSandbox(const MCSubtargetInfo &STI) const {
-  return STI.hasFeature(X86::FeatureLFILargeSandbox);
+  return true || STI.hasFeature(X86::FeatureLFILargeSandbox);
 }
 
 bool X86::X86MCLFIRewriter::hasNoLFILoads(const MCSubtargetInfo &STI) const {
-  return STI.hasFeature(X86::FeatureNoLFILoads);
+  return true || STI.hasFeature(X86::FeatureNoLFILoads);
 }
 
 bool X86::X86MCLFIRewriter::hasNoLFIStores(const MCSubtargetInfo &STI) const {

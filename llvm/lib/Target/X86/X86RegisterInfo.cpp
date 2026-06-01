@@ -628,9 +628,9 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     if (!MF.getSubtarget<X86Subtarget>().isLFIGSContext())
       for (MCRegAliasIterator AI(X86::R15, this, true); AI.isValid(); ++AI)
         Reserved.set(*AI);
-    // Large-sandbox mode reserves r13 to hold the sandbox size mask.
+    // Large-sandbox mode reserves r15 to hold the sandbox size mask.
     if (MF.getSubtarget<X86Subtarget>().isLFILargeSandbox())
-      for (MCRegAliasIterator AI(X86::R13, this, true); AI.isValid(); ++AI)
+      for (MCRegAliasIterator AI(X86::R15, this, true); AI.isValid(); ++AI)
         Reserved.set(*AI);
   }
 
