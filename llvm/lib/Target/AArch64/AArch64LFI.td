@@ -6,124 +6,64 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Per-opcode metadata consumed by AArch64MCLFIRewriter. The rewriter queries
-// four generated lookup tables:
-//
-// * lookupLFIVariantByOpcode: scalar load/store addressing-mode info
-//   (ui/roW/roX/pre/post + log2 element size + cross-reference to the RoW
-//   variant).
-//
-// * lookupPairVariantByOpcode: LDP/STP pre/post-index info (base opcode +
-//   scale + pre vs. post).
-//
-// * lookupSIMDPostByOpcode: SIMD post-index info (base opcode + natural byte
-//   offset).
-//
-// * lookupMemInfoByOpcode: generic operand-layout info used by the base
-//   load/store rewriter (base/offset operand indices, IsPrePost, IsLiteral).
+// Per-opcode metadata consumed by AArch64MCLFIRewriter.
 //
 //===----------------------------------------------------------------------===//
 
-// LFI addressing-mode enumeration (matches the rewriter's logical view).
-// Values are exposed to C++ as plain integers.
-class LFIAddrMode<int v> { int Value = v; }
-def LFI_AM_Ui   : LFIAddrMode<0>;
-def LFI_AM_RoW  : LFIAddrMode<1>;
-def LFI_AM_RoX  : LFIAddrMode<2>;
-def LFI_AM_Pre  : LFIAddrMode<3>;
-def LFI_AM_Post : LFIAddrMode<4>;
 
 //===----------------------------------------------------------------------===//
-// LFIVariant - scalar load/store variants
-//
-// One record per (family, addressing mode) combination. RoWInst is the
-// matching RoW variant of the same family.
+// Searchable Tables
 //===----------------------------------------------------------------------===//
-
-class LFIVariant<Instruction inst, bits<3> addrMode, bits<3> log2Size,
-                 Instruction roWInst> {
-  Instruction Inst     = inst;
-  bits<3>     AddrMode = addrMode;
-  bits<3>     Log2Size = log2Size;
-  Instruction RoWInst  = roWInst;
-}
 
 def LFIVariantTable : GenericTable {
-  let FilterClass    = "LFIVariant";
+  let FilterClass    = "LFIVariantEntry";
   let CppTypeName    = "LFIVariantEntry";
-  let Fields         = ["Inst", "AddrMode", "Log2Size", "RoWInst"];
-  let PrimaryKey     = ["Inst"];
+  let Fields         = ["LFIInst", "AddrMode", "Log2Size", "RoWInst"];
+  let PrimaryKey     = ["LFIInst"];
   let PrimaryKeyName = "lookupLFIVariantByOpcode";
 }
 
-//===----------------------------------------------------------------------===//
-// PairVariant - LDP/STP pre/post-index entries
-//===----------------------------------------------------------------------===//
-
-class PairVariant<Instruction inst, bit isPre, bits<5> scale,
-                  Instruction baseInst> {
-  Instruction Inst     = inst;
-  bit         IsPre    = isPre;
-  bits<5>     Scale    = scale;
-  Instruction BaseInst = baseInst;
-}
-
 def PairVariantTable : GenericTable {
-  let FilterClass    = "PairVariant";
+  let FilterClass    = "LFIPairVariantEntry";
   let CppTypeName    = "PairVariantEntry";
-  let Fields         = ["Inst", "IsPre", "Scale", "BaseInst"];
-  let PrimaryKey     = ["Inst"];
+  let Fields         = ["LFIInst", "IsPre", "Scale", "BaseInst"];
+  let PrimaryKey     = ["LFIInst"];
   let PrimaryKeyName = "lookupPairVariantByOpcode";
 }
 
-//===----------------------------------------------------------------------===//
-// SIMDPost - SIMD post-index entries (multi/lane-load/lane-store).
-//===----------------------------------------------------------------------===//
-
-class SIMDPost<Instruction inst, bits<7> naturalOffset,
-               Instruction baseInst> {
-  Instruction Inst          = inst;
-  bits<7>     NaturalOffset = naturalOffset;
-  Instruction BaseInst      = baseInst;
-}
-
 def SIMDPostTable : GenericTable {
-  let FilterClass    = "SIMDPost";
+  let FilterClass    = "LFISIMDPostEntry";
   let CppTypeName    = "SIMDPostEntry";
-  let Fields         = ["Inst", "NaturalOffset", "BaseInst"];
-  let PrimaryKey     = ["Inst"];
+  let Fields         = ["LFIInst", "NaturalOffset", "BaseInst"];
+  let PrimaryKey     = ["LFIInst"];
   let PrimaryKeyName = "lookupSIMDPostByOpcode";
 }
 
-//===----------------------------------------------------------------------===//
-// MemInfo - per-opcode operand layout for the base load/store rewriter.
-//
-// HasOffset = 0 means OffsetIdx is unused.
-//===----------------------------------------------------------------------===//
-
-class MemInfo<Instruction inst, bits<4> baseIdx, bits<4> offsetIdx,
-              bit hasOffset, bit isPrePost, bit isLiteral> {
-  Instruction Inst       = inst;
-  bits<4>     BaseIdx    = baseIdx;
-  bits<4>     OffsetIdx  = offsetIdx;
-  bit         HasOffset  = hasOffset;
-  bit         IsPrePost  = isPrePost;
-  bit         IsLiteral  = isLiteral;
-}
-
 def MemInfoTable : GenericTable {
-  let FilterClass    = "MemInfo";
+  let FilterClass    = "LFIInstruction";
+  let FilterClassField = "IsLFIMem";
   let CppTypeName    = "MemInfoEntry";
-  let Fields         = ["Inst", "BaseIdx", "OffsetIdx", "HasOffset",
+  let Fields         = ["LFIInst", "BaseIdx", "OffsetIdx", "HasOffset",
                         "IsPrePost", "IsLiteral"];
-  let PrimaryKey     = ["Inst"];
+  let PrimaryKey     = ["LFIInst"];
   let PrimaryKeyName = "lookupMemInfoByOpcode";
 }
 
-// Semantic helper subclasses for the four addressing-mode shapes the rewriter
-// encounters. Each forwards to MemInfo with the appropriate HasOffset /
-// IsPrePost / IsLiteral flags, so the call sites only need to specify operand
-// indices.
+//===----------------------------------------------------------------------===//
+// MemInfo helper subclasses (used to explicitly map CAS/LSE/exclusive ops)
+//===----------------------------------------------------------------------===//
+
+class MemInfo<Instruction inst, bits<4> baseIdx, bits<4> offsetIdx,
+              bit hasOffset, bit isPrePost, bit isLiteral> : LFIInstruction {
+  let LFIInst   = inst;
+  let IsLFIMem  = 1;
+  let BaseIdx   = baseIdx;
+  let OffsetIdx = offsetIdx;
+  let HasOffset = hasOffset;
+  let IsPrePost = isPrePost;
+  let IsLiteral = isLiteral;
+}
+
 class MemLiteral<Instruction inst, int baseIdx>
   : MemInfo<inst, baseIdx, 0, 0, 0, 1>;
 class MemNoOffset<Instruction inst, int baseIdx>
@@ -132,64 +72,6 @@ class MemIndexed<Instruction inst, int baseIdx, int offsetIdx>
   : MemInfo<inst, baseIdx, offsetIdx, 1, 0, 0>;
 class MemPrePost<Instruction inst, int baseIdx, int offsetIdx>
   : MemInfo<inst, baseIdx, offsetIdx, 1, 1, 0>;
-
-//===----------------------------------------------------------------------===//
-// Scalar mem families with ui, roW, roX, pre, post variants. Each entry pairs
-// a base opcode name with its log2 element size (== scaled shift used by the
-// roW form). Emits both LFIVariant entries and MemInfo entries.
-//===----------------------------------------------------------------------===//
-
-class ScalarMemFam<string b, int sz> {
-  string Base = b;
-  int Log2 = sz;
-}
-
-defvar AArch64ScalarMemFamilies = [
-  ScalarMemFam<"LDRBB",  0>, ScalarMemFam<"LDRB",   0>,
-  ScalarMemFam<"LDRSBW", 0>, ScalarMemFam<"LDRSBX", 0>,
-  ScalarMemFam<"STRBB",  0>, ScalarMemFam<"STRB",   0>,
-  ScalarMemFam<"LDRHH",  1>, ScalarMemFam<"LDRH",   1>,
-  ScalarMemFam<"LDRSHW", 1>, ScalarMemFam<"LDRSHX", 1>,
-  ScalarMemFam<"STRHH",  1>, ScalarMemFam<"STRH",   1>,
-  ScalarMemFam<"LDRSW",  2>, ScalarMemFam<"LDRS",   2>,
-  ScalarMemFam<"LDRW",   2>, ScalarMemFam<"STRS",   2>,
-  ScalarMemFam<"STRW",   2>,
-  ScalarMemFam<"LDRD",   3>, ScalarMemFam<"LDRX",   3>,
-  ScalarMemFam<"STRD",   3>, ScalarMemFam<"STRX",   3>,
-  ScalarMemFam<"LDRQ",   4>, ScalarMemFam<"STRQ",   4>,
-];
-
-foreach f = AArch64ScalarMemFamilies in {
-  defvar Ui   = !cast<Instruction>(f.Base # "ui");
-  defvar RoW  = !cast<Instruction>(f.Base # "roW");
-  defvar RoX  = !cast<Instruction>(f.Base # "roX");
-  defvar Pre  = !cast<Instruction>(f.Base # "pre");
-  defvar Post = !cast<Instruction>(f.Base # "post");
-
-  def : LFIVariant<Ui,   LFI_AM_Ui.Value,   f.Log2, RoW>;
-  def : LFIVariant<RoW,  LFI_AM_RoW.Value,  f.Log2, RoW>;
-  def : LFIVariant<RoX,  LFI_AM_RoX.Value,  f.Log2, RoW>;
-  def : LFIVariant<Pre,  LFI_AM_Pre.Value,  f.Log2, RoW>;
-  def : LFIVariant<Post, LFI_AM_Post.Value, f.Log2, RoW>;
-
-  // Indexed / register-offset / register-offset-W / register-offset-X all
-  // share the same operand layout: Rt, [Rn, ...].
-  def : MemIndexed<Ui,  1, 2>;
-  def : MemIndexed<RoW, 1, 2>;
-  def : MemIndexed<RoX, 1, 2>;
-  // Pre/post-index writeback: wback, Rt, [Rn], #imm.
-  def : MemPrePost<Pre,  2, 3>;
-  def : MemPrePost<Post, 2, 3>;
-}
-
-// PRFM has ui, roW, roX but no pre/post forms. Log2 = 3 (doubleword scale).
-def : LFIVariant<PRFMui,  LFI_AM_Ui.Value,  3, PRFMroW>;
-def : LFIVariant<PRFMroW, LFI_AM_RoW.Value, 3, PRFMroW>;
-def : LFIVariant<PRFMroX, LFI_AM_RoX.Value, 3, PRFMroW>;
-
-def : MemIndexed<PRFMui,  1, 2>;
-def : MemIndexed<PRFMroW, 1, 2>;
-def : MemIndexed<PRFMroX, 1, 2>;
 
 //===----------------------------------------------------------------------===//
 // Unscaled-immediate scalar loads/stores (LDUR/STUR/PRFUM). Same operand
@@ -205,53 +87,152 @@ foreach inst = [LDURBBi, LDURBi, LDURDi, LDURHHi, LDURHi, LDURQi,
   def : MemIndexed<inst, 1, 2>;
 
 //===----------------------------------------------------------------------===//
-// LDP/STP pair families. Pre/post variants are PairVariant entries; all
-// three variants (`i`, `pre`, `post`) get MemInfo entries.
+// Non-temporal pair indexed forms (LDNP/STNP). Same operand layout as `i`.
 //===----------------------------------------------------------------------===//
 
-class PairFam<string b, int s> {
-  string Base = b;
-  int Scale = s;
-}
-
-defvar AArch64PairFamilies = [
-  PairFam<"LDPD",  8>, PairFam<"LDPQ", 16>, PairFam<"LDPSW", 4>,
-  PairFam<"LDPS",  4>, PairFam<"LDPW",  4>, PairFam<"LDPX",  8>,
-  PairFam<"STPD",  8>, PairFam<"STPQ", 16>, PairFam<"STPS",  4>,
-  PairFam<"STPW",  4>, PairFam<"STPX",  8>,
-];
-
-foreach f = AArch64PairFamilies in {
-  defvar Base = !cast<Instruction>(f.Base # "i");
-  defvar Pre  = !cast<Instruction>(f.Base # "pre");
-  defvar Post = !cast<Instruction>(f.Base # "post");
-
-  def : PairVariant<Pre,  1, f.Scale, Base>;
-  def : PairVariant<Post, 0, f.Scale, Base>;
-
-  // Indexed form: Rt, Rt2, [Rn, #imm].
-  def : MemIndexed<Base, 2, 3>;
-  // Pre/post-index: wback, Rt, Rt2, [Rn, #imm]! / [Rn], #imm.
-  def : MemPrePost<Pre,  3, 4>;
-  def : MemPrePost<Post, 3, 4>;
-}
-
-// Non-temporal pair indexed forms (LDNP/STNP). Same operand layout as `i`.
 foreach inst = [LDNPDi, LDNPQi, LDNPSi, LDNPWi, LDNPXi,
                 STNPDi, STNPQi, STNPSi, STNPWi, STNPXi] in
   def : MemIndexed<inst, 2, 3>;
 
 //===----------------------------------------------------------------------===//
-// SIMD families. Each base instruction NAME has a post-index form NAME_POST.
-// Three subclasses, distinguished by operand layout:
-//
-//   Multi/Replicate : Vt, [Rn]                       - base BaseIdx=1
-//                     wback, Vt, [Rn], Xm            - post BaseIdx=2,Off=3
-//   Lane store      : Vt, idx, [Rn]                  - base BaseIdx=2
-//                     wback, Vt, idx, [Rn], Xm       - post BaseIdx=3,Off=4
-//   Lane load       : Vt(out), Vt(tied), idx, [Rn]   - base BaseIdx=3
-//                     wback, Vt(out), Vt(tied), idx, [Rn], Xm
-//                                                    - post BaseIdx=4,Off=5
+// PC-relative literal loads: Rt, label. BaseIdx=0, no offset operand.
+//===----------------------------------------------------------------------===//
+
+foreach inst = [LDRWl, LDRXl, LDRSWl, LDRSl, LDRDl, LDRQl, PRFMl] in
+  def : MemLiteral<inst, 0>;
+
+//===----------------------------------------------------------------------===//
+// Exclusive / acquire / RCPC loads and store-release: Rt, [Rn].
+//===----------------------------------------------------------------------===//
+
+foreach inst = [LDXRB, LDXRH, LDXRW, LDXRX,
+                LDAXRB, LDAXRH, LDAXRW, LDAXRX,
+                LDLARB, LDLARH, LDLARW, LDLARX,
+                LDARB, LDARH, LDARW, LDARX,
+                // RCPC
+                LDAPRB, LDAPRH, LDAPRW, LDAPRX,
+                // Store-release
+                STLRB, STLRH, STLRW, STLRX,
+                STLLRB, STLLRH, STLLRW, STLLRX] in
+  def : MemNoOffset<inst, 1>;
+
+//===----------------------------------------------------------------------===//
+// Exclusive stores: Ws, Rt, [Rn]. Exclusive pair loads: Rt, Rt2, [Rn].
+//===----------------------------------------------------------------------===//
+
+foreach inst = [STXRB, STXRH, STXRW, STXRX,
+                STLXRB, STLXRH, STLXRW, STLXRX,
+                LDXPW, LDXPX, LDAXPW, LDAXPX] in
+  def : MemNoOffset<inst, 2>;
+
+// Exclusive store pairs: Ws, Rt, Rt2, [Rn].
+foreach inst = [STXPW, STXPX, STLXPW, STLXPX] in
+  def : MemNoOffset<inst, 3>;
+
+//===----------------------------------------------------------------------===//
+// CAS variants: Rs(out), Rs(in, tied), Rt, [Rn]. BaseIdx=3.
+//===----------------------------------------------------------------------===//
+
+defvar AArch64CASBases = ["CAS", "CASA", "CASL", "CASAL"];
+defvar AArch64CASSuffixes = ["B", "H", "W", "X"];
+
+foreach base = AArch64CASBases in
+  foreach suff = AArch64CASSuffixes in
+    def : MemNoOffset<!cast<Instruction>(base # suff), 3>;
+
+// CASP variants: Ws_Ws2(out), Ws_Ws2(in, tied), Wt_Wt2, [Rn]. BaseIdx=3.
+foreach inst = [CASPW, CASPX, CASPAW, CASPAX,
+                CASPLW, CASPLX, CASPALW, CASPALX] in
+  def : MemNoOffset<inst, 3>;
+
+//===----------------------------------------------------------------------===//
+// LSE atomics: Rs, Rt, [Rn].
+//===----------------------------------------------------------------------===//
+
+defvar AArch64LSEBases = [
+  "LDADD", "LDCLR", "LDEOR", "LDSET",
+  "LDSMAX", "LDSMIN", "LDUMAX", "LDUMIN", "SWP",
+];
+defvar AArch64LSESuffixes = [
+  "B",   "H",   "W",   "X",
+  "AB",  "AH",  "AW",  "AX",
+  "LB",  "LH",  "LW",  "LX",
+  "ALB", "ALH", "ALW", "ALX",
+];
+
+foreach base = AArch64LSEBases in
+  foreach suff = AArch64LSESuffixes in
+    def : MemNoOffset<!cast<Instruction>(base # suff), 2>;
+
+//===----------------------------------------------------------------------===//
+// GPR / FPR / SIMD Scalar Families explicit mapping
+//===----------------------------------------------------------------------===//
+
+multiclass LFIFamily<string prefix, bits<3> log2size> {
+  def : LFIVariantEntry<!cast<Instruction>(prefix # "ui"),   LFI_AM_Ui,   log2size, !cast<Instruction>(prefix # "roW")>;
+  def : LFIVariantEntry<!cast<Instruction>(prefix # "roW"),  LFI_AM_RoW,  log2size, !cast<Instruction>(prefix # "roW")>;
+  def : LFIVariantEntry<!cast<Instruction>(prefix # "roX"),  LFI_AM_RoX,  log2size, !cast<Instruction>(prefix # "roW")>;
+  def : LFIVariantEntry<!cast<Instruction>(prefix # "pre"),  LFI_AM_Pre,  log2size, !cast<Instruction>(prefix # "roW")>;
+  def : LFIVariantEntry<!cast<Instruction>(prefix # "post"), LFI_AM_Post, log2size, !cast<Instruction>(prefix # "roW")>;
+}
+
+defm : LFIFamily<"LDRW", 2>;
+defm : LFIFamily<"LDRX", 3>;
+defm : LFIFamily<"LDRBB", 0>;
+defm : LFIFamily<"LDRB", 0>;
+defm : LFIFamily<"LDRHH", 1>;
+defm : LFIFamily<"LDRH", 1>;
+defm : LFIFamily<"LDRS", 2>;
+defm : LFIFamily<"LDRD", 3>;
+defm : LFIFamily<"LDRQ", 4>;
+defm : LFIFamily<"LDRSBW", 0>;
+defm : LFIFamily<"LDRSBX", 0>;
+defm : LFIFamily<"LDRSHW", 1>;
+defm : LFIFamily<"LDRSHX", 1>;
+defm : LFIFamily<"LDRSW", 2>;
+
+defm : LFIFamily<"STRW", 2>;
+defm : LFIFamily<"STRX", 3>;
+defm : LFIFamily<"STRBB", 0>;
+defm : LFIFamily<"STRB", 0>;
+defm : LFIFamily<"STRHH", 1>;
+defm : LFIFamily<"STRH", 1>;
+defm : LFIFamily<"STRS", 2>;
+defm : LFIFamily<"STRD", 3>;
+defm : LFIFamily<"STRQ", 4>;
+
+// Prefetch families (no pre/post index forms)
+multiclass LFIPrefetchFamily<string prefix> {
+  def : LFIVariantEntry<!cast<Instruction>(prefix # "ui"),  LFI_AM_Ui,  3, !cast<Instruction>(prefix # "roW")>;
+  def : LFIVariantEntry<!cast<Instruction>(prefix # "roW"), LFI_AM_RoW, 3, !cast<Instruction>(prefix # "roW")>;
+  def : LFIVariantEntry<!cast<Instruction>(prefix # "roX"), LFI_AM_RoX, 3, !cast<Instruction>(prefix # "roW")>;
+}
+
+defm : LFIPrefetchFamily<"PRFM">;
+
+//===----------------------------------------------------------------------===//
+// Load/Store Pair Families explicit mapping
+//===----------------------------------------------------------------------===//
+
+multiclass LFIPairFamily<string base, bits<5> scale> {
+  def : LFIPairVariantEntry<!cast<Instruction>(base # "pre"),  1, scale, !cast<Instruction>(base # "i")>;
+  def : LFIPairVariantEntry<!cast<Instruction>(base # "post"), 0, scale, !cast<Instruction>(base # "i")>;
+}
+
+defm : LFIPairFamily<"LDPD", 8>;
+defm : LFIPairFamily<"LDPQ", 16>;
+defm : LFIPairFamily<"LDPS", 4>;
+defm : LFIPairFamily<"LDPW", 4>;
+defm : LFIPairFamily<"LDPX", 8>;
+
+defm : LFIPairFamily<"STPD", 8>;
+defm : LFIPairFamily<"STPQ", 16>;
+defm : LFIPairFamily<"STPS", 4>;
+defm : LFIPairFamily<"STPW", 4>;
+defm : LFIPairFamily<"STPX", 8>;
+
+//===----------------------------------------------------------------------===//
+// SIMD families explicit mapping
 //===----------------------------------------------------------------------===//
 
 class SIMDPostFam<string b, int off> {
@@ -377,93 +358,19 @@ defvar AArch64SIMDMultiFams = [
 foreach f = AArch64SIMDMultiFams in {
   defvar Base = !cast<Instruction>(f.Base);
   defvar Post = !cast<Instruction>(f.Base # "_POST");
-  def : SIMDPost<Post, f.Offset, Base>;
+  def : LFISIMDPostEntry<Post, f.Offset, Base>;
   def : MemNoOffset<Base, 1>;
-  def : MemPrePost<Post, 2, 3>;
 }
 
 foreach f = AArch64SIMDLaneStoreFams in {
   defvar Base = !cast<Instruction>(f.Base);
   defvar Post = !cast<Instruction>(f.Base # "_POST");
-  def : SIMDPost<Post, f.Offset, Base>;
+  def : LFISIMDPostEntry<Post, f.Offset, Base>;
   def : MemNoOffset<Base, 2>;
-  def : MemPrePost<Post, 3, 4>;
 }
 
 foreach f = AArch64SIMDLaneLoadFams in {
   defvar Base = !cast<Instruction>(f.Base);
   defvar Post = !cast<Instruction>(f.Base # "_POST");
-  def : SIMDPost<Post, f.Offset, Base>;
-  def : MemNoOffset<Base, 3>;
-  def : MemPrePost<Post, 4, 5>;
+  def : LFISIMDPostEntry<Post, f.Offset, Base>;
 }
-
-//===----------------------------------------------------------------------===//
-// PC-relative literal loads: Rt, label. BaseIdx=0, no offset operand.
-//===----------------------------------------------------------------------===//
-
-foreach inst = [LDRWl, LDRXl, LDRSWl, LDRSl, LDRDl, LDRQl, PRFMl] in
-  def : MemLiteral<inst, 0>;
-
-//===----------------------------------------------------------------------===//
-// Exclusive / acquire / RCPC loads and store-release: Rt, [Rn].
-//===----------------------------------------------------------------------===//
-
-foreach inst = [LDXRB, LDXRH, LDXRW, LDXRX,
-                LDAXRB, LDAXRH, LDAXRW, LDAXRX,
-                LDARB, LDARH, LDARW, LDARX,
-                LDLARB, LDLARH, LDLARW, LDLARX,
-                // RCPC
-                LDAPRB, LDAPRH, LDAPRW, LDAPRX,
-                // Store-release
-                STLRB, STLRH, STLRW, STLRX,
-                STLLRB, STLLRH, STLLRW, STLLRX] in
-  def : MemNoOffset<inst, 1>;
-
-//===----------------------------------------------------------------------===//
-// Exclusive stores: Ws, Rt, [Rn]. Exclusive pair loads: Rt, Rt2, [Rn].
-//===----------------------------------------------------------------------===//
-
-foreach inst = [STXRB, STXRH, STXRW, STXRX,
-                STLXRB, STLXRH, STLXRW, STLXRX,
-                LDXPW, LDXPX, LDAXPW, LDAXPX] in
-  def : MemNoOffset<inst, 2>;
-
-// Exclusive store pairs: Ws, Rt, Rt2, [Rn].
-foreach inst = [STXPW, STXPX, STLXPW, STLXPX] in
-  def : MemNoOffset<inst, 3>;
-
-//===----------------------------------------------------------------------===//
-// CAS variants: Rs(out), Rs(in, tied), Rt, [Rn]. BaseIdx=3.
-//===----------------------------------------------------------------------===//
-
-defvar AArch64CASBases = ["CAS", "CASA", "CASL", "CASAL"];
-defvar AArch64CASSuffixes = ["B", "H", "W", "X"];
-
-foreach base = AArch64CASBases in
-  foreach suff = AArch64CASSuffixes in
-    def : MemNoOffset<!cast<Instruction>(base # suff), 3>;
-
-// CASP variants: Ws_Ws2(out), Ws_Ws2(in, tied), Wt_Wt2, [Rn]. BaseIdx=3.
-foreach inst = [CASPW, CASPX, CASPAW, CASPAX,
-                CASPLW, CASPLX, CASPALW, CASPALX] in
-  def : MemNoOffset<inst, 3>;
-
-//===----------------------------------------------------------------------===//
-// LSE atomics: Rs, Rt, [Rn].
-//===----------------------------------------------------------------------===//
-
-defvar AArch64LSEBases = [
-  "LDADD", "LDCLR", "LDEOR", "LDSET",
-  "LDSMAX", "LDSMIN", "LDUMAX", "LDUMIN", "SWP",
-];
-defvar AArch64LSESuffixes = [
-  "B",   "H",   "W",   "X",
-  "AB",  "AH",  "AW",  "AX",
-  "LB",  "LH",  "LW",  "LX",
-  "ALB", "ALH", "ALW", "ALX",
-];
-
-foreach base = AArch64LSEBases in
-  foreach suff = AArch64LSESuffixes in
-    def : MemNoOffset<!cast<Instruction>(base # suff), 2>;
