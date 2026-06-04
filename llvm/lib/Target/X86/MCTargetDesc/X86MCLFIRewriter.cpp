@@ -410,6 +410,26 @@ void X86::X86MCLFIRewriter::expandIndirectBranch(const MCInst &Inst,
 // Syscall rewrite
 //===----------------------------------------------------------------------===//
 
+// Return true if the instruction reads from Reg.
+static bool readsRegister(const MCInst &Inst, const MCInstrDesc &Desc,
+                          MCRegister Reg, const MCRegisterInfo &RI) {
+  for (unsigned I = Desc.getNumDefs(), E = Inst.getNumOperands(); I < E; ++I) {
+    const MCOperand &Op = Inst.getOperand(I);
+    if (Op.isReg() && Op.getReg() && RI.regsOverlap(Op.getReg(), Reg))
+      return true;
+  }
+  for (MCPhysReg Use : Desc.implicit_uses())
+    if (RI.regsOverlap(Use, Reg))
+      return true;
+  return false;
+}
+
+// Return true if Reg is absent or a 64-bit general-purpose register.
+static bool isGR64OrNone(MCRegister Reg) {
+  return Reg == X86::NoRegister ||
+         X86MCRegisterClasses[X86::GR64RegClassID].contains(Reg);
+}
+
 // syscall
 // ->
 // leaq .Ltmp(%rip), %r11
@@ -513,21 +533,36 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
     return Out.emitInstruction(Modified, STI);
   }
 
-  // Use the dest register as TP temporary when it is available and not used in
-  // the addressing mode, otherwise use %r11.
+  if (!isGR64OrNone(BaseReg) || !isGR64OrNone(IndexReg) ||
+      BaseReg == X86::RSP || BaseReg == X86::RIP)
+    return error(Inst, "unsupported addressing mode for %fs access");
+
+  const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
+
+  // Reuse operand 0 as the TP temporary when the instruction writes it without
+  // also reading it, otherwise use %r11.
   MCRegister TPDest = LFIScratchReg;
   if (MemIdx > 0 && Inst.getOperand(0).isReg()) {
-    const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
     MCRegister DestReg = Inst.getOperand(0).getReg();
-    if (Desc.getOperandConstraint(0, MCOI::TIED_TO) == -1 &&
+    if (Desc.getNumDefs() > 0 &&
         X86MCRegisterClasses[X86::GR64RegClassID].contains(DestReg) &&
-        (!HasBase || DestReg != BaseReg) && (!HasIndex || DestReg != IndexReg))
+        !readsRegister(Inst, Desc, DestReg, *RegInfo))
       TPDest = DestReg;
   }
 
-  emitTPLoad(TPDest, GSContext, Out, STI);
+  if (TPDest == LFIScratchReg &&
+      readsRegister(Inst, Desc, LFIScratchReg, *RegInfo))
+    return error(Inst, "%fs access reads reserved register %r11");
 
-  // Both slots occupied: fold base into TPDest via lea.
+  emitTPLoad(TPDest, GSContext Out, STI);
+
+  // Both slots occupied: the compute base via lea. For example:
+  //
+  // movq %fs:8(%rdi,%rsi,2), %rax
+  // ->
+  // movq 16(%r15), %rax
+  // leaq (%rax,%rdi), %rax
+  // movq 8(%rax,%rsi,2), %rax
   if (HasBase && HasIndex) {
     MCInst Lea;
     Lea.setOpcode(X86::LEA64r);
