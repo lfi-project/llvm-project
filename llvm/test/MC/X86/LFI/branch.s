@@ -28,9 +28,9 @@ callq *%rdi
 // CHECK-NEXT: addq %r14, %rdi
 // CHECK-NEXT: callq *%rdi
 
-// Indirect call through memory - target loaded into r11 first
+// Indirect call through memory - target loaded into r11 first (and sandboxed)
 callq *(%rax)
-// CHECK:      movq (%rax), %r11
+// CHECK:      movq %gs:(%eax), %r11
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: .p2align 1
 // CHECK-NEXT: cs
@@ -40,7 +40,7 @@ callq *(%rax)
 // CHECK-NEXT: callq *%r11
 
 callq *8(%rbx)
-// CHECK:      movq 8(%rbx), %r11
+// CHECK:      movq %gs:8(%ebx), %r11
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: .p2align 1
 // CHECK-NEXT: cs
@@ -50,7 +50,7 @@ callq *8(%rbx)
 // CHECK-NEXT: callq *%r11
 
 callq *(%rax,%rcx,8)
-// CHECK:      movq (%rax,%rcx,8), %r11
+// CHECK:      movq %gs:(%eax,%ecx,8), %r11
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: .p2align 1
 // CHECK-NEXT: cs
@@ -80,7 +80,7 @@ jmpq *%rbx
 
 // Indirect jump through memory
 jmpq *(%rax)
-// CHECK:      movq (%rax), %r11
+// CHECK:      movq %gs:(%eax), %r11
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: .p2align 1
 // CHECK-NEXT: cs
@@ -90,7 +90,7 @@ jmpq *(%rax)
 // CHECK-NEXT: jmpq *%r11
 
 jmpq *16(%rbx)
-// CHECK:      movq 16(%rbx), %r11
+// CHECK:      movq %gs:16(%ebx), %r11
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: .p2align 1
 // CHECK-NEXT: cs
@@ -100,7 +100,7 @@ jmpq *16(%rbx)
 // CHECK-NEXT: jmpq *%r11
 
 jmpq *(%rax,%rcx,8)
-// CHECK:      movq (%rax,%rcx,8), %r11
+// CHECK:      movq %gs:(%eax,%ecx,8), %r11
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: .p2align 1
 // CHECK-NEXT: cs

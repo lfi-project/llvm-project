@@ -12,9 +12,9 @@ callq *%rax
 // CHECK-NOT:  cmpl
 // CHECK-NOT:  jne _lfi_trap
 
-// Indirect call through memory
+// Indirect call through memory (the load is still sandboxed)
 callq *(%rax)
-// CHECK:      movq (%rax), %r11
+// CHECK:      movq %gs:(%eax), %r11
 // CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: addq %r14, %r11
 // CHECK-NEXT: callq *%r11

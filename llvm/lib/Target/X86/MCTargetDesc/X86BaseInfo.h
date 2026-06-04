@@ -69,6 +69,11 @@ enum IPREFIXES {
   // 32-byte aligned and prefixed with ENDBR64, which is required for an
   // indirect jump (e.g. longjmp) to that address to pass forward-edge CFI.
   IP_LFI_RETURNS_TWICE = 1U << 14,
+  // Not an instruction prefix, but stored in the same MCInst::Flags field. Set
+  // by X86MCInstLower on a sandboxed memory access when a late LFI pass has
+  // proved EFLAGS is dead across it, so the LFI rewriter may mask the address
+  // with the cheaper flag-clobbering andq instead of pext.
+  IP_LFI_FLAGS_DEAD = 1U << 16,
 };
 
 enum OperandType : unsigned {

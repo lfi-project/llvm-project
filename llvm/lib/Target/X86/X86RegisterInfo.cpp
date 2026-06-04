@@ -623,8 +623,15 @@ BitVector X86RegisterInfo::getReservedRegs(const MachineFunction &MF) const {
       Reserved.set(*AI);
     for (MCRegAliasIterator AI(X86::R14, this, true); AI.isValid(); ++AI)
       Reserved.set(*AI);
-    for (MCRegAliasIterator AI(X86::R15, this, true); AI.isValid(); ++AI)
-      Reserved.set(*AI);
+    // r15 is the context register, except in GS-context mode where the context
+    // register file is addressed via %gs and r15 is a general-purpose register.
+    if (!MF.getSubtarget<X86Subtarget>().isLFIGSContext())
+      for (MCRegAliasIterator AI(X86::R15, this, true); AI.isValid(); ++AI)
+        Reserved.set(*AI);
+    // Large-sandbox mode reserves r13 to hold the sandbox size mask.
+    if (MF.getSubtarget<X86Subtarget>().isLFILargeSandbox())
+      for (MCRegAliasIterator AI(X86::R13, this, true); AI.isValid(); ++AI)
+        Reserved.set(*AI);
   }
 
   assert(checkAllSuperRegsMarked(Reserved,
