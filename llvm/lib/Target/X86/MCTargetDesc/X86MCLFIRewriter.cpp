@@ -501,7 +501,7 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
       readsRegister(Inst, Desc, LFIScratchReg, *RegInfo))
     return error(Inst, "%fs access reads reserved register %r11");
 
-  emitTPLoad(TPDest, Out, STI);
+  emitTPLoad(TPDest, GSContext, Out, STI);
 
   // Both slots occupied: the compute base via lea. For example:
   //
