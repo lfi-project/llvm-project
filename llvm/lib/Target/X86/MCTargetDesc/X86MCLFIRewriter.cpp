@@ -348,6 +348,7 @@ void X86::X86MCLFIRewriter::rewriteReturn(const MCInst &Inst, MCStreamer &Out,
 // .Ltmp:
 void X86::X86MCLFIRewriter::rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
                                            const MCSubtargetInfo &STI) {
+  Out.emitBundleLock(/*AlignToEnd=*/false, STI);
   MCSymbol *Symbol = Out.getContext().createTempSymbol();
 
   MCInst Lea;
@@ -371,6 +372,7 @@ void X86::X86MCLFIRewriter::rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
   Out.emitInstruction(Jmp, STI);
 
   Out.emitLabel(Symbol);
+  Out.emitBundleUnlock(STI);
 }
 
 //===----------------------------------------------------------------------===//
