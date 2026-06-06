@@ -147,6 +147,22 @@ static bool isStringOperation(const MCInst &Inst) {
   case X86::STOSW:
   case X86::STOSL:
   case X86::STOSQ:
+  case X86::REP_MOVSB_32:
+  case X86::REP_MOVSW_32:
+  case X86::REP_MOVSD_32:
+  case X86::REP_MOVSQ_32:
+  case X86::REP_MOVSB_64:
+  case X86::REP_MOVSW_64:
+  case X86::REP_MOVSD_64:
+  case X86::REP_MOVSQ_64:
+  case X86::REP_STOSB_32:
+  case X86::REP_STOSW_32:
+  case X86::REP_STOSD_32:
+  case X86::REP_STOSQ_32:
+  case X86::REP_STOSB_64:
+  case X86::REP_STOSW_64:
+  case X86::REP_STOSD_64:
+  case X86::REP_STOSQ_64:
     return true;
   default:
     return false;
@@ -1267,12 +1283,36 @@ void X86::X86MCLFIRewriter::rewriteStringOperation(
     if (!SkipLoads)
       fixupStringOpReg(Inst.getOperand(1), Large, Out, STI);
     break;
+  case X86::REP_MOVSB_32:
+  case X86::REP_MOVSW_32:
+  case X86::REP_MOVSD_32:
+  case X86::REP_MOVSQ_32:
+  case X86::REP_MOVSB_64:
+  case X86::REP_MOVSW_64:
+  case X86::REP_MOVSD_64:
+  case X86::REP_MOVSQ_64:
+    if (!SkipStores)
+      fixupStringOpReg(MCOperand::createReg(X86::RDI), Large, Out, STI);
+    if (!SkipLoads)
+      fixupStringOpReg(MCOperand::createReg(X86::RSI), Large, Out, STI);
+    break;
   case X86::STOSB:
   case X86::STOSW:
   case X86::STOSL:
   case X86::STOSQ:
     if (!SkipStores)
       fixupStringOpReg(Inst.getOperand(0), Large, Out, STI);
+    break;
+  case X86::REP_STOSB_32:
+  case X86::REP_STOSW_32:
+  case X86::REP_STOSD_32:
+  case X86::REP_STOSQ_32:
+  case X86::REP_STOSB_64:
+  case X86::REP_STOSW_64:
+  case X86::REP_STOSD_64:
+  case X86::REP_STOSQ_64:
+    if (!SkipStores)
+      fixupStringOpReg(MCOperand::createReg(X86::RDI), Large, Out, STI);
     break;
   }
 
