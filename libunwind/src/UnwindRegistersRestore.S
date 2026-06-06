@@ -112,13 +112,9 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
   movq   80(%rdi), %r10
   movq   88(%rdi), %r11
   movq   96(%rdi), %r12
+  movq  104(%rdi), %r13
 #if !defined(__LFI__)
-  movq  104(%rdi), %r13
   movq  112(%rdi), %r14
-  movq  120(%rdi), %r15
-#elif defined(__LFI_LARGE_SANDBOX__)
-  movq  104(%rdi), %r13
-#else
   movq  120(%rdi), %r15
 #endif
   # skip rflags
