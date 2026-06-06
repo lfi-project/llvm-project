@@ -147,8 +147,13 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
 #if !defined(__LFI__)
   movq  %r13,104(PTR)
   movq  %r14,112(PTR)
+  movq  %r15,120(PTR)
+#elif defined(__LFI_LARGE_SANDBOX__)
+  movq  %r13,104(PTR)
+#else
+  movq  %r15,120(PTR)
 #endif
-movq  %r15,120(PTR)
+#endif
   movq  (%rsp),TMP
   movq  TMP,128(PTR) # store return address as rip
   # skip rflags
