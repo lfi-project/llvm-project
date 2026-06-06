@@ -63,6 +63,10 @@ private:
   /// r15). Requires Segue to be disabled.
   bool hasGSContext(const MCSubtargetInfo &STI) const;
 
+  /// Returns true if return instructions are left unrewritten (the native ret
+  /// is used instead of the masked pop/jmp sequence).
+  bool hasUseRet(const MCSubtargetInfo &STI) const;
+
   /// Main dispatch function for instruction rewriting.
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI, bool EmitPrefixes);

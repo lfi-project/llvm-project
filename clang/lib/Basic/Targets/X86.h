@@ -189,6 +189,7 @@ class LLVM_LIBRARY_VISIBILITY X86TargetInfo : public TargetInfo {
   bool HasLFINoSegue = false;
   bool HasLFIGSContext = false;
   bool HasLFILargeSandbox = false;
+  bool HasLFIUseRet = false;
 
 protected:
   llvm::X86::CPUKind CPU = llvm::X86::CK_None;

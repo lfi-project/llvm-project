@@ -348,6 +348,7 @@ void x86::getX86TargetFeatures(const Driver &D, const llvm::Triple &Triple,
                                 .Case("no-stores", "+no-lfi-stores")
                                 .Case("gs-context", "+lfi-gs-context")
                                 .Case("large-sandbox", "+lfi-large-sandbox")
+                                .Case("use-ret", "+lfi-use-ret")
                                 .Default("");
         if (Feature.empty()) {
           D.Diag(diag::err_drv_unsupported_option_argument)

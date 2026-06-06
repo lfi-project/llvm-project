@@ -498,6 +498,8 @@ def FeatureLFILargeSandbox : SubtargetFeature<"lfi-large-sandbox", "LFILargeSand
   "Use the LFI large-sandbox scheme, supporting any power-of-two sandbox size "
   "(reserves r13 as the mask register and implies no-lfi-segue)",
   [FeatureNoLFISegue]>;
+def FeatureLFIUseRet : SubtargetFeature<"lfi-use-ret", "LFIUseRet", "true",
+  "Leave return instructions unrewritten by LFI (use the native ret)">;
 
 //===----------------------------------------------------------------------===//
 // X86 Subtarget Tuning features

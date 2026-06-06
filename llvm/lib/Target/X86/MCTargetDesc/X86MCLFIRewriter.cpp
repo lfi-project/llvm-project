@@ -65,6 +65,10 @@ bool X86::X86MCLFIRewriter::hasNoLFIStores(const MCSubtargetInfo &STI) const {
   return STI.hasFeature(X86::FeatureNoLFIStores);
 }
 
+bool X86::X86MCLFIRewriter::hasUseRet(const MCSubtargetInfo &STI) const {
+  return STI.hasFeature(X86::FeatureLFIUseRet);
+}
+
 //===----------------------------------------------------------------------===//
 // Register helpers
 //===----------------------------------------------------------------------===//
@@ -1463,8 +1467,13 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   if (isDirectCall(Inst))
     return rewriteDirectCall(Inst, Out, STI);
 
-  if (isReturn(Inst))
+  if (isReturn(Inst)) {
+    // With lfi-use-ret, return instructions are trusted and left unrewritten,
+    // emitting the native ret instead of the masked pop/jmp sequence.
+    if (hasUseRet(STI))
+      return emitInstruction(Inst, Out, STI, EmitPrefixes);
     return rewriteReturn(Inst, Out, STI);
+  }
 
   if (isIndirectBranch(Inst) || isCall(Inst))
     return rewriteIndirectBranch(Inst, Out, STI);

@@ -477,6 +477,9 @@ features.
   of any power-of-two size instead of the default fixed 4GiB. Reserves ``%r13``
   as the sandbox mask register and implies ``+no-lfi-segue`` (see
   `Large sandbox mode`_).
+* ``+lfi-use-ret``: leave ``ret`` instructions unrewritten, emitting the native
+  ``ret`` instead of the masked pop/jump sequence. This relies on return
+  addresses being trusted by some other means (e.g. a shadow stack).
 
 GS context mode
 ~~~~~~~~~~~~~~~
@@ -909,6 +912,10 @@ through the same sequence:
     andq $-32, %r11
     addq %r14, %r11
     jmpq *%r11
+
+With ``+lfi-use-ret`` this return rewrite is suppressed and the native ``ret``
+is emitted instead, which relies on return addresses being trusted by some
+other means (e.g. a shadow stack).
 
 Direct calls are bundled (aligned to the end of the bundle) exactly as in the
 default scheme.

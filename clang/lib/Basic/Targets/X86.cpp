@@ -465,6 +465,8 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasLFIGSContext = true;
     } else if (Feature == "+lfi-large-sandbox") {
       HasLFILargeSandbox = true;
+    } else if (Feature == "+lfi-use-ret") {
+      HasLFIUseRet = true;
     }
 
     X86SSEEnum Level = llvm::StringSwitch<X86SSEEnum>(Feature)
@@ -559,6 +561,8 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
       Builder.defineMacro("__LFI_GS_CONTEXT__");
     if (HasLFILargeSandbox)
       Builder.defineMacro("__LFI_LARGE_SANDBOX__");
+    if (HasLFIUseRet)
+      Builder.defineMacro("__LFI_USE_RET__");
   }
 
   Builder.defineMacro("__SEG_GS");
