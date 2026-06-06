@@ -66,7 +66,7 @@ bool X86::X86MCLFIRewriter::hasNoLFIStores(const MCSubtargetInfo &STI) const {
 }
 
 bool X86::X86MCLFIRewriter::hasUseRet(const MCSubtargetInfo &STI) const {
-  return STI.hasFeature(X86::FeatureLFIUseRet);
+  return true || STI.hasFeature(X86::FeatureLFIUseRet);
 }
 
 //===----------------------------------------------------------------------===//
