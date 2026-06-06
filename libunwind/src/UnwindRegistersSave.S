@@ -153,7 +153,6 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
 #else
   movq  %r15,120(PTR)
 #endif
-#endif
   movq  (%rsp),TMP
   movq  TMP,128(PTR) # store return address as rip
   # skip rflags
