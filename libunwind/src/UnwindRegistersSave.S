@@ -847,6 +847,10 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
   .p2align 2
 DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_arm64_za_disable)
   .variant_pcs __libunwind_Registers_arm64_za_disable
+#if defined(__LFI__)
+  mov x0, xzr
+  ret
+#else
 #if __has_feature(ptrauth_calls)
   pacibsp
 #endif
@@ -890,6 +894,7 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_arm64_za_disable)
 #else
   ret
 #endif
+#endif // defined(__LFI__)
 
 #elif defined(__arm__) && !defined(__APPLE__)
 
