@@ -129,12 +129,15 @@ class X86AsmBackend : public MCAsmBackend {
   MCBoundaryAlignFragment *PendingBA = nullptr;
   std::pair<MCFragment *, size_t> PrevInstPosition;
 
+  bool ReuseBA;
+  MCFragment *MaybeLast;
+
   uint8_t determinePaddingPrefix(const MCInst &Inst) const;
   bool isMacroFused(const MCInst &Cmp, const MCInst &Jcc) const;
   bool needAlign(const MCInst &Inst) const;
   bool canPadBranches(MCObjectStreamer &OS) const;
   bool canPadInst(const MCInst &Inst, MCObjectStreamer &OS) const;
-  void emitInstructionBeginBundle(MCObjectStreamer &OS);
+  void emitInstructionBeginBundle(MCObjectStreamer &OS, const MCInst &Inst);
   void emitInstructionEndBundle(MCObjectStreamer &OS);
 
 public:
@@ -487,21 +490,22 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
 /// If the upcoming instruction is inside the bundle lock, do nothing so that
 /// the ObjectStreamer emits the instruction to the current fragment. If not, it
 /// creates a new BA to group bundled fragments.
-void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS) {
+void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS, const MCInst &Inst) {
   assert(Asm->isBundlingEnabled());
 
   if (OS.getCurrentSectionOnly()->isBundleLocked()) {
     OS.getCurrentFragment()->setAllowAutoPadding(true);
     return;
   }
-  PendingBA = OS.newSpecialFragment<MCBoundaryAlignFragment>(
-      Align(Asm->getBundleAlignSize()), STI);
-  // We can set LastFragment now, before the instruction is emitted, as bundling
-  // emits one fragment per instruction. Deferring setLastFragment to
-  // post-emitInstruction would risk capturing a fragment that a subsequent
-  // emitCodeAlignment repurposes in-place to FT_Align, corrupting the BA's
-  // boundary range.
-  PendingBA->setLastFragment(OS.getCurrentFragment());
+  ReuseBA = !canPadInst(Inst, OS);
+  if (PendingBA && PendingBA->getLastFragment()->getParent() != OS.getCurrentSectionOnly())
+    PendingBA = OS.newSpecialFragment<MCBoundaryAlignFragment>(
+        Align(Asm->getBundleAlignSize()), STI);
+  else if (!ReuseBA || PendingBA == nullptr)
+    PendingBA = OS.newSpecialFragment<MCBoundaryAlignFragment>(
+        Align(Asm->getBundleAlignSize()), STI);
+
+  MaybeLast = OS.getCurrentFragment();
 
   OS.getCurrentFragment()->setAllowAutoPadding(true);
 }
@@ -522,6 +526,12 @@ void X86AsmBackend::emitInstructionEndBundle(MCObjectStreamer &OS) {
   assert(PendingBA && "MCBoundaryAlignFragment is expected for every "
                       "instruction if it is not bundle-locked");
 
+  PendingBA->setLastFragment(MaybeLast);
+
+  if (ReuseBA)
+    return;
+
+  MaybeLast = nullptr;
   PendingBA = nullptr;
 
   CF->getParent()->ensureMinAlignment(Align(Asm->getBundleAlignSize()));
@@ -532,7 +542,7 @@ void X86AsmBackend::emitInstructionBegin(MCObjectStreamer &OS,
                                          const MCInst &Inst,
                                          const MCSubtargetInfo &STI) {
   if (Asm->isBundlingEnabled())
-    return emitInstructionBeginBundle(OS);
+    return emitInstructionBeginBundle(OS, Inst);
   bool CanPadInst = canPadInst(Inst, OS);
   if (CanPadInst)
     OS.getCurrentFragment()->setAllowAutoPadding(true);
@@ -595,12 +605,13 @@ void X86AsmBackend::emitInstructionBegin(MCObjectStreamer &OS,
 /// Set the last fragment to be aligned for the BoundaryAlignFragment.
 void X86AsmBackend::emitInstructionEnd(MCObjectStreamer &OS,
                                        const MCInst &Inst) {
-  if (Asm->isBundlingEnabled())
-    return emitInstructionEndBundle(OS);
   // Update PrevInstOpcode here, canPadInst() reads that.
   MCFragment *CF = OS.getCurrentFragment();
   PrevInstOpcode = Inst.getOpcode();
   PrevInstPosition = std::make_pair(CF, OS.getCurFragSize());
+
+  if (Asm->isBundlingEnabled())
+    return emitInstructionEndBundle(OS);
 
   if (!canPadBranches(OS))
     return;
@@ -838,7 +849,21 @@ void X86AsmBackend::relaxInstruction(MCInst &Inst,
 }
 
 static bool mayNotPrefixPad(unsigned Opcode) {
-  return Opcode == X86::CPUID;
+  switch (Opcode) {
+    case X86::CPUID:
+    case X86::CMPXCHG16B:
+    case X86::CMPXCHG16rm:
+    case X86::CMPXCHG16rr:
+    case X86::CMPXCHG32rm:
+    case X86::CMPXCHG32rr:
+    case X86::CMPXCHG64rm:
+    case X86::CMPXCHG64rr:
+    case X86::CMPXCHG8B:
+    case X86::CMPXCHG8rm:
+    case X86::CMPXCHG8rr:
+      return true;
+  }
+  return false;
 }
 
 bool X86AsmBackend::padInstructionViaPrefix(MCFragment &RF,
