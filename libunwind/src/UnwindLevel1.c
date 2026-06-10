@@ -280,7 +280,7 @@ unwind_phase2(unw_context_t *uc, unw_cursor_t *cursor,
 // stack against return address stored in shadow stack, if the 2 addresses don't
 // match, it means return address in normal stack has been corrupted, we return
 // _URC_FATAL_PHASE2_ERROR.
-#if defined(_LIBUNWIND_USE_CET) || defined(_LIBUNWIND_USE_GCS) && !defined(__LFI__)
+#if (defined(_LIBUNWIND_USE_CET) || defined(_LIBUNWIND_USE_GCS)) && !defined(__LFI__)
     if (shadowStackTop != 0) {
       unw_word_t retInNormalStack;
       __unw_get_reg(cursor, UNW_REG_IP, &retInNormalStack);
