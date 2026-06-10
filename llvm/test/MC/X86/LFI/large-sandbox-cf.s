@@ -2,22 +2,24 @@
 
 // CHECK: .bundle_align_mode 5
 
-// Indirect jump: mask to the sandbox with r13, align to a bundle boundary by
-// clearing the low bits, then add the base.
+// Control-flow masking in large-sandbox mode reuses the fixed-4GiB sequence
+// (andl $-32; addq %r14), not the %r13 data mask, because executable code is
+// confined to the low 4GiB of the sandbox. The single andl truncates the target
+// to 4GiB and clears the low five bits (bundle alignment).
+
+// Indirect jump.
 jmpq *%rax
 // CHECK:      .bundle_lock
-// CHECK-NEXT: andq %r13, %rax
-// CHECK-NEXT: andq $-32, %rax
+// CHECK-NEXT: andl $-32, %eax
 // CHECK-NEXT: addq %r14, %rax
 // CHECK-NEXT: jmpq *%rax
 // CHECK-NEXT: .bundle_unlock
 
-// Indirect call: same masking, but the call is placed at the end of the bundle
-// so the return address is bundle-aligned.
+// Indirect call: the call is placed at the end of the bundle so the return
+// address is bundle-aligned.
 callq *%rax
 // CHECK:      .bundle_lock align_to_end
-// CHECK-NEXT: andq %r13, %rax
-// CHECK-NEXT: andq $-32, %rax
+// CHECK-NEXT: andl $-32, %eax
 // CHECK-NEXT: addq %r14, %rax
 // CHECK-NEXT: callq *%rax
 // CHECK-NEXT: .bundle_unlock
@@ -26,8 +28,7 @@ callq *%rax
 ret
 // CHECK:      popq %r11
 // CHECK-NEXT: .bundle_lock
-// CHECK-NEXT: andq %r13, %r11
-// CHECK-NEXT: andq $-32, %r11
+// CHECK-NEXT: andl $-32, %r11d
 // CHECK-NEXT: addq %r14, %r11
 // CHECK-NEXT: jmpq *%r11
 // CHECK-NEXT: .bundle_unlock

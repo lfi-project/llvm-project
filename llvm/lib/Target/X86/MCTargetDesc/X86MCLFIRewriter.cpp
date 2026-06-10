@@ -220,38 +220,17 @@ void X86::X86MCLFIRewriter::emitInstruction(const MCInst &Inst, MCStreamer &Out,
 //   addq %r14, %rX
 // This zeroes the top 32 bits and bottom log2(BundleSize) bits of the target,
 // then fills in the top 32 bits with the sandbox base.
+//
+// Large-sandbox mode uses this same fixed-4GiB sequence rather than the %r13
+// mask used for data accesses. Executable code is confined to the low 4GiB of
+// the sandbox, so a target truncated to 4GiB and bundle-aligned always lands on
+// a valid in-sandbox bundle boundary (or a non-executable address that faults).
+// This saves an instruction and avoids %r13 on every indirect branch.
 void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
   MCRegister Reg32 = getReg32(Reg);
   MCRegister Reg64 = getReg64(Reg);
-
-  // Large-sandbox mode masks the target to the sandbox with %r13, then aligns
-  // it to a bundle boundary by clearing the low bits, then adds the base. Both
-  // masks clobber the flags, which is harmless for control flow.
-  if (hasLargeSandbox(STI)) {
-    MCInst AndMask;
-    AndMask.setOpcode(X86::AND64rr);
-    AndMask.addOperand(MCOperand::createReg(Reg64));
-    AndMask.addOperand(MCOperand::createReg(Reg64));
-    AndMask.addOperand(MCOperand::createReg(LFIMaskReg));
-    Out.emitInstruction(AndMask, STI);
-
-    MCInst AndAlign;
-    AndAlign.setOpcode(X86::AND64ri8);
-    AndAlign.addOperand(MCOperand::createReg(Reg64));
-    AndAlign.addOperand(MCOperand::createReg(Reg64));
-    AndAlign.addOperand(MCOperand::createImm(-static_cast<int>(BundleSize)));
-    Out.emitInstruction(AndAlign, STI);
-
-    MCInst Add;
-    Add.setOpcode(X86::ADD64rr);
-    Add.addOperand(MCOperand::createReg(Reg64));
-    Add.addOperand(MCOperand::createReg(Reg64));
-    Add.addOperand(MCOperand::createReg(LFIBaseReg));
-    Out.emitInstruction(Add, STI);
-    return;
-  }
 
   MCInst And;
   And.setOpcode(X86::AND32ri8);
