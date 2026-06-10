@@ -842,6 +842,11 @@ to ``2^k``, masking an absolute pointer ``base + offset`` with ``%r13`` discards
 the base (whose low ``k`` bits are zero) and leaves the offset, which the add
 re-attaches to the base.
 
+Executable code is required to be confined to the low 4GiB of the sandbox. This
+lets indirect branches reuse the cheaper fixed-4GiB control-flow mask (see
+`Control flow`_ below) instead of ``%r13``; only data accesses, which may target
+the full ``2^k`` region, need the ``%r13`` mask.
+
 Masking can no longer be folded into a 32-bit truncation or the ``%gs`` segment
 base, so large-sandbox mode requires Segue to be disabled and implies
 ``+no-lfi-segue``. This frees the ``%gs`` segment, so large-sandbox mode
@@ -888,17 +893,22 @@ Accesses based on a register that always holds a valid sandbox address
 Control flow
 ~~~~~~~~~~~~
 
-Indirect branch targets are masked to the sandbox with ``%r13`` and aligned to a
-bundle boundary by clearing the low five bits, before the base is added. As in
-the default scheme the sequence is bundled, and indirect calls are aligned to
-the end of the bundle so the return address is bundle-aligned.
+Control-flow masking does **not** use ``%r13``. Because all executable code is
+confined to the low 4GiB of the sandbox, an indirect branch target only needs to
+be confined to that 4GiB window, so the rewriter reuses the default fixed-4GiB
+sequence: a single ``andl $-32, %eX`` truncates the target to 32 bits and clears
+the low five bits (aligning it to a bundle boundary), then the base is added. A
+target masked this way always lands on a bundle boundary within the low 4GiB --
+on valid code, or on a non-executable page that faults. This saves an
+instruction (and avoids ``%r13``) on every indirect branch. As in the default
+scheme the sequence is bundled, and indirect calls are aligned to the end of the
+bundle so the return address is bundle-aligned.
 
 An indirect jump ``jmpq *%rN`` becomes:
 
 .. code-block:: gas
 
-    andq %r13, %rN
-    andq $-32, %rN          # clear low 5 bits (bundle alignment)
+    andl $-32, %eN          # truncate to 4GiB and clear the low 5 bits
     addq %r14, %rN
     jmpq *%rN
 
@@ -908,8 +918,7 @@ through the same sequence:
 .. code-block:: gas
 
     popq %r11
-    andq %r13, %r11
-    andq $-32, %r11
+    andl $-32, %r11d
     addq %r14, %r11
     jmpq *%r11
 
