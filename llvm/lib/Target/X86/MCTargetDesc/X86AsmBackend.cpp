@@ -495,6 +495,8 @@ void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS, const MCIns
 
   if (OS.getCurrentSectionOnly()->isBundleLocked()) {
     OS.getCurrentFragment()->setAllowAutoPadding(true);
+    // To ensure that a new BA is created for an instruction right after bundle unlock
+    PendingBA = nullptr;
     return;
   }
   ReuseBA = !canPadInst(Inst, OS);
