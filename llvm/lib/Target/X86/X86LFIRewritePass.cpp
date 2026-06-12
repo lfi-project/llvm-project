@@ -19,6 +19,11 @@
 
 using namespace llvm;
 
+static cl::opt<bool> AlignDirectBranches(
+    "x86-lfi-align-direct-branches",
+    cl::desc("Align the targets of direct branches to a bundle boundary"),
+    cl::init(false), cl::Hidden);
+
 namespace {
 class X86LFIRewritePass : public MachineFunctionPass {
 public:
@@ -92,7 +97,7 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
       static_cast<const X86TargetMachine *>(&MF.getTarget());
 
   for (MachineBasicBlock &MBB : MF) {
-    if (MBB.hasAddressTaken() || JumpTableTargets.count(&MBB)) {
+    if (MBB.hasAddressTaken() || JumpTableTargets.count(&MBB) || AlignDirectBranches) {
       MBB.setAlignment(llvm::Align(32));
       Modified = true;
     }
