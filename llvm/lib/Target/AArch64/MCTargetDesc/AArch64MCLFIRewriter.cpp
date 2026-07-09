@@ -16,6 +16,9 @@
 #include "MCTargetDesc/AArch64MCTargetDesc.h"
 #include "Utils/AArch64BaseInfo.h"
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
@@ -30,6 +33,12 @@ static cl::opt<bool>
     LFIGuardElim("aarch64-lfi-guard-elim", cl::Hidden,
                  cl::desc("Enable the LFI guard elimination optimization"),
                  cl::init(true));
+
+static cl::opt<bool> LFIWarnReservedReg(
+    "aarch64-lfi-warn-reserved-reg", cl::Hidden,
+    cl::desc("Warn when an access to a reserved register is virtualized by the "
+             "LFI rewriter"),
+    cl::init(false));
 
 namespace llvm::AArch64 {
 struct LFIVariantEntry {
@@ -94,6 +103,16 @@ static constexpr unsigned LFITPOffset = 2;
 // Byte offset from the sandbox base register where the syscall handler address
 // is stored (negative because it is below the sandbox base).
 static constexpr int LFISyscallOffset = -8;
+
+// Scaled offsets (multiplied by 8) into the context block of the virtual slots
+// holding the logical values of the reserved registers, indexed by
+// reservedIndex (x25, x26, x27, x28), and of the donor scratch slots used when
+// spilling general-purpose registers. These must match the context-area layout
+// documented in llvm/docs/LFI.rst.
+static constexpr unsigned LFIVirtRegOffset[] = {3, 4, 5, 6};
+static constexpr unsigned LFIDonorOffset[] = {7, 8, 9};
+static constexpr unsigned LFINumDonorSlots =
+    sizeof(LFIDonorOffset) / sizeof(LFIDonorOffset[0]);
 
 static bool isSyscall(const MCInst &Inst) {
   return Inst.getOpcode() == AArch64::SVC;
@@ -186,6 +205,86 @@ static MCInst replaceRegAt(const MCInst &Inst, unsigned Idx,
   return New;
 }
 
+// The reserved registers whose accesses are virtualized. x26 and x28
+// additionally serve as the rewriter's scratch registers.
+//
+// If Reg is one of these registers, or its 32-bit (w) view, returns the 64-bit
+// (x) form; otherwise returns an invalid register.
+static MCRegister canonicalReserved(MCRegister Reg) {
+  for (MCRegister X :
+       {AArch64::X25, AArch64::X26, AArch64::X27, AArch64::X28})
+    if (Reg == X || Reg == getWRegFromXReg(X))
+      return X;
+  return MCRegister();
+}
+
+// Index of a reserved register into the LFIVirtRegOffset table.
+static unsigned reservedIndex(MCRegister XReg) {
+  switch (XReg.id()) {
+  case AArch64::X25:
+    return 0;
+  case AArch64::X26:
+    return 1;
+  case AArch64::X27:
+    return 2;
+  case AArch64::X28:
+    return 3;
+  }
+  llvm_unreachable("not a virtualized reserved register");
+}
+
+// Returns true if the reserved register XReg appears in a use (non-def) operand
+// of Inst. Over-approximating (returning true spuriously) only causes a
+// redundant virtual-value load, so this checks explicit use operands, which
+// covers every general-purpose read in the Armv8.1 subset.
+static bool readsReservedReg(const MCInst &Inst, unsigned NumDefs,
+                             MCRegister XReg) {
+  for (unsigned I = NumDefs, E = Inst.getNumOperands(); I < E; ++I) {
+    const MCOperand &Op = Inst.getOperand(I);
+    if (Op.isReg() && canonicalReserved(Op.getReg()) == XReg)
+      return true;
+  }
+  return false;
+}
+
+// Returns true if XReg (or its w view) is referenced by any explicit operand or
+// implicit use/def of Inst. Used to keep donor registers clear of the
+// instruction's own operands.
+static bool regReferenced(const MCInst &Inst, const MCInstrDesc &Desc,
+                          MCRegister XReg) {
+  MCRegister WReg = getWRegFromXReg(XReg);
+  auto Match = [&](MCRegister R) { return R == XReg || R == WReg; };
+  for (const MCOperand &Op : Inst)
+    if (Op.isReg() && Match(Op.getReg()))
+      return true;
+  for (MCPhysReg R : Desc.implicit_uses())
+    if (Match(R))
+      return true;
+  for (MCPhysReg R : Desc.implicit_defs())
+    if (Match(R))
+      return true;
+  return false;
+}
+
+// Returns a copy of Inst with each reserved register operand replaced by its
+// assigned substitute (Regs[i] -> Subs[i]), preserving the w/x width of each
+// operand.
+static MCInst substituteReserved(const MCInst &Inst, ArrayRef<MCRegister> Regs,
+                                 ArrayRef<MCRegister> Subs) {
+  MCInst New = Inst;
+  for (MCOperand &Op : New) {
+    if (!Op.isReg())
+      continue;
+    MCRegister X = canonicalReserved(Op.getReg());
+    if (!X.isValid())
+      continue;
+    MCRegister Sub = Subs[find(Regs, X) - Regs.begin()];
+    bool IsW = Op.getReg() != X;
+    Op.setReg(IsW ? getWRegFromXReg(Sub) : Sub);
+  }
+  return New;
+}
+
 // AArch64 load/store opcode suffixes used throughout this file:
 //   Ui:  Unsigned immediate offset, scaled by access size: [Xn, #imm].
 //   RoW: Register offset with 32-bit W register: [Xn, Wm, uxtw #shift].
@@ -241,14 +340,6 @@ static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
 
 bool AArch64MCLFIRewriter::mayModifySP(const MCInst &Inst) const {
   return mayModifyRegister(Inst, AArch64::SP);
-}
-
-MCRegister AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
-  for (MCRegister Reg : {LFIAddrReg, LFIBaseReg, LFICtxReg}) {
-    if (mayModifyRegister(Inst, Reg))
-      return Reg;
-  }
-  return {};
 }
 
 void AArch64MCLFIRewriter::onLabel(const MCSymbol *) {
@@ -772,6 +863,144 @@ void AArch64MCLFIRewriter::rewriteVASysOp(const MCInst &Inst, MCStreamer &Out,
   emitInst(NewInst, Out, STI);
 }
 
+// Returns true if any explicit operand of Inst is a reserved register (or its
+// 32-bit view). No Armv8.1 instruction implicitly uses a reserved register, so
+// explicit operands are sufficient.
+bool AArch64MCLFIRewriter::referencesReserved(const MCInst &Inst) const {
+  for (const MCOperand &Op : Inst)
+    if (Op.isReg() && canonicalReserved(Op.getReg()).isValid())
+      return true;
+  return false;
+}
+
+// Chooses a donor: the lowest-numbered register in x0-x24 that is neither
+// already in Used nor referenced by Inst. Returns an invalid register if none
+// is available (impossible in the Armv8.1 subset, where at most three donors
+// are needed).
+MCRegister AArch64MCLFIRewriter::allocDonor(const MCInst &Inst,
+                                            ArrayRef<MCRegister> Used) const {
+  static constexpr MCPhysReg Candidates[] = {
+      AArch64::X0,  AArch64::X1,  AArch64::X2,  AArch64::X3,  AArch64::X4,
+      AArch64::X5,  AArch64::X6,  AArch64::X7,  AArch64::X8,  AArch64::X9,
+      AArch64::X10, AArch64::X11, AArch64::X12, AArch64::X13, AArch64::X14,
+      AArch64::X15, AArch64::X16, AArch64::X17, AArch64::X18, AArch64::X19,
+      AArch64::X20, AArch64::X21, AArch64::X22, AArch64::X23, AArch64::X24};
+  const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
+  for (MCRegister D : Candidates) {
+    if (is_contained(Used, D))
+      continue;
+    if (regReferenced(Inst, Desc, D))
+      continue;
+    return D;
+  }
+  return MCRegister();
+}
+
+// ldr Dest, [x25, #(ScaledOffset * 8)]
+void AArch64MCLFIRewriter::emitCtxLoad(MCRegister Dest, unsigned ScaledOffset,
+                                       MCStreamer &Out,
+                                       const MCSubtargetInfo &STI) {
+  MCInst Load;
+  Load.setOpcode(AArch64::LDRXui);
+  Load.addOperand(MCOperand::createReg(Dest));
+  Load.addOperand(MCOperand::createReg(LFICtxReg));
+  Load.addOperand(MCOperand::createImm(ScaledOffset));
+  emitInst(Load, Out, STI);
+}
+
+// str Src, [x25, #(ScaledOffset * 8)]
+void AArch64MCLFIRewriter::emitCtxStore(MCRegister Src, unsigned ScaledOffset,
+                                        MCStreamer &Out,
+                                        const MCSubtargetInfo &STI) {
+  MCInst Store;
+  Store.setOpcode(AArch64::STRXui);
+  Store.addOperand(MCOperand::createReg(Src));
+  Store.addOperand(MCOperand::createReg(LFICtxReg));
+  Store.addOperand(MCOperand::createImm(ScaledOffset));
+  emitInst(Store, Out, STI);
+}
+
+// Virtualizes an instruction that references one or more reserved registers.
+// Each reserved register's logical value lives in a context-area slot; it is
+// loaded into a substitute register (x26 or a spilled donor) before the
+// instruction, and stored back after if the register is written. The
+// substituted instruction contains no reserved registers and is rewritten by
+// the normal machinery. See llvm/docs/LFI.rst.
+void AArch64MCLFIRewriter::rewriteVirtualized(const MCInst &Inst,
+                                              MCStreamer &Out,
+                                              const MCSubtargetInfo &STI) {
+  // Collect the distinct reserved registers (x-form) referenced, in order of
+  // first appearance.
+  SmallVector<MCRegister, 4> Regs;
+  for (const MCOperand &Op : Inst) {
+    if (!Op.isReg())
+      continue;
+    MCRegister X = canonicalReserved(Op.getReg());
+    if (X.isValid() && !is_contained(Regs, X))
+      Regs.push_back(X);
+  }
+  assert(!Regs.empty() && "no reserved register to virtualize");
+
+  if (LFIWarnReservedReg)
+    warning(Inst, Twine("access to reserved LFI register ") +
+                      RegInfo->getName(Regs.front()) + " is virtualized");
+
+  const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
+  unsigned NumDefs = Desc.getNumDefs();
+
+  // x26 can substitute for the first reserved register unless the instruction's
+  // own rewrite uses x26/x28 as scratch, which happens for memory accesses and
+  // stack-pointer modifications. x28 is never used as a substitute. Additional
+  // reserved registers use donor registers.
+  bool IsMem = !isFakeMemAccess(Inst) &&
+               (mayLoad(Inst) || mayStore(Inst) || mayPrefetch(Inst));
+  bool X26Eligible = !IsMem && !mayModifySP(Inst);
+
+  SmallVector<MCRegister, 4> Subs;
+  SmallVector<MCRegister, 4> Donors;
+  SmallVector<unsigned, 4> DonorSlots;
+  for (unsigned I = 0; I < Regs.size(); ++I) {
+    if (I == 0 && X26Eligible) {
+      Subs.push_back(LFIScratchReg);
+      continue;
+    }
+    if (Donors.size() >= LFINumDonorSlots) {
+      error(Inst, "too many reserved registers to virtualize in LFI");
+      return;
+    }
+    MCRegister D = allocDonor(Inst, Donors);
+    if (!D.isValid()) {
+      error(Inst, "no donor register available to virtualize reserved register "
+                  "in LFI");
+      return;
+    }
+    Subs.push_back(D);
+    DonorSlots.push_back(LFIDonorOffset[Donors.size()]);
+    Donors.push_back(D);
+  }
+
+  // Save donor registers to their scratch slots.
+  for (unsigned I = 0; I < Donors.size(); ++I)
+    emitCtxStore(Donors[I], DonorSlots[I], Out, STI);
+
+  // Load the virtual value of each reserved register that is read.
+  for (unsigned I = 0; I < Regs.size(); ++I)
+    if (readsReservedReg(Inst, NumDefs, Regs[I]))
+      emitCtxLoad(Subs[I], LFIVirtRegOffset[reservedIndex(Regs[I])], Out, STI);
+
+  // Rewrite the substituted (reserved-register-free) instruction.
+  rewriteInstCore(substituteReserved(Inst, Regs, Subs), Out, STI);
+
+  // Store the substitute back to the virtual slot of each register written.
+  for (unsigned I = 0; I < Regs.size(); ++I)
+    if (mayModifyRegister(Inst, Regs[I]))
+      emitCtxStore(Subs[I], LFIVirtRegOffset[reservedIndex(Regs[I])], Out, STI);
+
+  // Restore donor registers.
+  for (unsigned I = 0; I < Donors.size(); ++I)
+    emitCtxLoad(Donors[I], DonorSlots[I], Out, STI);
+}
+
 // NOTE: when adding new rewrites, the size estimates in
 // AArch64InstrInfo::getLFIInstSizeInBytes must be updated to match.
 void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
@@ -781,13 +1010,19 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
     return;
   }
 
-  // Reserved register modification is an error.
-  if (MCRegister Reg = mayModifyReserved(Inst)) {
-    error(Inst, Twine("illegal modification of reserved LFI register ") +
-                    RegInfo->getName(Reg));
-    return;
-  }
+  // Instructions that reference a reserved register operate on a virtual value
+  // held in the context area (see llvm/docs/LFI.rst).
+  if (referencesReserved(Inst))
+    return rewriteVirtualized(Inst, Out, STI);
 
+  rewriteInstCore(Inst, Out, STI);
+}
+
+// Applies the LFI rewrites to an instruction that does not itself reference a
+// reserved register. rewriteVirtualized substitutes reserved registers away and
+// then calls back into this function.
+void AArch64MCLFIRewriter::rewriteInstCore(const MCInst &Inst, MCStreamer &Out,
+                                           const MCSubtargetInfo &STI) {
   // System instructions.
   if (isSyscall(Inst))
     return rewriteSyscall(Inst, Out, STI);

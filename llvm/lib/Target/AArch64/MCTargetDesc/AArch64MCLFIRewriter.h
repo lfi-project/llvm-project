@@ -14,6 +14,7 @@
 #define LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H
 
 #include "AArch64AddressingModes.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCRegister.h"
@@ -69,9 +70,7 @@ private:
   /// known to already hold the guarded value of that register.
   std::optional<MCRegister> ActiveGuardReg;
 
-  // Instruction classification. Returns the reserved register that may be
-  // modified, or an invalid register if no reserved register is touched.
-  MCRegister mayModifyReserved(const MCInst &Inst) const;
+  // Instruction classification.
   bool mayModifySP(const MCInst &Inst) const;
 
   // Instruction emission.
@@ -97,6 +96,18 @@ private:
   // Rewriting logic.
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
+  void rewriteInstCore(const MCInst &Inst, MCStreamer &Out,
+                       const MCSubtargetInfo &STI);
+
+  // Reserved register virtualization.
+  bool referencesReserved(const MCInst &Inst) const;
+  MCRegister allocDonor(const MCInst &Inst, ArrayRef<MCRegister> Used) const;
+  void emitCtxLoad(MCRegister Dest, unsigned ScaledOffset, MCStreamer &Out,
+                   const MCSubtargetInfo &STI);
+  void emitCtxStore(MCRegister Src, unsigned ScaledOffset, MCStreamer &Out,
+                    const MCSubtargetInfo &STI);
+  void rewriteVirtualized(const MCInst &Inst, MCStreamer &Out,
+                          const MCSubtargetInfo &STI);
 
   // Control flow.
   void rewriteIndirectBranch(const MCInst &Inst, MCStreamer &Out,

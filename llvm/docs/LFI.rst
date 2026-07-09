@@ -77,6 +77,10 @@ on AArch64 and ``r15`` on X86-64. The layout is as follows:
 | 16     | 8      | Virtual thread pointer (used for TP access). |
 +--------+--------+----------------------------------------------+
 
+On AArch64, additional architecture-specific slots follow this common prefix to
+hold the virtual values of the reserved registers, along with scratch space used
+by the rewriter. See `Reserved register virtualization`_.
+
 Linker Support
 ++++++++++++++
 
@@ -148,6 +152,13 @@ that must be maintained.
 * ``x30``: always holds an address within the sandbox.
 * ``x26``: scratch register.
 * ``x25``: context register (see `Context Register`_).
+
+Sandboxed code may still reference ``x25``, ``x26``, ``x27``, and ``x28`` as
+though they were general-purpose registers. Such accesses are rewritten to
+operate on a *virtual* value held in the context area, so that the physical
+register continues to hold the value required by its invariant above. (``sp``
+and ``x30`` are instead handled by the stack-pointer and link-register rewrites
+below.) See `Reserved register virtualization`_.
 
 The current design only supports 4GiB sandboxes, which requires the sandbox
 base address to be 4GiB-aligned. This is because LFI's ABI stores pointers as
@@ -358,6 +369,172 @@ TP accesses are rewritten into loads/stores from the context register
 |    msr tpidr_el0, xN |    str xN, [x25, #16]   |
 |                      |                         |
 +----------------------+-------------------------+
+
+Reserved register virtualization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The reserved registers ``x25``, ``x26``, ``x27``, and ``x28`` hold values
+required by the LFI ABI and must not be overwritten with arbitrary values by
+sandboxed code. To support code that nonetheless uses these registers (such as
+hand-written or inline assembly), the rewriter *virtualizes* them: each reserved
+register is given a *virtual* slot in the context area that holds its logical
+value. An instruction that reads a reserved register is rewritten to first load
+the virtual value into a substitute register, and an instruction that writes a
+reserved register is rewritten to store the substitute back to the virtual slot.
+The physical register is never modified, so it always continues to satisfy its
+invariant.
+
+The following slots extend the common context-area prefix (see
+`Context Register`_). The virtual register slots are zero-initialized by the LFI
+runtime; the donor slots are scratch space used by the rewriter and require no
+initialization.
+
++--------+--------+----------------------------------------------+
+| Offset | Size   | Description                                  |
++--------+--------+----------------------------------------------+
+| 24     | 8      | Virtual x25.                                 |
++--------+--------+----------------------------------------------+
+| 32     | 8      | Virtual x26.                                 |
++--------+--------+----------------------------------------------+
+| 40     | 8      | Virtual x27.                                 |
++--------+--------+----------------------------------------------+
+| 48     | 8      | Virtual x28.                                 |
++--------+--------+----------------------------------------------+
+| 56     | 8      | Donor scratch slot 0.                        |
++--------+--------+----------------------------------------------+
+| 64     | 8      | Donor scratch slot 1.                        |
++--------+--------+----------------------------------------------+
+| 72     | 8      | Donor scratch slot 2.                        |
++--------+--------+----------------------------------------------+
+
+Substitute registers are chosen as follows. ``x26`` (the scratch register) is
+used as the substitute for control-flow, compute, thread-pointer, and system
+instructions, whose rewrites do not otherwise clobber it. ``x28`` is never used
+as a substitute, so that it always continues to hold a guarded sandbox address.
+For memory accesses and stack-pointer modifications -- whose own rewrites use
+``x26``/``x28`` as scratch -- and for any additional reserved registers beyond
+the first, a *donor* register is used instead. A donor is a general-purpose
+register (``x0``--``x24``) not otherwise referenced by the instruction; it is
+saved to a donor scratch slot before the instruction and restored afterward.
+
+In the rewrites below, ``#vR`` denotes the context offset of the virtual slot
+for reserved register ``xR`` (24, 32, 40, and 48 for ``x25``--``x28``), ``#t0``
+and ``#t1`` denote donor scratch slots (56, 64, ...), and ``d`` denotes a donor
+register.
+
+Control-flow instructions substitute ``x26`` for the branch target. Since the
+target is read-only, no value is written back.
+
++--------------------+----------------------------+
+|      Original      |         Rewritten          |
++--------------------+----------------------------+
+| .. code-block::    | .. code-block::            |
+|                    |                            |
+|    {br,blr,ret} xR |    ldr x26, [x25, #vR]     |
+|                    |    add x28, x27, w26, uxtw |
+|                    |    {br,blr,ret} x28        |
+|                    |                            |
++--------------------+----------------------------+
+
+Compute instructions load the virtual value into ``x26`` before the instruction
+and store it back afterward, depending on whether the reserved register is read,
+written, or both.
+
++-------------------+------------------------+
+|     Original      |       Rewritten        |
++-------------------+------------------------+
+| .. code-block::   | .. code-block::        |
+|                   |                        |
+|    add x0, xR, x1 |    ldr x26, [x25, #vR] |
+|                   |    add x0, x26, x1     |
+|                   |                        |
++-------------------+------------------------+
+| .. code-block::   | .. code-block::        |
+|                   |                        |
+|    add xR, x0, x1 |    add x26, x0, x1     |
+|                   |    str x26, [x25, #vR] |
+|                   |                        |
++-------------------+------------------------+
+| .. code-block::   | .. code-block::        |
+|                   |                        |
+|    add xR, xR, #1 |    ldr x26, [x25, #vR] |
+|                   |    add x26, x26, #1    |
+|                   |    str x26, [x25, #vR] |
+|                   |                        |
++-------------------+------------------------+
+
+When a compute instruction references more than one reserved register, ``x26``
+is used for the first and a donor for each additional register.
+
++-------------------+------------------------+
+|     Original      |       Rewritten        |
++-------------------+------------------------+
+| .. code-block::   | .. code-block::        |
+|                   |                        |
+|    add x0, xR, xS |    str d, [x25, #t0]   |
+|                   |    ldr x26, [x25, #vR] |
+|                   |    ldr d, [x25, #vS]   |
+|                   |    add x0, x26, d      |
+|                   |    ldr d, [x25, #t0]   |
+|                   |                        |
++-------------------+------------------------+
+
+Memory accesses use donor registers for their reserved operands, since the
+`Memory accesses`_ rewrites use ``x26``/``x28`` as scratch. The reserved register
+may appear as the base address, the stored data, or the loaded data.
+
++-------------------+------------------------------+
+|     Original      |          Rewritten           |
++-------------------+------------------------------+
+| .. code-block::   | .. code-block::              |
+|                   |                              |
+|    LDSTr x0, [xR] |    str d, [x25, #t0]         |
+|                   |    ldr d, [x25, #vR]         |
+|                   |    LDSTr x0, [x27, wd, uxtw] |
+|                   |    ldr d, [x25, #t0]         |
+|                   |                              |
++-------------------+------------------------------+
+| .. code-block::   | .. code-block::              |
+|                   |                              |
+|    str xR, [x0]   |    str d, [x25, #t0]         |
+|                   |    ldr d, [x25, #vR]         |
+|                   |    str d, [x27, w0, uxtw]    |
+|                   |    ldr d, [x25, #t0]         |
+|                   |                              |
++-------------------+------------------------------+
+| .. code-block::   | .. code-block::              |
+|                   |                              |
+|    ldr xR, [x0]   |    str d, [x25, #t0]         |
+|                   |    ldr d, [x27, w0, uxtw]    |
+|                   |    str d, [x25, #vR]         |
+|                   |    ldr d, [x25, #t0]         |
+|                   |                              |
++-------------------+------------------------------+
+
+The ``LDSTr`` register-offset form shown above applies when it is available;
+other forms (unscaled, pre/post-index, load/store-pair, atomics) fall back to
+the ``x28`` guard sequence. In all cases the reserved operand is substituted
+first and the result composes with the corresponding `Memory accesses`_
+rewrites. Reserved registers used as data in stack-pointer or link-register
+modifications are handled the same way, using a donor.
+
+Thread-pointer accesses are not memory-sandboxed, so they substitute ``x26``.
+
++----------------------+------------------------+
+|       Original       |       Rewritten        |
++----------------------+------------------------+
+| .. code-block::      | .. code-block::        |
+|                      |                        |
+|    mrs xR, tpidr_el0 |    ldr x26, [x25, #16] |
+|                      |    str x26, [x25, #vR] |
+|                      |                        |
++----------------------+------------------------+
+| .. code-block::      | .. code-block::        |
+|                      |                        |
+|    msr tpidr_el0, xR |    ldr x26, [x25, #vR] |
+|                      |    str x26, [x25, #16] |
+|                      |                        |
++----------------------+------------------------+
 
 Optimizations
 =============
