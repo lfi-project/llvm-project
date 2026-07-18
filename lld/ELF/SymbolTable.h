@@ -44,6 +44,8 @@ public:
   void wrap(Symbol *sym, Symbol *real, Symbol *wrap);
 
   Symbol *insert(StringRef name);
+  Symbol *insert(StringRef name, llvm::CachedHashStringRef stem,
+                 bool hasVersionSuffix);
 
   template <typename T> Symbol *addSymbol(const T &newSym) {
     Symbol *sym = insert(newSym.getName());

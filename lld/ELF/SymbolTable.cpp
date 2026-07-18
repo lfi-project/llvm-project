@@ -71,8 +71,15 @@ Symbol *SymbolTable::insert(StringRef name) {
   size_t pos = name.find('@');
   if (pos != StringRef::npos && pos + 1 < name.size() && name[pos + 1] == '@')
     stem = name.take_front(pos);
+  return insert(name, CachedHashStringRef(stem), pos != StringRef::npos);
+}
 
-  auto p = symMap.insert({CachedHashStringRef(stem), (int)symVector.size()});
+// Variant of insert for callers that have precomputed the stem and its hash
+// (e.g. in parallel by ELFFileBase::prehashSymbols), so that the serial
+// resolution pass does not hash symbol names.
+Symbol *SymbolTable::insert(StringRef name, CachedHashStringRef stem,
+                            bool hasVersionSuffix) {
+  auto p = symMap.insert({stem, (int)symVector.size()});
   if (!p.second) {
     Symbol *sym = symVector[p.first->second];
     if (stem.size() != name.size()) {
@@ -89,7 +96,7 @@ Symbol *SymbolTable::insert(StringRef name) {
   // are zero. Set the ones that need a non-zero value.
   sym->setName(name);
   sym->versionId = VER_NDX_GLOBAL;
-  if (pos != StringRef::npos)
+  if (hasVersionSuffix)
     sym->hasVersionSuffix = true;
   return sym;
 }

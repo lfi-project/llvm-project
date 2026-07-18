@@ -26,6 +26,7 @@
 #include "llvm/Support/ARMBuildAttributes.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
@@ -357,6 +358,18 @@ doParseFiles(Ctx &ctx,
 void elf::parseFiles(Ctx &ctx,
                      const SmallVector<std::unique_ptr<InputFile>, 0> &files) {
   llvm::TimeTraceScope timeScope("Parse input files");
+  // Hash symbol names in parallel before the serial resolution pass below
+  // consumes them (ObjFile::insertSymbol). Files added to the link during
+  // resolution (e.g. due to addDependentLibrary) are not prehashed and fall
+  // back to hashing in SymbolTable::insert.
+  {
+    llvm::TimeTraceScope prehashScope("Prehash symbol names");
+    parallelForEach(files, [](const std::unique_ptr<InputFile> &file) {
+      if (auto *f = dyn_cast<ELFFileBase>(file.get()))
+        if (f->kind() == InputFile::ObjKind)
+          f->prehashSymbols();
+    });
+  }
   invokeELFT(doParseFiles, ctx, files);
 }
 
@@ -524,6 +537,60 @@ template <class ELFT> void ELFFileBase::init(InputFile::Kind k) {
   elfSyms = reinterpret_cast<const void *>(eSyms.data());
   numSymbols = eSyms.size();
   stringTable = CHECK2(obj.getStringTableForSymtab(*symtabSec, sections), this);
+}
+
+// Precompute the name length, the stem of a <name>@@<version> name, and the
+// stem's hash for each global symbol, mirroring what SymbolTable::insert
+// computes. Entries whose st_name is invalid are marked with
+// nameLen == UINT32_MAX and left for the serial path to diagnose.
+template <class ELFT>
+static void doPrehashSymbols(ELFFileBase &f,
+                             MutableArrayRef<ELFFileBase::PrehashedName> out) {
+  StringRef strtab = f.getStringTable();
+  size_t idx = 0;
+  for (const typename ELFT::Sym &eSym : f.getGlobalELFSyms<ELFT>()) {
+    ELFFileBase::PrehashedName &p = out[idx++];
+    uint32_t off = eSym.st_name;
+    if (LLVM_UNLIKELY(off >= strtab.size())) {
+      p.nameLen = UINT32_MAX;
+      continue;
+    }
+    StringRef name(strtab.data() + off);
+    if (LLVM_UNLIKELY(name.size() >= (1u << 31))) {
+      p.nameLen = UINT32_MAX;
+      continue;
+    }
+    StringRef stem = name;
+    size_t pos = name.find('@');
+    if (pos != StringRef::npos && pos + 1 < name.size() && name[pos + 1] == '@')
+      stem = name.take_front(pos);
+    p.nameLen = name.size();
+    p.stemLen = stem.size();
+    p.hasVersionSuffix = pos != StringRef::npos;
+    p.hash = CachedHashStringRef(stem).hash();
+  }
+}
+
+void ELFFileBase::prehashSymbols() {
+  if (numSymbols == 0)
+    return;
+  prehashedNames.resize(numSymbols - firstGlobal);
+  switch (ekind) {
+  case ELF32LEKind:
+    doPrehashSymbols<ELF32LE>(*this, prehashedNames);
+    break;
+  case ELF32BEKind:
+    doPrehashSymbols<ELF32BE>(*this, prehashedNames);
+    break;
+  case ELF64LEKind:
+    doPrehashSymbols<ELF64LE>(*this, prehashedNames);
+    break;
+  case ELF64BEKind:
+    doPrehashSymbols<ELF64BE>(*this, prehashedNames);
+    break;
+  default:
+    llvm_unreachable("getELFKind");
+  }
 }
 
 template <class ELFT>
@@ -1185,6 +1252,23 @@ InputSectionBase *ObjFile<ELFT>::createInputSection(uint32_t idx,
   return makeThreadLocal<InputSection>(*this, sec, name);
 }
 
+// Look up (or create) the symbol table Symbol for the global symbol
+// eSyms[symIdx], using the name information precomputed by prehashSymbols()
+// if available.
+template <class ELFT>
+Symbol *ObjFile<ELFT>::insertSymbol(const Elf_Sym &eSym, size_t symIdx) {
+  if (!prehashedNames.empty()) {
+    const PrehashedName &p = prehashedNames[symIdx - firstGlobal];
+    if (LLVM_LIKELY(p.nameLen != UINT32_MAX)) {
+      StringRef name(stringTable.data() + eSym.st_name, p.nameLen);
+      return ctx.symtab->insert(
+          name, CachedHashStringRef(name.take_front(p.stemLen), p.hash),
+          p.hasVersionSuffix);
+    }
+  }
+  return ctx.symtab->insert(CHECK2(eSym.getName(stringTable), this));
+}
+
 // Initialize symbols. symbols is a parallel array to the corresponding ELF
 // symbol table.
 template <class ELFT>
@@ -1194,10 +1278,9 @@ void ObjFile<ELFT>::initializeSymbols(const object::ELFFile<ELFT> &obj) {
     symbols = std::make_unique<Symbol *[]>(numSymbols);
 
   // Some entries have been filled by LazyObjFile.
-  auto *symtab = ctx.symtab.get();
   for (size_t i = firstGlobal, end = eSyms.size(); i != end; ++i)
     if (!symbols[i])
-      symbols[i] = symtab->insert(CHECK2(eSyms[i].getName(stringTable), this));
+      symbols[i] = insertSymbol(eSyms[i], i);
 
   // Perform symbol resolution on non-local symbols.
   SmallVector<unsigned, 32> undefineds;
@@ -2017,11 +2100,10 @@ template <class ELFT> void ObjFile<ELFT>::parseLazy() {
   // resolve() may trigger this->extract() if an existing symbol is an undefined
   // symbol. If that happens, this function has served its purpose, and we can
   // exit from the loop early.
-  auto *symtab = ctx.symtab.get();
   for (size_t i = firstGlobal, end = eSyms.size(); i != end; ++i) {
     if (eSyms[i].st_shndx == SHN_UNDEF)
       continue;
-    symbols[i] = symtab->insert(CHECK2(eSyms[i].getName(stringTable), this));
+    symbols[i] = insertSymbol(eSyms[i], i);
     symbols[i]->resolve(ctx, LazySymbol{*this});
     if (!lazy)
       break;

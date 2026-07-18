@@ -178,6 +178,9 @@ public:
   static bool classof(const InputFile *f) { return f->isElf(); }
 
   void init();
+  // Computes prehashedNames in parallel ahead of the serial symbol resolution
+  // pass. Safe to call on any object file whose init() has run.
+  void prehashSymbols();
   template <typename ELFT> llvm::object::ELFFile<ELFT> getObj() const {
     return check(llvm::object::ELFFile<ELFT>::create(mb.getBuffer()));
   }
@@ -238,6 +241,21 @@ public:
   uint32_t andFeatures = 0;
   bool hasCommonSyms = false;
   std::optional<AArch64PauthAbiCoreInfo> aarch64PauthAbiCoreInfo;
+
+  // Cached name information (length, stem of a name with a @@ version
+  // suffix, and the stem's hash) for global symbols, computed in parallel by
+  // prehashSymbols() and consumed by the serial symbol resolution pass (see
+  // ObjFile::insertSymbol). Entry i describes ELF symbol firstGlobal + i.
+  // This is an advisory cache: if the vector is empty or an entry is invalid
+  // (nameLen == UINT32_MAX, e.g. out-of-bounds st_name), the consumer
+  // computes the information itself.
+  struct PrehashedName {
+    uint32_t nameLen;
+    uint32_t stemLen : 31;
+    uint32_t hasVersionSuffix : 1;
+    uint32_t hash;
+  };
+  SmallVector<PrehashedName, 0> prehashedNames;
 };
 
 // .o file.
@@ -299,6 +317,7 @@ private:
   InputSectionBase *getRelocTarget(uint32_t idx, uint32_t info);
   InputSectionBase *createInputSection(uint32_t idx, const Elf_Shdr &sec,
                                        StringRef name);
+  Symbol *insertSymbol(const Elf_Sym &eSym, size_t symIdx);
 
   bool shouldMerge(const Elf_Shdr &sec, StringRef name);
 
