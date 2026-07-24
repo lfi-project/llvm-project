@@ -135,7 +135,7 @@ class X86AsmBackend : public MCAsmBackend {
   bool needAlign(const MCInst &Inst) const;
   bool canPadBranches(MCObjectStreamer &OS) const;
   bool canPadInst(const MCInst &Inst, MCObjectStreamer &OS) const;
-  void emitInstructionBeginBundle(MCObjectStreamer &OS);
+  void emitInstructionBeginBundle(MCObjectStreamer &OS, const MCInst &Inst);
   void emitInstructionEndBundle(MCObjectStreamer &OS);
 
 public:
@@ -477,8 +477,12 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
 /// the ObjectStreamer emits the instruction to the current fragment. If not, it
 /// creates a new BA to group bundled fragments. If PrevInst is just a prefix,
 /// we can reuse old BA.
-void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS) {
+void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS,
+                                               const MCInst &Inst) {
   assert(Asm->isBundlingEnabled());
+  // Prefix padding rewrites instruction encodings after layout, which requires
+  // instructions to be emitted into relaxable fragments.
+  AllowEnhancedRelaxation = TargetPrefixMax != 0;
 
   if (OS.getCurrentSectionOnly()->isBundleLocked())
     return;
@@ -490,7 +494,7 @@ void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS) {
     return;
   }
   PendingBA = OS.newSpecialFragment<MCBoundaryAlignFragment>(
-      Asm->getBundleAlign(), STI);
+      Asm->getBundleAlign(), STI, Inst.getLoc());
   // We can set LastFragment now, before the instruction is emitted, as bundling
   // emits one fragment per instruction. Deferring setLastFragment to
   // post-emitInstruction would risk capturing a fragment that a subsequent
@@ -520,6 +524,11 @@ void X86AsmBackend::emitInstructionEndBundle(MCObjectStreamer &OS) {
   ReuseBA = isPrefix(PrevInstOpcode, *MCII);
   if (ReuseBA)
     return;
+  // An instruction emitted as data leaves its fragment current. Close it so a
+  // subsequent directive cannot append a variable tail to the fragment the
+  // pending BoundaryAlign spans.
+  if (OS.getCurFragSize() != 0)
+    OS.newFragment();
   PendingBA = nullptr;
 }
 
@@ -529,7 +538,7 @@ void X86AsmBackend::emitInstructionBegin(MCObjectStreamer &OS,
                                          const MCSubtargetInfo &STI) {
   bool CanPadInst = canPadInst(Inst, OS);
   if (Asm->isBundlingEnabled()) {
-    emitInstructionBeginBundle(OS);
+    emitInstructionBeginBundle(OS, Inst);
     OS.getCurrentFragment()->setAllowAutoPadding(CanPadInst);
     return;
   }

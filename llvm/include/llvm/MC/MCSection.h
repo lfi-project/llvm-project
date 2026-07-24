@@ -539,21 +539,26 @@ public:
 class MCBoundaryAlignFragment : public MCFragment {
   /// The alignment requirement of the branch to be aligned.
   Align AlignBoundary;
+  /// If true, align the last instruction in the fragment to the end of the
+  /// fragment.
+  bool AlignToEnd = false;
   /// The last fragment in the set of fragments to be aligned.
   const MCFragment *LastFragment = nullptr;
   /// The size of the fragment.  The size is lazily set during relaxation, and
   /// is not meaningful before that.
   uint64_t Size = 0;
-
-  /// If true, align the last instruction in the fragment to the end of the
-  /// fragment.
-  bool AlignToEnd = false;
+  /// Source location of the instruction for which this fragment was created,
+  /// used for layout-time diagnostics.
+  SMLoc Loc;
 
 public:
-  MCBoundaryAlignFragment(Align AlignBoundary, const MCSubtargetInfo &STI)
-      : MCFragment(FT_BoundaryAlign), AlignBoundary(AlignBoundary) {
+  MCBoundaryAlignFragment(Align AlignBoundary, const MCSubtargetInfo &STI,
+                          SMLoc Loc = SMLoc())
+      : MCFragment(FT_BoundaryAlign), AlignBoundary(AlignBoundary), Loc(Loc) {
     this->STI = &STI;
   }
+
+  SMLoc getLoc() const { return Loc; }
 
   uint64_t getSize() const { return Size; }
   void setSize(uint64_t Value) { Size = Value; }

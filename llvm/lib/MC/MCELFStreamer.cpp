@@ -366,8 +366,8 @@ void MCELFStreamer::emitBundleLock(bool AlignToEnd,
   }
   Sec.setIsBundleLocked(true);
 
-  BundleBA =
-      newSpecialFragment<MCBoundaryAlignFragment>(Asm.getBundleAlign(), STI);
+  BundleBA = newSpecialFragment<MCBoundaryAlignFragment>(Asm.getBundleAlign(),
+                                                         STI, getStartTokLoc());
   BundleBA->setAlignToEnd(AlignToEnd);
 }
 
@@ -389,8 +389,6 @@ void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
 
   MCFragment *CF = getCurrentFragment();
   BundleBA->setLastFragment(CF);
-  // Bundle overflow check.
-  uint64_t AlignedSize = 0;
   for (const MCFragment *F = BundleBA->getNext();; F = F->getNext()) {
     if (F->getKind() == MCFragment::FT_Align ||
         F->getKind() == MCFragment::FT_Org) {
@@ -399,15 +397,10 @@ void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
                                "supported inside a .bundle_lock group");
       break;
     }
-    AlignedSize += getAssembler().computeFragmentSize(*F);
     if (F == BundleBA->getLastFragment())
       break;
   }
   BundleBA = nullptr;
-
-  if (AlignedSize > getAssembler().getBundleAlign().value())
-    getContext().reportError(getStartTokLoc(),
-                             "fragment can't be larger than a bundle size");
 
   newFragment();
 

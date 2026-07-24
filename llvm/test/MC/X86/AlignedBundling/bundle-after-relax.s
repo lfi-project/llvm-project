@@ -1,8 +1,9 @@
 # RUN: llvm-mc -filetype=obj -triple x86_64 %s \
 # RUN:   | llvm-objdump -d - | FileCheck %s
 
-## Test that instructions inside bundle-locked groups are relaxed even if their
-## fixup is short enough not to warrant relaxation on its own.
+## Branches inside a bundle-locked group keep their short encodings when their
+## targets are in range; the group is padded only if it would otherwise cross
+## a bundle boundary.
   .text
 relax_in_bundle:
   .bundle_align_mode 4
@@ -16,28 +17,22 @@ relax_in_bundle:
   callq   bar
   cmpl    %r14d, %ebp
   .bundle_lock
-
   jle     .L_ELSE
-## This group would've started at 0x18 and is too long, so a chunky NOP padding
-## is inserted to push it to 0x20.
-# CHECK: 18: {{[a-f0-9 ]+}} nopl
-
-## The long encoding for JLE should be used here even though its target is close
-# CHECK-NEXT: 20: 0f 8e
-
   addl    %ebp, %eax
-
   jmp     .L_RET
-## Same for the JMP
-# CHECK: 28: e9
-
   .bundle_unlock
-
+## The short encodings are used, so the 6-byte group fits within its bundle
+## and no group padding is needed.
+# CHECK:      18: 7e 04 jle
+# CHECK-NEXT: 1a: 01 e8 addl
+# CHECK-NEXT: 1c: eb 05 jmp
 .L_ELSE:
   imull   %ebx, %eax
 .L_RET:
-
   popq    %rbx
+## The imull is padded to the next bundle as usual.
+# CHECK-NEXT: 1e: {{[a-f0-9 ]+}} nop
+# CHECK-NEXT: 20: 0f af c3 imull
 
 ## Test that an instruction near a bundle end gets properly padded to the next
 ## bundle after it is relaxed.
@@ -46,8 +41,19 @@ relax_at_bundle_end:
   .rept 14
   push %rax
   .endr
-# CHECK: 4d: 50 pushq
-# CHECK-NEXT: 4e: {{[a-f0-9 ]+}} nop
-# CHECK-NEXT: 50: 0f 85
+# CHECK: 3d: 50 pushq
+# CHECK-NEXT: 3e: {{[a-f0-9 ]+}} nop
+# CHECK-NEXT: 40: 0f 85
   jne 0x100
 
+## A branch inside a bundle-locked group is still relaxed when its target is
+## out of range and the relaxed size is ## what the bundle placement accounts
+## for.
+  .p2align 4
+locked_far_branch:
+  .bundle_lock
+  jle     far_target
+  addl    %ebp, %eax
+  .bundle_unlock
+# CHECK:      50: 0f 8e {{.*}} jle
+# CHECK-NEXT: 56: 01 e8 addl

@@ -1011,6 +1011,11 @@ MCAssembler::computeBoundaryAlignSize(const MCBoundaryAlignFragment &BF) const {
     return needPadding(AlignedOffset, AlignedSize, BoundaryAlignment)
                ? offsetToAlignment(AlignedOffset, BoundaryAlignment)
                : 0U;
+
+  if (AlignedSize > getBundleAlign().value()) {
+    recordError(BF.getLoc(), "fragment can't be larger than a bundle size");
+    return 0;
+  }
   if (BF.isAlignToEnd())
     return offsetToAlignment(AlignedOffset + AlignedSize, BoundaryAlignment);
 
@@ -1094,10 +1099,7 @@ void MCAssembler::relaxFragment(MCFragment &F) {
     relaxAlign(F);
     break;
   case MCFragment::FT_Relaxable:
-    // Bundling emits every instruction as relaxable, so FT_Relaxable is
-    // expected with RelaxAll mode once bundling is enabled.
-    assert((isBundlingEnabled() || !getRelaxAll()) &&
-           "Did not expect a FT_Relaxable in RelaxAll mode");
+    assert(!getRelaxAll() && "Did not expect a FT_Relaxable in RelaxAll mode");
     relaxInstruction(F);
     break;
   case MCFragment::FT_LEB:
