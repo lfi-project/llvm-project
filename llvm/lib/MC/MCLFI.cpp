@@ -26,6 +26,10 @@
 
 static const char NoteNamespace[] = "LFI";
 
+// X86 LFI masks indirect branch targets to a bundle boundary, so instructions
+// must not span one. Bundles are 32 bytes.
+static constexpr unsigned X86BundleSize = 32;
+
 namespace llvm {
 
 cl::opt<bool> FlagEnableRewriting("lfi-enable-rewriter",
@@ -48,6 +52,16 @@ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
     Streamer.setLFIRewriter(std::unique_ptr<MCLFIRewriter>(
         TheTarget->createMCLFIRewriter(Ctx, std::move(MRI), std::move(MII))));
   }
+}
+
+void emitLFIBundleAlign(MCStreamer &Streamer, MCContext &Ctx) {
+  const Triple &TheTriple = Ctx.getTargetTriple();
+  assert(TheTriple.isLFI());
+
+  // X86 LFI masks indirect branch targets to a bundle boundary, so no
+  // instruction may span one.
+  if (TheTriple.getArch() == Triple::x86_64)
+    Streamer.emitBundleAlignMode(Align(X86BundleSize));
 }
 
 void emitLFINoteSection(MCStreamer &Streamer, MCContext &Ctx) {
