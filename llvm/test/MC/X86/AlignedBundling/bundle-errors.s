@@ -5,10 +5,10 @@
 # RUN: not llvm-mc -filetype=obj -triple x86_64 %t/bad-lock-option.s       2>&1 | FileCheck %t/bad-lock-option.s
 # RUN: not llvm-mc -filetype=obj -triple x86_64 %t/switch-section-locked.s 2>&1 | FileCheck %t/switch-section-locked.s
 # RUN: not llvm-mc -filetype=obj -triple x86_64 %t/group-too-large.s       2>&1 | FileCheck %t/group-too-large.s
-# RUN: not llvm-mc -filetype=obj -triple x86_64 -mc-relax-all %t/group-too-large.s 2>&1 | FileCheck %t/group-too-large.s
 # RUN: not llvm-mc -filetype=obj -triple x86_64 %t/nested-lock.s           2>&1 | FileCheck %t/nested-lock.s
 # RUN: not llvm-mc -filetype=obj -triple x86_64 %t/mode-zero.s             2>&1 | FileCheck %t/mode-zero.s
 # RUN: not llvm-mc -filetype=obj -triple x86_64 %t/inst-too-large.s        2>&1 | FileCheck %t/inst-too-large.s
+# RUN: not llvm-mc -filetype=obj -triple x86_64 -mc-relax-all %t/with-relax-all.s 2>&1 | FileCheck %t/with-relax-all.s
 # RUN: not llvm-mc -filetype=obj -triple x86_64 %t/align-in-lock.s         2>&1 | FileCheck %t/align-in-lock.s
 # RUN: not llvm-mc -filetype=obj -triple x86_64 -x86-branches-within-32B-boundaries %t/bundle-with-align-branch.s 2>&1 | FileCheck %t/bundle-with-align-branch.s
 # RUN: not llvm-mc -filetype=obj -triple x86_64 -x86-align-branch-boundary=32 -x86-align-branch=jmp %t/bundle-with-align-branch.s 2>&1 | FileCheck %t/bundle-with-align-branch.s
@@ -106,6 +106,13 @@ foo:
   .bundle_align_mode 2
 # CHECK: [[#@LINE+1]]:3: error: fragment can't be larger than a bundle size
   callq bar
+
+## Bundling requires one fragment per instruction, which -mrelax-all defeats
+## by emitting instructions as data into a shared fragment.
+#--- with-relax-all.s
+# CHECK: [[#@LINE+1]]:3: error: .bundle_align_mode is incompatible with -mrelax-all
+  .bundle_align_mode 5
+  imull $17, %ebx, %ebp
 
 ## Instruction bundling cannot be combined with branch alignment.
 #--- bundle-with-align-branch.s

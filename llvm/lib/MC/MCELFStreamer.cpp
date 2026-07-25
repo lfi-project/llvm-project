@@ -346,6 +346,13 @@ void MCELFStreamer::emitBundleAlignMode(Align Alignment) {
     getContext().reportError(
         getStartTokLoc(),
         ".bundle_align_mode is incompatible with branch alignment");
+  // Relaxing all instructions emits them as data, appended to a shared
+  // fragment, but bundling requires one fragment per instruction to compute
+  // its padding.
+  if (!Assembler.isBundlingEnabled() && Assembler.getRelaxAll())
+    getContext().reportError(
+        getStartTokLoc(),
+        ".bundle_align_mode is incompatible with -mrelax-all");
   setAllowAutoPadding(true);
   Assembler.setBundleAlign(Alignment);
 }

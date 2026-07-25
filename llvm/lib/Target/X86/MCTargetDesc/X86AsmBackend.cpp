@@ -488,9 +488,14 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
 void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS,
                                                const MCInst &Inst) {
   assert(Asm->isBundlingEnabled());
-  // Prefix padding rewrites instruction encodings after layout, which requires
-  // instructions to be emitted into relaxable fragments.
-  AllowEnhancedRelaxation = TargetPrefixMax != 0;
+  // Bundling needs each instruction to occupy its own fragment: the
+  // BoundaryAlign fragment created below spans exactly one instruction and its
+  // padding is derived from that fragment's size. Opt into
+  // allowEnhancedRelaxation so instructions are emitted into relaxable
+  // fragments, which are mutated in place, instead of being appended to a
+  // shared data fragment that they may not end up in. Prefix padding needs the
+  // same thing, to rewrite encodings after layout.
+  AllowEnhancedRelaxation = true;
 
   if (OS.getCurrentSectionOnly()->isBundleLocked())
     return;
@@ -532,11 +537,6 @@ void X86AsmBackend::emitInstructionEndBundle(MCObjectStreamer &OS) {
   ReuseBA = isPrefix(PrevInstOpcode, *MCII);
   if (ReuseBA)
     return;
-  // An instruction emitted as data leaves its fragment current. Close it so a
-  // subsequent directive cannot append a variable tail to the fragment the
-  // pending BoundaryAlign spans.
-  if (OS.getCurFragSize() != 0)
-    OS.newFragment();
   PendingBA = nullptr;
 }
 
