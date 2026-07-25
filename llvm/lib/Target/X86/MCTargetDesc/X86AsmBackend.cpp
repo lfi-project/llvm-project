@@ -204,7 +204,8 @@ public:
   bool padInstsBackward(SmallVectorImpl<MCFragment *> &Relaxable,
                         unsigned &RemainingSize) const;
   bool dividePadInBundle(const MCAssembler &Asm,
-                         ArrayRef<MCFragment *> Peephole) const;
+                         SmallVectorImpl<MCFragment *> &Relaxable,
+                         MCBoundaryAlignFragment &BF) const;
   bool optimizeBundleNops(const MCAssembler &Asm) const;
 
   unsigned getMaximumNopSize(const MCSubtargetInfo &STI) const override;
@@ -960,18 +961,17 @@ bool X86AsmBackend::padInstsBackward(SmallVectorImpl<MCFragment *> &Relaxable,
   return Changed;
 }
 
-// Peephole is a list of Fragments that ends with non-zero-sized
-// BoundaryAlignFragment. Most of the time it will be every instruction within a
-// bundle, but there can be a partial bundle if it has nops in the middle(e.g.,
-// align_to_end).
+// Divide the padding of the non-zero-sized BoundaryAlignFragment \p BF among
+// the instructions around it: first the preceding instructions of the bundle
+// (\p Relaxable, consumed by this call), then, where the padding reaches into
+// the next bundle, the instructions the fragment aligns.
 bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm,
-                                      ArrayRef<MCFragment *> Peephole) const {
+                                      SmallVectorImpl<MCFragment *> &Relaxable,
+                                      MCBoundaryAlignFragment &BF) const {
   bool Changed = false;
-  auto *LastF = Peephole.back();
-  unsigned RemainingSize =
-      Asm.computeFragmentSize(*LastF) - LastF->getFixedSize();
+  unsigned RemainingSize = Asm.computeFragmentSize(BF) - BF.getFixedSize();
 
-  unsigned StartOffset = Asm.getFragmentOffset(*LastF);
+  unsigned StartOffset = Asm.getFragmentOffset(BF);
   unsigned EndOffset = StartOffset + RemainingSize;
   Align BoundaryAlignment = Asm.getBundleAlign();
   bool CrossBoundary = (StartOffset >> Log2(BoundaryAlignment)) !=
@@ -979,8 +979,8 @@ bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm,
 
   if (CrossBoundary) {
     // i.e., this pad is a mix of suffix fragment of one bundle + prefix of the
-    // very next bundle. It prevents overflow of the first bundle when Peephole
-    // contains more than one bundle.
+    // very next bundle. It prevents overflow of the first bundle when the
+    // padding spans more than one bundle.
     //
     // This design limits the possibly further-optimized code, which might be
     // achieved by migrating some instructions to the next bundle, but doing
@@ -991,33 +991,15 @@ bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm,
   }
   assert(RemainingSize > 0);
 
-  SmallVector<MCFragment *, 4> Relaxable;
-  for (auto *FIB : Peephole) {
-    if (FIB->getKind() == MCFragment::FT_Data) // Skip and ignore
-      continue;
-
-    if (FIB->getKind() == MCFragment::FT_Align) {
-      // p2align within a bundle
-      Relaxable.clear();
-      continue;
-    }
-
-    if (FIB->getKind() == MCFragment::FT_Relaxable) {
-      Relaxable.push_back(FIB);
-      continue;
-    }
-  }
-
   // First, try padding previous instructions.
   Changed |= padInstsBackward(Relaxable, RemainingSize);
 
   // Second, try padding following instructions.
   auto padInstsForward = [&](unsigned &Size) {
-    auto *BF = cast<MCBoundaryAlignFragment>(LastF);
-    for (auto *F = BF->getNext();; F = F->getNext()) {
+    for (auto *F = BF.getNext();; F = F->getNext()) {
       if (F->getKind() == MCFragment::FT_Relaxable)
         Changed |= padInstructionEncoding(*F, Asm.getEmitter(), Size);
-      if (F == BF->getLastFragment() || Size == 0)
+      if (F == BF.getLastFragment() || Size == 0)
         break;
     }
   };
@@ -1032,7 +1014,7 @@ bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm,
   }
 
   // Record the computed padding on the BoundaryAlignFragment.
-  cast<MCBoundaryAlignFragment>(LastF)->setSize(RemainingSize);
+  BF.setSize(RemainingSize);
 
   return Changed;
 }
@@ -1043,21 +1025,26 @@ bool X86AsmBackend::optimizeBundleNops(const MCAssembler &Asm) const {
     if (!Sec.isText())
       continue;
 
-    SmallVector<MCFragment *, 4> Bundle;
+    // Instructions eligible to absorb the next padding, i.e. the relaxable
+    // fragments of the current bundle. padInstsBackward consumes the vector
+    // when a padding fragment is divided.
+    SmallVector<MCFragment *, 4> Relaxable;
     for (MCFragment &F : Sec) {
-      if (F.getKind() == llvm::MCFragment::FT_BoundaryAlign) {
-        unsigned RemainingSize = Asm.computeFragmentSize(F) - F.getFixedSize();
-        if (RemainingSize > 0) {
-          Bundle.push_back(&F);
-          Changed |= dividePadInBundle(Asm, Bundle);
-          Bundle.clear();
-          continue;
-        }
+      if (F.getKind() == MCFragment::FT_BoundaryAlign &&
+          Asm.computeFragmentSize(F) - F.getFixedSize() > 0) {
+        Changed |= dividePadInBundle(Asm, Relaxable,
+                                     static_cast<MCBoundaryAlignFragment &>(F));
+        continue;
       }
 
+      // A fragment starting on a bundle boundary starts a new bundle; padding
+      // must not shift instructions across a bundle boundary.
       if (isAligned(Asm.getBundleAlign(), Asm.getFragmentOffset(F)))
-        Bundle.clear(); // start a new bundle
-      Bundle.push_back(&F);
+        Relaxable.clear();
+      if (F.getKind() == MCFragment::FT_Relaxable)
+        Relaxable.push_back(&F);
+      else if (F.getKind() == MCFragment::FT_Align)
+        Relaxable.clear(); // p2align within a bundle
     }
   }
 
