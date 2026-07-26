@@ -124,7 +124,6 @@ class X86AsmBackend : public MCAsmBackend {
   Align AlignBoundary;
   unsigned TargetPrefixMax = 0;
 
-  bool ReuseBA = false;
   MCInst PrevInst;
   unsigned PrevInstOpcode = 0;
   MCBoundaryAlignFragment *PendingBA = nullptr;
@@ -486,10 +485,10 @@ void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS,
 
   if (OS.getCurrentSectionOnly()->isBundleLocked())
     return;
-  // When the previous MCInst is just a prefix, we need an implicit lock between
-  // it and this one, so keep the pending BoundaryAlign and let this
+  // A pending BoundaryAlign here means the previous MCInst was just a prefix,
+  // which needs an implicit lock with this one: keep the fragment and let this
   // instruction extend its range.
-  if (ReuseBA && PendingBA &&
+  if (PendingBA &&
       PendingBA->getLastFragment()->getParent() == OS.getCurrentSectionOnly())
     return;
   PendingBA = OS.newSpecialFragment<MCBoundaryAlignFragment>(
@@ -516,10 +515,9 @@ void X86AsmBackend::emitInstructionEndBundle(MCObjectStreamer &OS) {
   // whichever fragment the instruction actually ended up in.
   PendingBA->setLastFragment(CF);
 
-  // Update ReuseBA for the next BeginBundle. A prefix keeps the pending
-  // BoundaryAlign so that the instruction it applies to extends the range.
-  ReuseBA = isPrefix(PrevInstOpcode, *MCII);
-  if (!ReuseBA)
+  // Keep the BoundaryAlign pending if this was just a prefix, so that the
+  // instruction it applies to extends the range instead of starting a new one.
+  if (!isPrefix(PrevInstOpcode, *MCII))
     PendingBA = nullptr;
 
   // We need to ensure that further data isn't added to the current
