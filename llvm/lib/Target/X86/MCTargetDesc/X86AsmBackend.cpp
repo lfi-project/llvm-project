@@ -480,27 +480,20 @@ void X86_MC::emitInstruction(MCObjectStreamer &S, const MCInst &Inst,
 void X86AsmBackend::emitInstructionBeginBundle(MCObjectStreamer &OS,
                                                const MCInst &Inst) {
   assert(Asm->isBundlingEnabled());
-  // Enable AllowEnhancedRelaxation for bundling so that each instruction is
-  // emitted into a relaxable fragment.
-  AllowEnhancedRelaxation = true;
+  // Prefix padding rewrites instruction encodings after layout, which requires
+  // instructions to be emitted into relaxable fragments.
+  AllowEnhancedRelaxation = TargetPrefixMax != 0;
 
   if (OS.getCurrentSectionOnly()->isBundleLocked())
     return;
-  // when there is a prefix MCInst not locked, we need an implicit lock between
-  // the prefix and the next MCInst.
+  // When the previous MCInst is just a prefix, we need an implicit lock between
+  // it and this one, so keep the pending BoundaryAlign and let this
+  // instruction extend its range.
   if (ReuseBA && PendingBA &&
-      PendingBA->getLastFragment()->getParent() == OS.getCurrentSectionOnly()) {
-    PendingBA->setLastFragment(OS.getCurrentFragment());
+      PendingBA->getLastFragment()->getParent() == OS.getCurrentSectionOnly())
     return;
-  }
   PendingBA = OS.newSpecialFragment<MCBoundaryAlignFragment>(
       Asm->getBundleAlign(), STI, Inst.getLoc());
-  // We can set LastFragment now, before the instruction is emitted, as bundling
-  // emits one fragment per instruction. Deferring setLastFragment to
-  // post-emitInstruction would risk capturing a fragment that a subsequent
-  // emitCodeAlignment repurposes in-place to FT_Align, corrupting the BA's
-  // boundary range.
-  PendingBA->setLastFragment(OS.getCurrentFragment());
 }
 
 /// If the just-emitted instruction is inside the bundle lock, check the current
@@ -518,13 +511,25 @@ void X86AsmBackend::emitInstructionEndBundle(MCObjectStreamer &OS) {
   assert(PendingBA && "MCBoundaryAlignFragment is expected for every "
                       "instruction if it is not bundle-locked");
 
-  CF->getParent()->ensureMinAlignment(Asm->getBundleAlign());
+  // Tie the instruction into the pending BoundaryAlign. This is done here,
+  // rather than before the instruction is emitted, so that the range covers
+  // whichever fragment the instruction actually ended up in.
+  PendingBA->setLastFragment(CF);
 
-  // Update ReuseBA for the next BeginBundle.
+  // Update ReuseBA for the next BeginBundle. A prefix keeps the pending
+  // BoundaryAlign so that the instruction it applies to extends the range.
   ReuseBA = isPrefix(PrevInstOpcode, *MCII);
-  if (ReuseBA)
-    return;
-  PendingBA = nullptr;
+  if (!ReuseBA)
+    PendingBA = nullptr;
+
+  // We need to ensure that further data isn't added to the current
+  // DataFragment, so that we can get the size of instructions later in
+  // MCAssembler::relaxBoundaryAlign. The easiest way is to insert a new empty
+  // DataFragment.
+  OS.newFragment();
+
+  // Update the maximum alignment on the current section if necessary.
+  CF->getParent()->ensureMinAlignment(Asm->getBundleAlign());
 }
 
 /// Insert BoundaryAlignFragment before instructions to align branches.

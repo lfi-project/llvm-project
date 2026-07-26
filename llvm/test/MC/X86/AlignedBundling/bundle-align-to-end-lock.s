@@ -1,5 +1,7 @@
 # RUN: llvm-mc -filetype=obj -triple x86_64 %s \
 # RUN:   | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
+# RUN: llvm-mc -filetype=obj -triple x86_64 -mc-relax-all %s \
+# RUN:   | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
 
 ## Test NOP padding for `align_to_end` bundle-locked groups.
 
