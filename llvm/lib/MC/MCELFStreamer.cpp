@@ -344,6 +344,13 @@ void MCELFStreamer::emitBundleAlignMode(Align Alignment) {
     getContext().reportError(
         getStartTokLoc(),
         ".bundle_align_mode is incompatible with branch alignment");
+  // Relaxing all instructions emits them as data, appended to a shared
+  // fragment, but bundling requires one fragment per instruction to compute
+  // its padding, making the two incompatible.
+  if (!Assembler.isBundlingEnabled() && Assembler.getRelaxAll())
+    getContext().reportError(
+        getStartTokLoc(),
+        ".bundle_align_mode is incompatible with -mrelax-all");
   setAllowAutoPadding(true);
   Assembler.setBundleAlign(Alignment);
 }
@@ -366,8 +373,8 @@ void MCELFStreamer::emitBundleLock(bool AlignToEnd,
   }
   Sec.setIsBundleLocked(true);
 
-  BundleBA =
-      newSpecialFragment<MCBoundaryAlignFragment>(Asm.getBundleAlign(), STI);
+  BundleBA = newSpecialFragment<MCBoundaryAlignFragment>(Asm.getBundleAlign(),
+                                                         STI, getStartTokLoc());
   BundleBA->setAlignToEnd(AlignToEnd);
 }
 
@@ -389,8 +396,6 @@ void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
 
   MCFragment *CF = getCurrentFragment();
   BundleBA->setLastFragment(CF);
-  // Bundle overflow check.
-  uint64_t AlignedSize = 0;
   for (const MCFragment *F = BundleBA->getNext();; F = F->getNext()) {
     if (F->getKind() == MCFragment::FT_Align ||
         F->getKind() == MCFragment::FT_Org) {
@@ -399,15 +404,10 @@ void MCELFStreamer::emitBundleUnlock(const MCSubtargetInfo &STI) {
                                "supported inside a .bundle_lock group");
       break;
     }
-    AlignedSize += getAssembler().computeFragmentSize(*F);
     if (F == BundleBA->getLastFragment())
       break;
   }
   BundleBA = nullptr;
-
-  if (AlignedSize > getAssembler().getBundleAlign().value())
-    getContext().reportError(getStartTokLoc(),
-                             "fragment can't be larger than a bundle size");
 
   newFragment();
 
