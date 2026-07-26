@@ -203,8 +203,10 @@ public:
   bool padInstsBackward(SmallVectorImpl<MCFragment *> &Relaxable,
                         unsigned &RemainingSize) const;
   bool dividePadInBundle(const MCAssembler &Asm,
-                         ArrayRef<MCFragment *> Peephole) const;
-  bool optimizeBundleNops(const MCAssembler &Asm) const;
+                         ArrayRef<MCFragment *> Peephole,
+                         const DenseSet<MCFragment *> &LabeledFragments) const;
+  bool optimizeBundleNops(const MCAssembler &Asm,
+                          const DenseSet<MCFragment *> &LabeledFragments) const;
 
   unsigned getMaximumNopSize(const MCSubtargetInfo &STI) const override;
 
@@ -962,8 +964,9 @@ bool X86AsmBackend::padInstsBackward(SmallVectorImpl<MCFragment *> &Relaxable,
 // BoundaryAlignFragment. Most of the time it will be every instruction within a
 // bundle, but there can be a partial bundle if it has nops in the middle(e.g.,
 // align_to_end).
-bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm,
-                                      ArrayRef<MCFragment *> Peephole) const {
+bool X86AsmBackend::dividePadInBundle(
+    const MCAssembler &Asm, ArrayRef<MCFragment *> Peephole,
+    const DenseSet<MCFragment *> &LabeledFragments) const {
   bool Changed = false;
   auto *LastF = Peephole.back();
   unsigned RemainingSize =
@@ -991,6 +994,12 @@ bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm,
 
   SmallVector<MCFragment *, 4> Relaxable;
   for (auto *FIB : Peephole) {
+    // Growing an instruction shifts everything between it and the padding it
+    // is absorbing, so a candidate must not be separated from that padding by
+    // a label.
+    if (LabeledFragments.count(FIB))
+      Relaxable.clear();
+
     if (FIB->getKind() == MCFragment::FT_Data) // Skip and ignore
       continue;
 
@@ -1013,6 +1022,10 @@ bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm,
   auto padInstsForward = [&](unsigned &Size) {
     auto *BF = cast<MCBoundaryAlignFragment>(LastF);
     for (auto *F = BF->getNext();; F = F->getNext()) {
+      // Growing an instruction here moves the start of it and of every
+      // instruction before it in the group, so stop at a label.
+      if (LabeledFragments.count(F))
+        break;
       if (F->getKind() == MCFragment::FT_Relaxable)
         Changed |= padInstructionEncoding(*F, Asm.getEmitter(), Size);
       if (F == BF->getLastFragment() || Size == 0)
@@ -1035,7 +1048,9 @@ bool X86AsmBackend::dividePadInBundle(const MCAssembler &Asm,
   return Changed;
 }
 
-bool X86AsmBackend::optimizeBundleNops(const MCAssembler &Asm) const {
+bool X86AsmBackend::optimizeBundleNops(
+    const MCAssembler &Asm,
+    const DenseSet<MCFragment *> &LabeledFragments) const {
   bool Changed = false;
   for (MCSection &Sec : Asm) {
     if (!Sec.isText())
@@ -1047,7 +1062,7 @@ bool X86AsmBackend::optimizeBundleNops(const MCAssembler &Asm) const {
         unsigned RemainingSize = Asm.computeFragmentSize(F) - F.getFixedSize();
         if (RemainingSize > 0) {
           Bundle.push_back(&F);
-          Changed |= dividePadInBundle(Asm, Bundle);
+          Changed |= dividePadInBundle(Asm, Bundle, LabeledFragments);
           Bundle.clear();
           continue;
         }
@@ -1063,18 +1078,21 @@ bool X86AsmBackend::optimizeBundleNops(const MCAssembler &Asm) const {
 }
 
 bool X86AsmBackend::finishLayout() const {
-  // With bundling, padding is fully determined during layout and the only
-  // post-layout optimization is prefix padding.
-  if (Asm->isBundlingEnabled())
-    return TargetPrefixMax != 0 && optimizeBundleNops(*Asm);
-  // See if we can further relax some instructions to cut down on the number of
-  // nop bytes required for code alignment.  The actual win is in reducing
-  // instruction count, not number of bytes.  Modern X86-64 can easily end up
-  // decode limited.  It is often better to reduce the number of instructions
-  // (i.e. eliminate nops) even at the cost of increasing the size and
-  // complexity of others.
-  if (!X86PadForAlign && !X86PadForBranchAlign)
+  const bool Bundling = Asm->isBundlingEnabled();
+  if (Bundling) {
+    // With bundling, padding is fully determined during layout and the only
+    // post-layout optimization is prefix padding.
+    if (TargetPrefixMax == 0)
+      return false;
+  } else if (!X86PadForAlign && !X86PadForBranchAlign) {
+    // See if we can further relax some instructions to cut down on the number
+    // of nop bytes required for code alignment.  The actual win is in reducing
+    // instruction count, not number of bytes.  Modern X86-64 can easily end up
+    // decode limited.  It is often better to reduce the number of instructions
+    // (i.e. eliminate nops) even at the cost of increasing the size and
+    // complexity of others.
     return false;
+  }
 
   // The processed regions are delimitered by LabeledFragments. -g may have more
   // MCSymbols and therefore different relaxation results. X86PadForAlign is
@@ -1082,6 +1100,9 @@ bool X86AsmBackend::finishLayout() const {
   DenseSet<MCFragment *> LabeledFragments;
   for (const MCSymbol &S : Asm->symbols())
     LabeledFragments.insert(S.getFragment());
+
+  if (Bundling)
+    return optimizeBundleNops(*Asm, LabeledFragments);
 
   bool Changed = false;
   for (MCSection &Sec : *Asm) {

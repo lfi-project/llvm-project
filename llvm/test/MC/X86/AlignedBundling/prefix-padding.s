@@ -110,8 +110,9 @@ prefix_cmpxchg_in_a_bundle:
   xorl	%eax, %eax
   lock
   cmpxchgl	%r12d, __thread_list_lock(%rip)
-# CHECK:        1c: 2e 31 c0                    xorl
-# CHECK-NEXT:   1f: 90                          nop
+## .LBB4_7 pins the instructions before it, so only the xorl absorbs padding.
+# CHECK:        17: 2e 31 c0                    xorl
+# CHECK-NEXT:   1a: 66 0f 1f 44 00 00           nopw
 ## lock must start the new bundle, not replacing the nop right above
 # CHECK-NEXT:   20: f0                          lock
 # CHECK-NEXT:   21: 44 0f b1 25 00 00 00 00     cmpxchgl %r12d, (%rip)

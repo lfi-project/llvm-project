@@ -1,7 +1,9 @@
 # RUN: llvm-mc -filetype=obj -triple=x86_64 %s --x86-pad-max-prefix-size=1 \
 # RUN:   | llvm-objdump -d --no-show-raw-insn - | FileCheck %s
 
-# This test checks whether enabling prefix padding with bundling can properly relax instructions proactively, avoiding fixup value overflows.
+# This test checks that bundling relaxes branches proactively: prefix padding
+# can shift a branch after its size is decided, so a displacement within a
+# bundle size of the rel8 limit is relaxed even though rel8 would reach.
 
   .text
   .bundle_align_mode 5
@@ -12,7 +14,7 @@
   .endr
 # CHECK:       f: jmp
 # CHECK-NEXT: 14: int3
-  jmp near_target             ## 2 bytes (rel8), has to be relaxed to 5 bytes (rel32)
+  jmp near_target             ## rel8 would reach, but is relaxed to rel32
   .rept 8
   int3                        ## 1 byte each, 7 of them are prefix-padded
   .endr
@@ -32,12 +34,8 @@
   .rept 15
   int3
   .endr
-  ## With prefix padding (max 1): instructions absorb trailing NOPs,
-  ##   near_target shifts from 0x8f to 0x9e.
-  ##   jmp distance = 0x9d - (0xf + len(jmp)) = 0x8c (140), exceeds rel8 range,
-  ##   forcing relaxation to rel32.
 # CHECK:           <near_target>:
-# CHECK-NEXT:      9d: inc
+# CHECK-NEXT:      8f: inc
 near_target:
   inc %eax
 
