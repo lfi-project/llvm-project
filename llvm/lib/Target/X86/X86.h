@@ -25,12 +25,19 @@
 
 namespace llvm {
 
+class Function;
 class FunctionPass;
 class InstructionSelector;
 class PassRegistry;
 class X86RegisterBankInfo;
 class X86Subtarget;
 class X86TargetMachine;
+
+/// Returns true if \p F uses the register-sourced (v2) shadow call stack form:
+/// the return address is passed in %r11 by the caller rather than read from the
+/// stack. Restricted to internal, non-address-taken functions so that every
+/// caller is a direct call this compiler controls.
+bool isShadowCallStackV2(const Function &F);
 
 /// This pass converts a legalized DAG into a X86-specific DAG, ready for
 /// instruction scheduling.
@@ -323,6 +330,10 @@ FunctionPass *createX86CompressEVEXLegacyPass();
 /// This pass creates the thunks for the retpoline feature.
 FunctionPass *createX86IndirectThunksPass();
 
+/// This pass emits the caller-side lea for direct calls to v2 shadow call
+/// stack functions.
+FunctionPass *createX86ShadowCallStackPass();
+
 /// This pass replaces ret instructions with jmp's to __x86_return thunk.
 class X86ReturnThunksPass : public OptionalPassInfoMixin<X86ReturnThunksPass> {
 public:
@@ -514,6 +525,7 @@ void initializeX86SpeculativeLoadHardeningLegacyPass(PassRegistry &);
 void initializeX86SuppressAPXForRelocationLegacyPass(PassRegistry &);
 void initializeX86TileConfigLegacyPass(PassRegistry &);
 void initializeX86WinEHUnwindV2LegacyPass(PassRegistry &);
+void initializeX86ShadowCallStackPass(PassRegistry &);
 void initializeX86PreLegalizerCombinerLegacyPass(PassRegistry &);
 void initializeX86PostLegalizerCombinerLegacyPass(PassRegistry &);
 void initializeX86WinEHUnwindV3Pass(PassRegistry &);

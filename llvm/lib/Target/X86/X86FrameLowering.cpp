@@ -12,6 +12,7 @@
 
 #include "X86FrameLowering.h"
 #include "MCTargetDesc/X86MCTargetDesc.h"
+#include "X86.h"
 #include "X86InstrBuilder.h"
 #include "X86InstrInfo.h"
 #include "X86MachineFunctionInfo.h"
@@ -44,6 +45,12 @@ STATISTIC(NumFrameLoopProbe, "Number of loop stack probes used in prologue");
 STATISTIC(NumFrameExtraProbe,
           "Number of extra stack probes generated in prologue");
 STATISTIC(NumFunctionUsingPush2Pop2, "Number of functions using push2/pop2");
+STATISTIC(NumShadowCallStackV1,
+          "Number of shadow call stack functions using the v1 (stack-sourced) "
+          "form");
+STATISTIC(NumShadowCallStackV2,
+          "Number of shadow call stack functions using the v2 (register-"
+          "sourced, race-free) form");
 
 using namespace llvm;
 
@@ -1658,16 +1665,23 @@ void X86FrameLowering::emitShadowCallStackPrologue(
     bool NeedsDwarfCFI) const {
   // Shadow call stack prologue:
   //
-  //   movq (%rsp), %r11        # load the return address pushed by the call
+  //   movq (%rsp), %r11        # v1 only: load the RA pushed by the call
   //   addq $8, %r15            # claim the next shadow call stack slot
   //   movq %r11, -8(%r15)      # push the return address onto the shadow stack
   //
-  // r11 is used as the staging register: it is the one caller-saved GPR with
-  // no live-in role at function entry (it is not an argument register, not the
-  // vararg count in al/rax, and not the static chain in r10), so clobbering it
-  // here destroys nothing. Leaving r10 alone keeps the SysV static chain
-  // (nest) intact, so instrumentation needs no calling-convention change. The
-  // epilogue reuses r11 for the return target; the live ranges do not overlap.
+  // r11 is the return-address register: it is the one caller-saved GPR with no
+  // live-in role at function entry (not an argument register, not the vararg
+  // count in al/rax, and not the static chain in r10), so clobbering it here
+  // destroys nothing. Leaving r10 alone keeps the SysV static chain (nest)
+  // intact, so instrumentation needs no calling-convention change. The epilogue
+  // reuses r11 for the return target; the live ranges do not overlap.
+  //
+  // Two forms share this prologue:
+  //  - v1 (stack-sourced): the return address is read from (%rsp). Compatible
+  //    with any caller, but trusts writable memory (the call-edge race).
+  //  - v2 (register-sourced): the caller has already loaded the return address
+  //    into r11 (X86ShadowCallStack), so r11 is live-in and (%rsp) is never
+  //    read. Restricted to internal, non-address-taken functions.
   //
   // r15 points one past the top entry of the shadow call stack, which grows
   // up. The memory at and above (%r15) is volatile: an async signal handler
@@ -1677,13 +1691,22 @@ void X86FrameLowering::emitShadowCallStackPrologue(
   //
   // This must run at the function entry, before any stack pointer
   // adjustment, while the return address is still at (%rsp).
-  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm), X86::R11)
-      .addReg(X86::RSP)
-      .addImm(1)
-      .addReg(0)
-      .addImm(0)
-      .addReg(0)
-      .setMIFlag(MachineInstr::FrameSetup);
+  bool IsV2 = isShadowCallStackV2(MF.getFunction());
+  // This runs once per instrumented function, so the counters report the
+  // v1/v2 split across the module; v2 is the more secure (race-free) form, and
+  // its share is NumShadowCallStackV2 / (NumShadowCallStackV1 + ...V2).
+  if (IsV2)
+    ++NumShadowCallStackV2;
+  else
+    ++NumShadowCallStackV1;
+  if (!IsV2)
+    BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm), X86::R11)
+        .addReg(X86::RSP)
+        .addImm(1)
+        .addReg(0)
+        .addImm(0)
+        .addReg(0)
+        .setMIFlag(MachineInstr::FrameSetup);
   BuildMI(MBB, MBBI, DL, TII.get(X86::ADD64ri32), X86::R15)
       .addReg(X86::R15)
       .addImm(SlotSize)
@@ -1715,6 +1738,10 @@ void X86FrameLowering::emitShadowCallStackPrologue(
       .addReg(0)
       .addReg(X86::R11, RegState::Kill)
       .setMIFlag(MachineInstr::FrameSetup);
+
+  // In the v2 form the caller passes the return address in r11.
+  if (IsV2)
+    MBB.addLiveIn(X86::R11);
 
   // The shadow call stack push reads r15 at function entry.
   MBB.addLiveIn(X86::R15);
@@ -2638,7 +2665,29 @@ void X86FrameLowering::emitShadowCallStackEpilogue(
   };
 
   unsigned Opc = Terminator->getOpcode();
-  if (Opc == X86::RET) {
+
+  // Extra bytes a callee-cleanup return (`ret $N`) pops beyond the return
+  // address. The X86::RET pseudo (DAG ISel) and the RETI* forms carry it as
+  // immediate operand 0; the plain RET64/RET32 forms (emitted directly by
+  // FastISel at -O0) carry none.
+  int64_t RetAdj = 0;
+  bool IsPlainReturn = false;
+  switch (Opc) {
+  case X86::RET:
+  case X86::RETI64:
+  case X86::RETI32:
+  case X86::RETI16:
+    RetAdj = Terminator->getOperand(0).getImm();
+    IsPlainReturn = true;
+    break;
+  case X86::RET64:
+  case X86::RET32:
+  case X86::RET16:
+    IsPlainReturn = true;
+    break;
+  }
+
+  if (IsPlainReturn) {
     // Shadow call stack epilogue for a return:
     //
     //   movq -8(%r15), %r11      # load the return address from the SCS
@@ -2661,9 +2710,7 @@ void X86FrameLowering::emitShadowCallStackEpilogue(
         .setMIFlag(MachineInstr::FrameDestroy);
     EmitSCSPop();
 
-    // Discard the on-stack return address, plus any additional bytes a
-    // callee-cleanup return (ret $N) would have popped.
-    int64_t RetAdj = Terminator->getOperand(0).getImm();
+    // Discard the on-stack return address, plus any callee-cleanup bytes.
     BuildMI(MBB, Terminator, DL, TII.get(X86::ADD64ri32), X86::RSP)
         .addReg(X86::RSP)
         .addImm(SlotSize + RetAdj)
@@ -2681,21 +2728,40 @@ void X86FrameLowering::emitShadowCallStackEpilogue(
     MachineInstrBuilder Jmp =
         BuildMI(MBB, Terminator, DL, TII.get(X86::TAILJMPr64))
             .addReg(X86::R11);
-    // Preserve the return's variadic operands (return value registers) as
-    // implicit uses of the jump.
-    for (unsigned I = 1, E = Terminator->getNumOperands(); I != E; ++I) {
-      const MachineOperand &MO = Terminator->getOperand(I);
+    // Preserve the return's register operands (return value registers) as
+    // implicit uses of the jump. Iterating all operands and copying only the
+    // register ones handles every return form: the RET pseudo and RETI* carry
+    // a leading immediate (skipped here), while RET64/RET32 do not.
+    for (const MachineOperand &MO : Terminator->operands())
       if (MO.isReg())
         Jmp.addReg(MO.getReg(), RegState::Implicit |
                                     getKillRegState(MO.isKill()) |
                                     getUndefRegState(MO.isUndef()));
-    }
     MBB.erase(Terminator);
   } else if (isTailCallOpcode(Opc)) {
     // Tail call: pop our shadow call stack entry but leave the on-stack
-    // return address in place. An instrumented callee re-pushes it from
+    // return address in place. An instrumented v1 callee re-pushes it from
     // (%rsp) in its own prologue; an uninstrumented callee returns through
     // it directly.
+    //
+    // A direct tail call to a v2 callee is the exception: that callee reads
+    // its return address from r11, so load it (our RA, from the SCS) before
+    // jumping. The jump is direct, so r11 does not hold the branch target. The
+    // load must precede the pop (the entry is still below the top; §3.5).
+    bool TargetIsV2 = false;
+    if ((Opc == X86::TCRETURNdi64 || Opc == X86::TCRETURNdi) &&
+        Terminator->getOperand(0).isGlobal())
+      if (const auto *F =
+              dyn_cast<Function>(Terminator->getOperand(0).getGlobal()))
+        TargetIsV2 = isShadowCallStackV2(*F);
+    if (TargetIsV2)
+      BuildMI(MBB, Terminator, DL, TII.get(X86::MOV64rm), X86::R11)
+          .addReg(X86::R15)
+          .addImm(1)
+          .addReg(0)
+          .addImm(-(int64_t)SlotSize)
+          .addReg(0)
+          .setMIFlag(MachineInstr::FrameDestroy);
     EmitSCSPop();
   }
   // Other terminators (EH_RETURN64, funclet returns) do not return through

@@ -96,6 +96,7 @@ extern "C" LLVM_C_ABI void LLVMInitializeX86Target() {
   initializeX86FlagsCopyLoweringLegacyPass(PR);
   initializeX86LoadValueInjectionLoadHardeningLegacyPass(PR);
   initializeX86LoadValueInjectionRetHardeningLegacyPass(PR);
+  initializeX86ShadowCallStackPass(PR);
   initializeX86OptimizeLEAsLegacyPass(PR);
   initializeX86PartialReductionLegacyPass(PR);
   initializeX86ReturnThunksLegacyPass(PR);
@@ -635,6 +636,12 @@ void X86PassConfig::addPreEmitPass2() {
     addPass(createX86WinEHUnwindV2LegacyPass());
     addPass(createX86WinEHUnwindV3Pass());
   }
+
+  // Emit the caller-side lea for direct calls to v2 shadow call stack
+  // functions. Runs last so the inserted lea stays immediately before its call
+  // (the call's return-address label is what the lea references), and after
+  // CFIInstrInserter since the lea does not affect the frame.
+  addPass(createX86ShadowCallStackPass());
 }
 
 bool X86PassConfig::addPostFastRegAllocRewrite() {
