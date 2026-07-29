@@ -18,6 +18,7 @@
 #include "X86Subtarget.h"
 #include "X86TargetMachine.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -1599,6 +1600,126 @@ static bool isOpcodeRep(unsigned Opcode) {
   - for 32-bit code, substitute %e?? registers for %r??
 */
 
+/// Returns true if the function should be instrumented with a shadow call
+/// stack prologue and epilogue, and diagnoses unsupported configurations.
+/// This is the x86-64 counterpart of
+/// AArch64FunctionInfo::needsShadowCallStackPrologueEpilogue. Unlike AArch64,
+/// there is no leaf-function exemption: a call always spills the return
+/// address to the stack on x86, so every instrumented function must capture
+/// it.
+static bool needsShadowCallStackPrologueEpilogue(const MachineFunction &MF,
+                                                 const X86Subtarget &STI) {
+  const Function &F = MF.getFunction();
+  if (!F.hasFnAttribute(Attribute::ShadowCallStack))
+    return false;
+
+  if (!STI.is64Bit())
+    report_fatal_error("shadow call stack is only supported on x86-64");
+  if (STI.isTargetDarwin() || MF.getTarget().getMCAsmInfo().usesWindowsCFI())
+    report_fatal_error("shadow call stack is not supported on this target");
+
+  // These calling conventions use r15 to pass or return values, which is
+  // incompatible with reserving it as the shadow call stack pointer.
+  CallingConv::ID CC = F.getCallingConv();
+  if (CC == CallingConv::GHC || CC == CallingConv::HiPE ||
+      CC == CallingConv::X86_RegCall || CC == CallingConv::PreserveNone)
+    report_fatal_error(
+        "shadow call stack is not supported with a calling convention that "
+        "uses r15");
+
+  // Interrupt handlers are not entered through a call: there is no return
+  // address at (%rsp) to protect and they return with iret, which cannot be
+  // redirected through the shadow call stack. Their bodies still run with a
+  // valid r15, so the functions they call are instrumented as usual.
+  if (CC == CallingConv::X86_INTR)
+    return false;
+
+  // Segmented stacks insert a call to __morestack ahead of the prologue;
+  // the shadow call stack prologue must be the first code to execute.
+  if (MF.shouldSplitStack())
+    report_fatal_error("shadow call stack is not supported with split stacks");
+
+  // The epilogue returns with an indirect jump, which would bypass the
+  // indirect-branch thunks. Supporting retpoline builds requires the
+  // (not yet implemented) writeback epilogue that returns with ret.
+  if (STI.useIndirectThunkBranches())
+    report_fatal_error(
+        "shadow call stack is not supported with indirect branch thunks");
+
+  if (!STI.isRegisterReservedByUser(X86::R15))
+    report_fatal_error("Must reserve r15 to use shadow call stack");
+
+  return true;
+}
+
+void X86FrameLowering::emitShadowCallStackPrologue(
+    MachineFunction &MF, MachineBasicBlock &MBB,
+    MachineBasicBlock::iterator MBBI, const DebugLoc &DL,
+    bool NeedsDwarfCFI) const {
+  // Shadow call stack prologue:
+  //
+  //   movq (%rsp), %r11        # load the return address pushed by the call
+  //   addq $8, %r15            # claim the next shadow call stack slot
+  //   movq %r11, -8(%r15)      # push the return address onto the shadow stack
+  //
+  // r11 is used as the staging register: it is the one caller-saved GPR with
+  // no live-in role at function entry (it is not an argument register, not the
+  // vararg count in al/rax, and not the static chain in r10), so clobbering it
+  // here destroys nothing. Leaving r10 alone keeps the SysV static chain
+  // (nest) intact, so instrumentation needs no calling-convention change. The
+  // epilogue reuses r11 for the return target; the live ranges do not overlap.
+  //
+  // r15 points one past the top entry of the shadow call stack, which grows
+  // up. The memory at and above (%r15) is volatile: an async signal handler
+  // pushes its own entries there. The slot is therefore claimed (r15 bumped)
+  // *before* the return address is stored into it, so a handler delivered
+  // between the two instructions cannot overwrite the just-stored value.
+  //
+  // This must run at the function entry, before any stack pointer
+  // adjustment, while the return address is still at (%rsp).
+  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64rm), X86::R11)
+      .addReg(X86::RSP)
+      .addImm(1)
+      .addReg(0)
+      .addImm(0)
+      .addReg(0)
+      .setMIFlag(MachineInstr::FrameSetup);
+  BuildMI(MBB, MBBI, DL, TII.get(X86::ADD64ri32), X86::R15)
+      .addReg(X86::R15)
+      .addImm(SlotSize)
+      .setMIFlag(MachineInstr::FrameSetup);
+
+  if (NeedsDwarfCFI) {
+    // Emit a CFI instruction that causes 8 to be subtracted from the value of
+    // r15 when unwinding past this frame. Placed directly after the increment
+    // so the rule is exact at every instruction boundary.
+    static const char CFIInst[] = {
+        dwarf::DW_CFA_val_expression,
+        15, // DWARF register number of r15
+        2,  // length
+        static_cast<char>(unsigned(dwarf::DW_OP_breg15)),
+        static_cast<char>(-8) & 0x7f, // addend (sleb128)
+    };
+    BuildCFI(
+        MBB, MBBI, DL,
+        MCCFIInstruction::createEscape(nullptr,
+                                       StringRef(CFIInst, sizeof(CFIInst))),
+        MachineInstr::FrameSetup);
+  }
+
+  BuildMI(MBB, MBBI, DL, TII.get(X86::MOV64mr))
+      .addReg(X86::R15)
+      .addImm(1)
+      .addReg(0)
+      .addImm(-(int64_t)SlotSize)
+      .addReg(0)
+      .addReg(X86::R11, RegState::Kill)
+      .setMIFlag(MachineInstr::FrameSetup);
+
+  // The shadow call stack push reads r15 at function entry.
+  MBB.addLiveIn(X86::R15);
+}
+
 void X86FrameLowering::emitPrologue(MachineFunction &MF,
                                     MachineBasicBlock &MBB) const {
   assert(&STI == &MF.getSubtarget<X86Subtarget>() &&
@@ -1658,6 +1779,9 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF,
   // to determine the end of the prologue.
   DebugLoc DL;
   Register ArgBaseReg;
+
+  if (!IsFunclet && needsShadowCallStackPrologueEpilogue(MF, STI))
+    emitShadowCallStackPrologue(MF, MBB, MBBI, DL, NeedsDwarfCFI);
 
   // Emit extra prolog for argument stack slot reference.
   if (auto *MI = X86FI->getStackPtrSaveMI()) {
@@ -2487,6 +2611,98 @@ static bool isTailCallOpcode(unsigned Opc) {
          Opc == X86::TCRETURNmi64 || Opc == X86::TCRETURN_WINmi64;
 }
 
+void X86FrameLowering::emitShadowCallStackEpilogue(
+    MachineFunction &MF, MachineBasicBlock &MBB,
+    MachineBasicBlock::iterator Terminator, bool NeedsDwarfCFI) const {
+  if (Terminator == MBB.end())
+    return;
+  DebugLoc DL = Terminator->getDebugLoc();
+
+  // Pop the top shadow call stack entry:
+  //
+  //   leaq -8(%r15), %r15
+  //
+  // LEA rather than SUB so EFLAGS are unaffected; flags may be live at a
+  // terminator that a later pass rewrites (e.g. conditional tail calls).
+  // Any load of the entry must be emitted *before* this pop: the memory at
+  // and above (%r15) is volatile to async signal handlers, so a handler
+  // delivered after the pop may recycle the slot.
+  auto EmitSCSPop = [&]() {
+    BuildMI(MBB, Terminator, DL, TII.get(X86::LEA64r), X86::R15)
+        .addReg(X86::R15)
+        .addImm(1)
+        .addReg(0)
+        .addImm(-(int64_t)SlotSize)
+        .addReg(0)
+        .setMIFlag(MachineInstr::FrameDestroy);
+  };
+
+  unsigned Opc = Terminator->getOpcode();
+  if (Opc == X86::RET) {
+    // Shadow call stack epilogue for a return:
+    //
+    //   movq -8(%r15), %r11      # load the return address from the SCS
+    //   leaq -8(%r15), %r15      # pop the SCS
+    //   addq $8, %rsp            # discard the dead on-stack return address
+    //   jmpq *%r11               # enforced return
+    //
+    // The return target comes from the shadow call stack, not from the
+    // on-stack slot the call pushed; corruption of the ordinary stack after
+    // the prologue cannot redirect the return. r11 is used as the return
+    // address register (matching the prologue staging register): it is dead
+    // and not a return-value register at a return point, and TAILJMPr64
+    // requires a register in GR64_TC, which contains r11 but not r10.
+    BuildMI(MBB, Terminator, DL, TII.get(X86::MOV64rm), X86::R11)
+        .addReg(X86::R15)
+        .addImm(1)
+        .addReg(0)
+        .addImm(-(int64_t)SlotSize)
+        .addReg(0)
+        .setMIFlag(MachineInstr::FrameDestroy);
+    EmitSCSPop();
+
+    // Discard the on-stack return address, plus any additional bytes a
+    // callee-cleanup return (ret $N) would have popped.
+    int64_t RetAdj = Terminator->getOperand(0).getImm();
+    BuildMI(MBB, Terminator, DL, TII.get(X86::ADD64ri32), X86::RSP)
+        .addReg(X86::RSP)
+        .addImm(SlotSize + RetAdj)
+        .setMIFlag(MachineInstr::FrameDestroy);
+    if (NeedsDwarfCFI) {
+      // The return address slot now lies below the stack pointer: the CFA is
+      // the stack pointer itself. (The popped slot still holds the return
+      // address value, so the standard RA-at-CFA-8 rule stays valid for the
+      // final indirect jump.)
+      BuildCFI(MBB, Terminator, DL,
+               MCCFIInstruction::cfiDefCfaOffset(nullptr, 0),
+               MachineInstr::FrameDestroy);
+    }
+
+    MachineInstrBuilder Jmp =
+        BuildMI(MBB, Terminator, DL, TII.get(X86::TAILJMPr64))
+            .addReg(X86::R11);
+    // Preserve the return's variadic operands (return value registers) as
+    // implicit uses of the jump.
+    for (unsigned I = 1, E = Terminator->getNumOperands(); I != E; ++I) {
+      const MachineOperand &MO = Terminator->getOperand(I);
+      if (MO.isReg())
+        Jmp.addReg(MO.getReg(), RegState::Implicit |
+                                    getKillRegState(MO.isKill()) |
+                                    getUndefRegState(MO.isUndef()));
+    }
+    MBB.erase(Terminator);
+  } else if (isTailCallOpcode(Opc)) {
+    // Tail call: pop our shadow call stack entry but leave the on-stack
+    // return address in place. An instrumented callee re-pushes it from
+    // (%rsp) in its own prologue; an uninstrumented callee returns through
+    // it directly.
+    EmitSCSPop();
+  }
+  // Other terminators (EH_RETURN64, funclet returns) do not return through
+  // the shadow call stack; entries for frames removed by the unwinder are
+  // popped by unwinding r15 via the CFI expression emitted in the prologue.
+}
+
 void X86FrameLowering::emitEpilogue(MachineFunction &MF,
                                     MachineBasicBlock &MBB) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -2808,6 +3024,9 @@ void X86FrameLowering::emitEpilogue(MachineFunction &MF,
 
   if (NeedsWin64CFI && MF.hasWinCFI())
     BuildMI(MBB, Terminator, DL, TII.get(X86::SEH_EndEpilogue));
+
+  if (!IsFunclet && needsShadowCallStackPrologueEpilogue(MF, STI))
+    emitShadowCallStackEpilogue(MF, MBB, Terminator, NeedsDwarfCFI);
 }
 
 StackOffset X86FrameLowering::getFrameIndexReference(const MachineFunction &MF,
@@ -4107,6 +4326,14 @@ bool X86FrameLowering::canUseAsEpilogue(const MachineBasicBlock &MBB) const {
 }
 
 bool X86FrameLowering::enableShrinkWrapping(const MachineFunction &MF) const {
+  // The shadow call stack prologue must execute at the function entry, while
+  // the return address is still at (%rsp), and every return path needs the
+  // matching epilogue; shrink wrapping moves the prologue and epilogue away
+  // from those points (a shrink-wrapped fast path would return through the
+  // unprotected on-stack return address).
+  if (MF.getFunction().hasFnAttribute(Attribute::ShadowCallStack))
+    return false;
+
   // If we may need to emit frameless compact unwind information, give
   // up as this is currently broken: PR25614.
   bool CompactUnwind =

@@ -283,6 +283,20 @@ private:
   void emitZeroCallUsedRegs(BitVector RegsToZero,
                             MachineBasicBlock &MBB) const override;
 
+  /// Emit the shadow call stack prologue: push the return address onto the
+  /// shadow call stack pointed to by r15.
+  void emitShadowCallStackPrologue(MachineFunction &MF, MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator MBBI,
+                                   const DebugLoc &DL,
+                                   bool NeedsDwarfCFI) const;
+
+  /// Emit the shadow call stack epilogue: pop the shadow call stack and, for
+  /// plain returns, return through the popped value instead of the on-stack
+  /// return address.
+  void emitShadowCallStackEpilogue(MachineFunction &MF, MachineBasicBlock &MBB,
+                                   MachineBasicBlock::iterator Terminator,
+                                   bool NeedsDwarfCFI) const;
+
   void adjustFrameForMsvcCxxEh(MachineFunction &MF) const;
 
   /// Aligns the stack pointer by ANDing it with -MaxAlign.
