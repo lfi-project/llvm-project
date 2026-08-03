@@ -17,6 +17,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/SMLoc.h"
 #include <cassert>
@@ -59,6 +60,9 @@ private:
   bool HasLayout = false;
   bool HasFinalLayout = false;
   bool RelaxAll = false;
+
+  /// Non-empty when aligned instruction bundling is enabled.
+  MaybeAlign BundleAlign;
 
   SectionListType Sections;
 
@@ -190,6 +194,13 @@ public:
   bool hasFinalLayout() const { return HasFinalLayout; }
   bool getRelaxAll() const { return RelaxAll; }
   void setRelaxAll(bool Value) { RelaxAll = Value; }
+
+  bool isBundlingEnabled() const { return bool(BundleAlign); }
+  Align getBundleAlign() const {
+    assert(BundleAlign && "bundling is not enabled");
+    return *BundleAlign;
+  }
+  void setBundleAlign(Align Value) { BundleAlign = Value; }
 
   const_iterator begin() const { return Sections.begin(); }
   const_iterator end() const { return Sections.end(); }

@@ -10,6 +10,7 @@ LLVM and API reference documentation.
    :hidden:
 
    AIToolPolicy
+   AlignedBundling
    Atomics
    BitCodeFormat
    BlockFrequencyTerminology
@@ -187,6 +188,10 @@ Additional Topics
 
 :doc:`Extensions`
   LLVM-specific extensions to tools and formats LLVM seeks compatibility with.
+
+:doc:`AlignedBundling`
+  The ``.bundle_align_mode``, ``.bundle_lock``, and ``.bundle_unlock``
+  assembler directives.
 
 :doc:`HowToSetUpLLVMStyleRTTI`
   How to make ``isa<>``, ``dyn_cast<>``, etc. available for clients of your
