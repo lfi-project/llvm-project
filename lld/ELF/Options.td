@@ -652,6 +652,12 @@ def lto_emit_asm: FF<"lto-emit-asm">,
   HelpText<"Emit assembly code">;
 def lto_emit_llvm: FF<"lto-emit-llvm">,
   HelpText<"Emit LLVM-IR bitcode">;
+def lto_external_assembler_eq: JJ<"lto-external-assembler=">,
+  HelpText<"Use the given tool instead of the integrated assembler to "
+  "assemble LTO-generated assembly into native object files. The tool is "
+  "invoked as: <tool> <args...> -o <object> <assembly>">;
+defm lto_external_assembler_arg: EEq<"lto-external-assembler-arg",
+  "Arguments to pass to --lto-external-assembler">;
 def lto_newpm_passes: JJ<"lto-newpm-passes=">,
   HelpText<"Passes to run during LTO">;
 def lto_O: JJ<"lto-O">, MetaVarName<"<opt-level>">,

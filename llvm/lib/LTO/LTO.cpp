@@ -204,6 +204,13 @@ std::string llvm::computeLTOCacheKey(
   AddString(Conf.DefaultTriple);
   AddString(Conf.DwoDir);
   AddUint8(Conf.Dtlto);
+  // The external assembler produces the final native object, so its identity
+  // and arguments affect the cached output. Note that like the LLVM revision
+  // above, this does not detect a different assembler binary at the same path.
+  AddUnsigned(Conf.Options.DisableIntegratedAS);
+  AddString(Conf.ExternalAssemblerPath);
+  for (const std::string &A : Conf.ExternalAssemblerArgs)
+    AddString(A);
 
   // Include the hash for the current module
   auto ModHash = Index.getModuleHash(ModuleID);

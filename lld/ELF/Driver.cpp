@@ -321,6 +321,18 @@ static void checkOptions(Ctx &ctx) {
     ErrAlways(ctx)
         << "the .gnu.hash section is not compatible with the MIPS target";
 
+  if (!ctx.arg.ltoExternalAssembler.empty()) {
+    if (ctx.arg.ltoEmitAsm)
+      ErrAlways(ctx)
+          << "--lto-external-assembler may not be used with --lto-emit-asm";
+    if (!ctx.arg.dwoDir.empty())
+      ErrAlways(ctx) << "--lto-external-assembler may not be used with "
+                        "--plugin-opt=dwo_dir=";
+    if (!ctx.arg.dtltoDistributor.empty())
+      ErrAlways(ctx) << "--lto-external-assembler may not be used with "
+                        "--thinlto-distributor=";
+  }
+
   if (ctx.arg.emachine == EM_ARM) {
     if (!ctx.arg.cmseImplib) {
       if (!ctx.arg.cmseInputLib.empty())
@@ -1478,6 +1490,10 @@ static void readConfigs(Ctx &ctx, opt::InputArgList &args) {
                                             OPT_no_lto_pgo_warn_mismatch, true);
   ctx.arg.ltoDebugPassManager = args.hasArg(OPT_lto_debug_pass_manager);
   ctx.arg.ltoEmitAsm = args.hasArg(OPT_lto_emit_asm);
+  ctx.arg.ltoExternalAssembler =
+      args.getLastArgValue(OPT_lto_external_assembler_eq);
+  ctx.arg.ltoExternalAssemblerArgs =
+      args::getStrings(args, OPT_lto_external_assembler_arg);
   ctx.arg.ltoNewPmPasses = args.getLastArgValue(OPT_lto_newpm_passes);
   ctx.arg.ltoWholeProgramVisibility =
       args.hasFlag(OPT_lto_whole_program_visibility,

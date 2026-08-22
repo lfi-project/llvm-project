@@ -169,6 +169,19 @@ static lto::Config createConfig(Ctx &ctx) {
     c.Options.MCOptions.AsmVerbose = true;
   }
 
+  if (!ctx.arg.ltoExternalAssembler.empty()) {
+    c.ExternalAssemblerPath = ctx.arg.ltoExternalAssembler.str();
+    for (StringRef arg : ctx.arg.ltoExternalAssemblerArgs)
+      c.ExternalAssemblerArgs.push_back(arg.str());
+    // The external assembler consumes textual assembly: have codegen avoid
+    // constructs only the integrated assembler understands, and give up
+    // address-significance tables, which have no GNU as representation.
+    // Also set here (not only in the LTO backend) so that both fields
+    // participate in the ThinLTO cache key.
+    c.Options.DisableIntegratedAS = true;
+    c.Options.EmitAddrsig = false;
+  }
+
   if (!ctx.arg.saveTempsArgs.empty())
     checkError(ctx.e, c.addSaveTemps(ctx.arg.outputFile.str() + ".",
                                      /*UseInputModulePath*/ true,

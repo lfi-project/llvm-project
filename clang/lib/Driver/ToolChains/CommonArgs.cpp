@@ -1066,9 +1066,13 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
     Input = Inputs.begin();
   }
 
-  if (Linker != "lld" && Linker != "lld-link" &&
+  // True when the LTO link uses the LLVMgold/libLTO plugin interface (GNU ld,
+  // gold, AIX ld) rather than LLD's native LTO support.
+  const bool UsingLTOPlugin =
+      Linker != "lld" && Linker != "lld-link" &&
       llvm::sys::path::filename(LinkerPath) != "ld.lld" &&
-      llvm::sys::path::stem(LinkerPath) != "ld.lld" && !Triple.isOSOpenBSD()) {
+      llvm::sys::path::stem(LinkerPath) != "ld.lld" && !Triple.isOSOpenBSD();
+  if (UsingLTOPlugin) {
     // Tell the linker to load the plugin. This has to come before
     // AddLinkerInputs as gold requires -plugin and AIX ld requires -bplugin to
     // come before any -plugin-opt/-bplugin_opt that -Wl might forward.
@@ -1448,6 +1452,57 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
   if (Args.hasArg(options::OPT_ftime_report))
     CmdArgs.push_back(
         Args.MakeArgString(Twine(PluginOptPrefix) + "-time-passes"));
+
+  // If the toolchain uses an external assembler, LTO code generation in the
+  // linker must route its output through it as well. Pass LLD a callback into
+  // this driver, which assembles each LTO-generated assembly file via the
+  // usual external-assembler pipeline (clang -fno-integrated-as -c). AIX has
+  // its own mechanism above (-bplugin_opt:-no-integrated-as); other
+  // plugin-based links do not support this, so warn that the flag is ignored.
+  // GPU device links (e.g. CUDA, whose toolchain reports useIntegratedAs() ==
+  // false for ptxas) have no external assembler to call back into and are
+  // excluded.
+  // TODO: With -fthinlto-distributor= the backend compilations run out of
+  // process; teach DTLTO to honor -fno-integrated-as instead.
+  if (!IsOSAIX && Triple.isOSBinFormatELF() && !Triple.isAMDGCN() &&
+      !Triple.isNVPTX() && !ToolChain.useIntegratedAs() &&
+      !Args.hasArg(options::OPT_fthinlto_distributor_EQ)) {
+    if (UsingLTOPlugin) {
+      D.Diag(diag::warn_drv_lto_no_integrated_as_needs_lld);
+    } else {
+      CmdArgs.push_back(Args.MakeArgString(
+          Twine("--lto-external-assembler=") + D.getDriverProgramPath()));
+      auto AddAsArg = [&](const Twine &T) {
+        CmdArgs.push_back(
+            Args.MakeArgString(Twine("--lto-external-assembler-arg=") + T));
+      };
+      if (const char *PrependArg = D.getPrependArg())
+        AddAsArg(PrependArg);
+      AddAsArg("--target=" + Triple.str());
+      AddAsArg("-fno-integrated-as");
+      AddAsArg("-c");
+      // Let the callback search the same prefixes for the assembler.
+      for (const Arg *A : Args.filtered(options::OPT_B))
+        AddAsArg(Twine("-B") + A->getValue());
+      // Forward flags the callback's assembler job derives target-specific
+      // assembler arguments from (e.g. -march for RISC-V).
+      for (const Arg *A : Args.filtered(
+               options::OPT_march_EQ, options::OPT_mabi_EQ, options::OPT_mcpu_EQ))
+        AddAsArg(A->getAsString(Args));
+      // Forward assembler options given on the link command line, except
+      // those that configure the integrated assembler and were translated to
+      // LTO options above.
+      for (const Arg *A :
+           Args.filtered(options::OPT_Wa_COMMA, options::OPT_Xassembler)) {
+        for (StringRef V : A->getValues()) {
+          if (V == "--crel" || V == "--no-crel" || V.starts_with("-mmapsyms"))
+            continue;
+          AddAsArg(Twine("-Wa,") + V);
+        }
+        A->claim();
+      }
+    }
+  }
 
   addDTLTOOptions(ToolChain, Args, CmdArgs);
 }

@@ -29,6 +29,12 @@ from the [LLVM releases web site](https://llvm.org/releases/).
 
 ### ELF Improvements
 
+* `--lto-external-assembler=<tool>` and `--lto-external-assembler-arg=<arg>`
+  make LTO code generation emit textual assembly and run the given tool to
+  assemble each native object file, instead of using the integrated assembler.
+  Clang passes these automatically when `-fno-integrated-as` is used together
+  with LTO.
+
 ### Breaking changes
 
 ### COFF Improvements

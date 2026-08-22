@@ -34,8 +34,10 @@
 #include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/ThreadPool.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/VirtualFileSystem.h"
@@ -244,6 +246,14 @@ createTargetMachine(const Config &Conf, const Target *TheTarget, Module &M) {
     TargetOpts.MCOptions.ABIName = M.getTargetABIFromMD();
   }
 
+  // When an external assembler consumes the emitted assembly, avoid
+  // constructs only the integrated assembler understands, and disable
+  // output that has no textual form GNU as accepts.
+  if (!Conf.ExternalAssemblerPath.empty()) {
+    TargetOpts.DisableIntegratedAS = true;
+    TargetOpts.EmitAddrsig = false;
+  }
+
   std::unique_ptr<TargetMachine> TM(TheTarget->createTargetMachine(
       TheTriple, Conf.CPU, Features.getString(), TargetOpts, RelocModel,
       CodeModel, Conf.CGOptLevel));
@@ -434,6 +444,62 @@ bool lto::opt(const Config &Conf, TargetMachine *TM, unsigned Task, Module &Mod,
   return !Conf.PostOptModuleHook || Conf.PostOptModuleHook(Task, Mod);
 }
 
+// Assemble the textual assembly in the file at AsmPath with the external
+// assembler configured in Conf and write the resulting native object file to
+// OS. Removes the assembly file, except on failure, where it is retained to
+// allow investigating the failure.
+static void runExternalAssembler(const Config &Conf, StringRef AsmPath,
+                                 raw_pwrite_stream &OS) {
+  llvm::TimeTraceScope timeScope("External assembler");
+
+  FileRemover AsmRemover(AsmPath);
+
+  SmallString<128> ObjPath;
+  if (std::error_code EC =
+          sys::fs::createTemporaryFile("lto-backend", "o", ObjPath))
+    report_fatal_error(Twine("failed to create temporary file for the "
+                             "external assembler: ") +
+                           EC.message(),
+                       /*gen_crash_diag=*/false);
+  FileRemover ObjRemover(ObjPath);
+
+  std::vector<StringRef> Args;
+  Args.push_back(Conf.ExternalAssemblerPath);
+  llvm::append_range(Args, Conf.ExternalAssemblerArgs);
+  Args.push_back("-o");
+  Args.push_back(ObjPath);
+  Args.push_back(AsmPath);
+
+  std::string ErrMsg;
+  int RC = sys::ExecuteAndWait(Conf.ExternalAssemblerPath, Args,
+                               /*Env=*/std::nullopt, /*Redirects=*/{},
+                               /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg);
+  if (RC != 0) {
+    // Keep the assembly file to allow investigating the failure.
+    AsmRemover.releaseFile();
+    std::string Reason;
+    if (RC < 0) {
+      Reason = "could not be executed";
+      if (!ErrMsg.empty())
+        Reason += ": " + ErrMsg;
+    } else {
+      Reason = "failed with exit code " + std::to_string(RC);
+    }
+    report_fatal_error(Twine("external assembler '") +
+                           Conf.ExternalAssemblerPath + "' " + Reason +
+                           "; assembly retained at " + AsmPath,
+                       /*gen_crash_diag=*/false);
+  }
+
+  ErrorOr<std::unique_ptr<MemoryBuffer>> ObjBuf = MemoryBuffer::getFile(
+      ObjPath, /*IsText=*/false, /*RequiresNullTerminator=*/false);
+  if (!ObjBuf)
+    report_fatal_error(Twine("failed to read external assembler output ") +
+                           ObjPath + ": " + ObjBuf.getError().message(),
+                       /*gen_crash_diag=*/false);
+  OS << (*ObjBuf)->getBuffer();
+}
+
 static void codegen(const Config &Conf, TargetMachine *TM,
                     AddStreamFn AddStream, unsigned Task, Module &Mod,
                     const ModuleSummaryIndex &CombinedIndex) {
@@ -476,6 +542,30 @@ static void codegen(const Config &Conf, TargetMachine *TM,
   std::unique_ptr<CachedFileStream> &Stream = *StreamOrErr;
   TM->Options.ObjectFilenameForDebug = Stream->ObjectPathName;
 
+  // With an external assembler, emit textual assembly into a temporary file,
+  // then assemble it into the output stream after the codegen pipeline has
+  // run.
+  bool UseExternalAssembler = !Conf.ExternalAssemblerPath.empty();
+  if (UseExternalAssembler && DwoOut)
+    report_fatal_error(
+        "the LTO external assembler cannot be used with split DWARF output",
+        /*gen_crash_diag=*/false);
+  SmallString<128> ExtAsmPath;
+  std::unique_ptr<raw_fd_ostream> ExtAsmOS;
+  if (UseExternalAssembler) {
+    int ExtAsmFD;
+    if (std::error_code EC = sys::fs::createTemporaryFile(
+            "lto-backend", "s", ExtAsmFD, ExtAsmPath))
+      report_fatal_error(Twine("failed to create temporary file for the "
+                               "external assembler: ") +
+                             EC.message(),
+                         /*gen_crash_diag=*/false);
+    ExtAsmOS = std::make_unique<raw_fd_ostream>(ExtAsmFD, /*shouldClose=*/true);
+  }
+  raw_pwrite_stream &CGOS = UseExternalAssembler ? *ExtAsmOS : *Stream->OS;
+  CodeGenFileType CGFT = UseExternalAssembler ? CodeGenFileType::AssemblyFile
+                                              : Conf.CGFileType;
+
   // Create the codegen pipeline in its own scope so it gets deleted before
   // Stream->commit() is called. The commit function of CacheStream deletes
   // the raw stream, which is too early as streamers (e.g. MCAsmStreamer)
@@ -499,14 +589,21 @@ static void codegen(const Config &Conf, TargetMachine *TM,
           createImmutableModuleSummaryIndexWrapperPass(&CombinedIndex));
     if (Conf.PreCodeGenPassesHook)
       Conf.PreCodeGenPassesHook(CodeGenPasses);
-    if (TM->addPassesToEmitFile(CodeGenPasses, *Stream->OS,
-                                DwoOut ? &DwoOut->os() : nullptr,
-                                Conf.CGFileType))
+    if (TM->addPassesToEmitFile(CodeGenPasses, CGOS,
+                                DwoOut ? &DwoOut->os() : nullptr, CGFT))
       report_fatal_error("Failed to setup codegen");
     CodeGenPasses.run(Mod);
 
     if (DwoOut)
       DwoOut->keep();
+  }
+
+  if (UseExternalAssembler) {
+    ExtAsmOS->close();
+    if (ExtAsmOS->has_error())
+      report_fatal_error(Twine("failed to write ") + ExtAsmPath,
+                         /*gen_crash_diag=*/false);
+    runExternalAssembler(Conf, ExtAsmPath, *Stream->OS);
   }
 
   if (Error Err = Stream->commit())

@@ -312,6 +312,8 @@ struct Config {
   llvm::StringRef dtltoCompiler;
   llvm::SmallVector<llvm::StringRef, 0> dtltoCompilerPrependArgs;
   llvm::SmallVector<llvm::StringRef, 0> dtltoCompilerArgs;
+  llvm::StringRef ltoExternalAssembler;
+  llvm::SmallVector<llvm::StringRef, 0> ltoExternalAssemblerArgs;
   llvm::SmallVector<llvm::StringRef, 0> undefined;
   llvm::SmallVector<SymbolVersion, 0> dynamicList;
   llvm::SmallVector<uint8_t, 0> buildIdVector;

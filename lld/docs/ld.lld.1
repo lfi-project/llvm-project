@@ -350,6 +350,17 @@ Add a directory to the library search path.
 AA pipeline to run during LTO.
 Used in conjunction with
 .Fl -lto-newpm-passes .
+.It Fl -lto-external-assembler Ns = Ns Ar tool
+Use
+.Ar tool
+instead of the integrated assembler to assemble LTO-generated assembly into
+native object files.
+The tool is invoked as
+.Ar tool args... -o object assembly .
+.It Fl -lto-external-assembler-arg Ns = Ns Ar arg
+Argument to pass to
+.Fl -lto-external-assembler .
+May be repeated.
 .It Fl -lto-newpm-passes Ns = Ns Ar value
 Passes to run during LTO.
 .It Fl -lto-O Ns Ar opt-level

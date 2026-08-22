@@ -63,6 +63,18 @@ struct Config {
   std::optional<CodeModel::Model> CodeModel;
   CodeGenOptLevel CGOptLevel = CodeGenOptLevel::Default;
   CodeGenFileType CGFileType = CodeGenFileType::ObjectFile;
+
+  /// If non-empty, code generation emits textual assembly and runs this tool
+  /// to assemble it into each task's native object file, instead of using the
+  /// integrated assembler. The tool is invoked as:
+  ///   ExternalAssemblerPath <ExternalAssemblerArgs...> -o <object> <assembly>
+  /// This implies TargetOptions::DisableIntegratedAS, so that the emitted
+  /// assembly avoids constructs only the integrated assembler understands,
+  /// and disables output that has no textual form GNU as accepts (e.g.
+  /// address-significance tables).
+  std::string ExternalAssemblerPath;
+  std::vector<std::string> ExternalAssemblerArgs;
+
   unsigned OptLevel = 2;
   bool VerifyEach = false;
   bool DisableVerify = false;

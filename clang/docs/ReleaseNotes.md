@@ -195,6 +195,13 @@ features cannot lower the translation-unit ABI level;
 - Clang now allows GNU computed `goto` extension in `constexpr` functions, matching the relaxed
   `constexpr` function body rules introduced in C++23.
 
+- `-fno-integrated-as` is now honored when combined with LTO on ELF targets
+  when linking with `ld.lld`: LTO code generation in the linker emits textual
+  assembly and assembles it with the external assembler (via a callback into
+  the clang driver). Previously the flag was silently ignored and the
+  integrated assembler was always used. With other linkers the flag is still
+  ignored under LTO, and clang now warns about it.
+
 ### New Compiler Flags
 
 - New option `-fdefined-pointer-subtraction` added to preserve stable semantics

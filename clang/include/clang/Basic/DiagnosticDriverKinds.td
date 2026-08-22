@@ -149,6 +149,10 @@ def warn_drv_unsupported_option_for_offload_arch_req_feature : Warning<
 def warn_drv_unsupported_option_for_target : Warning<
   "ignoring '%0' option as it is not currently supported for target '%1'">,
   InGroup<OptionIgnored>;
+def warn_drv_lto_no_integrated_as_needs_lld : Warning<
+  "ignoring '-fno-integrated-as' for LTO code generation; it is only "
+  "supported when linking with ld.lld">,
+  InGroup<OptionIgnored>;
 def err_drv_unsupported_option_for_target : Error<
   "'%0' option is not currently supported for target '%1'">;
 def warn_drv_unsupported_option_part_for_target : Warning<
