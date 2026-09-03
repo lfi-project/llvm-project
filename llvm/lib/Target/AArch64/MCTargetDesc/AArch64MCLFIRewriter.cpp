@@ -37,6 +37,7 @@ struct LFIVariantEntry {
   uint8_t AddrMode;
   uint8_t Log2Size;
   unsigned RoWInst;
+  unsigned RoXInst;
 };
 struct PairVariantEntry {
   unsigned Inst;
@@ -80,11 +81,18 @@ enum LFIAddrMode : uint8_t {
 #include "AArch64GenSystemOperands.inc"
 } // namespace llvm::AArch64
 
+static cl::opt<unsigned>
+    LFISandboxBits("aarch64-lfi-sandbox-bits", cl::Hidden,
+                   cl::desc("Number of address bits for the LFI large sandbox"),
+                   cl::init(32));
+
 // LFI reserved registers.
 static constexpr MCRegister LFIBaseReg = AArch64::X27;
 static constexpr MCRegister LFIAddrReg = AArch64::X28;
 static constexpr MCRegister LFIScratchReg = AArch64::X26;
 static constexpr MCRegister LFICtxReg = AArch64::X25;
+// Offset register, reserved in large-sandbox mode only.
+static constexpr MCRegister LFIOffsetReg = AArch64::X24;
 
 // Offset into the context register block (pointed to by LFICtxReg) where the
 // thread pointer is stored. This is a scaled offset (multiplied by 8 for
@@ -256,6 +264,15 @@ static unsigned convertRoXToRoW(unsigned Op, unsigned &Shift) {
   return E->RoWInst;
 }
 
+// Convert a RoW (register-offset-W) opcode to the RoX (register-offset-X)
+// variant of the same family.
+static unsigned convertRoWToRoX(unsigned Op) {
+  const AArch64::LFIVariantEntry *E = AArch64::lookupLFIVariantByOpcode(Op);
+  if (!E)
+    return AArch64::INSTRUCTION_LIST_END;
+  return E->RoXInst;
+}
+
 static bool getRoWShift(unsigned Op, unsigned &Shift) {
   Shift = 0;
   const AArch64::LFIVariantEntry *E = AArch64::lookupLFIVariantByOpcode(Op);
@@ -289,11 +306,15 @@ bool AArch64MCLFIRewriter::mayModifySP(const MCInst &Inst) const {
   return mayModifyRegister(Inst, AArch64::SP);
 }
 
-MCRegister AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
+MCRegister
+AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst,
+                                        const MCSubtargetInfo &STI) const {
   for (MCRegister Reg : {LFIAddrReg, LFIBaseReg, LFICtxReg}) {
     if (mayModifyRegister(Inst, Reg))
       return Reg;
   }
+  if (isLargeSandbox(STI) && mayModifyRegister(Inst, LFIOffsetReg))
+    return LFIOffsetReg;
   return {};
 }
 
@@ -304,7 +325,9 @@ void AArch64MCLFIRewriter::onLabel(const MCSymbol *, MCStreamer &Out) {
   // Flush a deferred LR guard before the label, since the label is a potential
   // branch target and code reached through it may use LR for control flow.
   if (DeferredLRGuard && LastSTI) {
-    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI);
+    Guard = true;
+    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI, /*ControlFlow=*/true);
+    Guard = false;
     DeferredLRGuard = false;
   }
 
@@ -315,21 +338,39 @@ void AArch64MCLFIRewriter::onLabel(const MCSymbol *, MCStreamer &Out) {
 void AArch64MCLFIRewriter::finish(MCStreamer &Out) {
   // Flush a deferred LR guard at the end of the stream.
   if (DeferredLRGuard && LastSTI) {
-    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI);
+    Guard = true;
+    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI, /*ControlFlow=*/true);
+    Guard = false;
     DeferredLRGuard = false;
   }
+}
+
+bool AArch64MCLFIRewriter::isLargeSandbox(const MCSubtargetInfo &STI) const {
+  return STI.hasFeature(AArch64::FeatureLFILargeSandbox);
+}
+
+uint64_t AArch64MCLFIRewriter::getSandboxMask() const {
+  assert(LFISandboxBits > 0 && LFISandboxBits < 64 &&
+         "sandbox bits must be in [1, 63]");
+  return (1ULL << LFISandboxBits) - 1;
+}
+
+uint64_t AArch64MCLFIRewriter::getSandboxMaskEncoding() const {
+  return AArch64_AM::encodeLogicalImmediate(getSandboxMask(), 64);
 }
 
 void AArch64MCLFIRewriter::emitInst(const MCInst &Inst, MCStreamer &Out,
                                     const MCSubtargetInfo &STI) {
   // Invalidate the active guard if this instruction modifies the guarded
-  // register, modifies x28 itself, or may affect control flow.
+  // register, modifies x28 itself, or may affect control flow. In large
+  // sandbox mode the guard also depends on x24 (the offset register).
   if (ActiveGuardReg) {
     const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
     if (Desc.mayAffectControlFlow(Inst, *RegInfo) ||
         mayModifyRegister(Inst, *ActiveGuardReg) ||
         mayModifyRegister(Inst, getWRegFromXReg(*ActiveGuardReg)) ||
-        mayModifyRegister(Inst, LFIAddrReg))
+        mayModifyRegister(Inst, LFIAddrReg) ||
+        (isLargeSandbox(STI) && mayModifyRegister(Inst, LFIOffsetReg)))
       ActiveGuardReg = std::nullopt;
   }
 
@@ -338,24 +379,51 @@ void AArch64MCLFIRewriter::emitInst(const MCInst &Inst, MCStreamer &Out,
 
 void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
                                        MCStreamer &Out,
-                                       const MCSubtargetInfo &STI) {
+                                       const MCSubtargetInfo &STI,
+                                       bool ControlFlow) {
+  // In large sandbox mode, control flow guards (LR, indirect branches/calls)
+  // can use the cheaper single-instruction 4 GiB guard form because the
+  // sandbox runtime guarantees the code segment lives in the first 4 GiB of
+  // the sandbox region. Data guards must still use the wide mask.
+  bool UseSmallGuard = !isLargeSandbox(STI) || ControlFlow;
+
+  // CF and data guards produce different x28 values for the same Src in large
+  // sandbox mode, so they must not elide each other or share guard state. In
+  // small sandbox mode the two forms are identical and the ControlFlow bit
+  // has no semantic effect.
+  bool MixedKind = isLargeSandbox(STI) && ControlFlow;
+
   // If x28 already holds the guarded value of Src, this guard is redundant and
   // can be skipped.
-  if (LFIGuardElim && Dest == LFIAddrReg && ActiveGuardReg == Src)
+  if (LFIGuardElim && !MixedKind && Dest == LFIAddrReg && ActiveGuardReg == Src)
     return;
 
-  // add Dest, LFIBaseReg, W(Src), uxtw
-  MCInst Inst;
-  Inst.setOpcode(AArch64::ADDXrx);
-  Inst.addOperand(MCOperand::createReg(Dest));
-  Inst.addOperand(MCOperand::createReg(LFIBaseReg));
-  Inst.addOperand(MCOperand::createReg(getWRegFromXReg(Src)));
-  Inst.addOperand(
-      MCOperand::createImm(AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)));
-  emitInst(Inst, Out, STI);
+  if (!UseSmallGuard) {
+    // Large sandbox: and x24, Src, #mask; add Dest, x27, x24
+    MCInst AndInst;
+    AndInst.setOpcode(AArch64::ANDXri);
+    AndInst.addOperand(MCOperand::createReg(LFIOffsetReg));
+    AndInst.addOperand(MCOperand::createReg(Src));
+    AndInst.addOperand(MCOperand::createImm(getSandboxMaskEncoding()));
+    emitInst(AndInst, Out, STI);
+
+    // Use UXTX rather than LSL: ADDXrs encodes register 31 as XZR, not SP.
+    emitAddRegExtend(Dest, LFIBaseReg, LFIOffsetReg, AArch64_AM::UXTX, 0, Out,
+                     STI);
+  } else {
+    // Standard / control-flow: add Dest, LFIBaseReg, W(Src), uxtw
+    MCInst Inst;
+    Inst.setOpcode(AArch64::ADDXrx);
+    Inst.addOperand(MCOperand::createReg(Dest));
+    Inst.addOperand(MCOperand::createReg(LFIBaseReg));
+    Inst.addOperand(MCOperand::createReg(getWRegFromXReg(Src)));
+    Inst.addOperand(MCOperand::createImm(
+        AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)));
+    emitInst(Inst, Out, STI);
+  }
 
   // Record Src as the new active guard.
-  if (Dest == LFIAddrReg)
+  if (Dest == LFIAddrReg && !MixedKind)
     ActiveGuardReg = Src;
 }
 
@@ -452,6 +520,29 @@ void AArch64MCLFIRewriter::emitAddRegExtend(MCRegister Dest, MCRegister Src1,
 void AArch64MCLFIRewriter::emitMemRoW(unsigned Opcode, const MCOperand &DataOp,
                                       MCRegister BaseReg, MCStreamer &Out,
                                       const MCSubtargetInfo &STI) {
+  if (isLargeSandbox(STI)) {
+    // Large sandbox: and x24, BaseReg, #mask; Op DataOp, [x27, x24].
+    MCInst AndInst;
+    AndInst.setOpcode(AArch64::ANDXri);
+    AndInst.addOperand(MCOperand::createReg(LFIOffsetReg));
+    AndInst.addOperand(MCOperand::createReg(BaseReg));
+    AndInst.addOperand(MCOperand::createImm(getSandboxMaskEncoding()));
+    emitInst(AndInst, Out, STI);
+
+    unsigned RoXOpcode = convertRoWToRoX(Opcode);
+    assert(RoXOpcode != AArch64::INSTRUCTION_LIST_END &&
+           "no RoX variant for RoW opcode");
+    MCInst Inst;
+    Inst.setOpcode(RoXOpcode);
+    Inst.addOperand(DataOp);
+    Inst.addOperand(MCOperand::createReg(LFIBaseReg));
+    Inst.addOperand(MCOperand::createReg(LFIOffsetReg));
+    Inst.addOperand(MCOperand::createImm(0)); // S bit = 0 (LSL).
+    Inst.addOperand(MCOperand::createImm(0)); // Shift amount = 0.
+    emitInst(Inst, Out, STI);
+    return;
+  }
+
   // Op DataOp, [LFIBaseReg, W(BaseReg), uxtw]
   MCInst Inst;
   Inst.setOpcode(Opcode);
@@ -475,7 +566,7 @@ void AArch64MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
   MCRegister BranchReg = Inst.getOperand(0).getReg();
 
   // Guard the branch target through X28.
-  emitAddMask(LFIAddrReg, BranchReg, Out, STI);
+  emitAddMask(LFIAddrReg, BranchReg, Out, STI, /*ControlFlow=*/true);
 
   emitPendingTLSDescCall(Out, STI);
 
@@ -530,7 +621,7 @@ void AArch64MCLFIRewriter::rewriteAuthenticatedReturn(
                                                     : AArch64::AUTIBSP);
   emitInst(Auth, Out, STI);
 
-  emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+  emitAddMask(AArch64::LR, AArch64::LR, Out, STI, /*ControlFlow=*/true);
   emitBranch(AArch64::RET, AArch64::LR, Out, STI);
 }
 
@@ -574,7 +665,7 @@ void AArch64MCLFIRewriter::rewriteAuthenticatedBranchOrCall(
   emitInst(Auth, Out, STI);
 
   // Guard the authenticated target and branch/call through x28.
-  emitAddMask(LFIAddrReg, TargetReg, Out, STI);
+  emitAddMask(LFIAddrReg, TargetReg, Out, STI, /*ControlFlow=*/true);
   emitBranch(BranchOpcode, LFIAddrReg, Out, STI);
 }
 
@@ -601,7 +692,7 @@ void AArch64MCLFIRewriter::rewriteSyscall(const MCInst &, MCStreamer &Out,
   emitBranch(AArch64::BLR, AArch64::LR, Out, STI);
 
   // Restore LR with guard.
-  emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
+  emitAddMask(AArch64::LR, LFIScratchReg, Out, STI, /*ControlFlow=*/true);
 }
 
 // mrs xN, tpidr_el0
@@ -910,7 +1001,7 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   }
 
   // Reserved register modification is an error.
-  if (MCRegister Reg = mayModifyReserved(Inst)) {
+  if (MCRegister Reg = mayModifyReserved(Inst, STI)) {
     error(Inst, Twine("illegal modification of reserved LFI register ") +
                     RegInfo->getName(Reg));
     return;
@@ -951,7 +1042,7 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   // modified LR is sandboxed before it can be used to transfer control.
   if (DeferredLRGuard && (isReturn(Inst) || isIndirectBranch(Inst) ||
                           isCall(Inst) || isBranch(Inst))) {
-    emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+    emitAddMask(AArch64::LR, AArch64::LR, Out, STI, /*ControlFlow=*/true);
     DeferredLRGuard = false;
   }
 
