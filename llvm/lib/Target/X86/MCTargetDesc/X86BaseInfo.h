@@ -64,6 +64,10 @@ enum IPREFIXES {
   IP_USE_EVEX = 1U << 11,
   IP_USE_DISP8 = 1U << 12,
   IP_USE_DISP32 = 1U << 13,
+
+  // Not a prefix: set by X86MCInstLower when EFLAGS is dead across a
+  // sandboxed memory access, so the LFI rewriter may mask with andq.
+  IP_LFI_FLAGS_DEAD = 1U << 16,
 };
 
 enum OperandType : unsigned {

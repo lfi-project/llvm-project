@@ -311,6 +311,10 @@ public:
 
   bool isLFI() const { return TargetTriple.isLFI(); }
 
+  bool isLFILargeSandbox() const { return LFILargeSandbox; }
+
+  bool isLFIGSContext() const { return LFIGSContext; }
+
   bool isTargetWindowsMSVC() const {
     return TargetTriple.isWindowsMSVCEnvironment();
   }

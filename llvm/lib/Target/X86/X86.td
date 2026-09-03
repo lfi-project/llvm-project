@@ -489,6 +489,22 @@ def FeatureHardenSlsIJmp
           "harden-sls-ijmp", "HardenSlsIJmp", "true",
           "Harden against straight line speculation across indirect JMP instructions.">;
 
+// LFI (Lightweight Fault Isolation) features.
+def FeatureNoLFILoads : SubtargetFeature<"no-lfi-loads", "NoLFILoads", "true",
+  "Disable LFI sandboxing for load instructions (stores-only mode)">;
+def FeatureNoLFIStores : SubtargetFeature<"no-lfi-stores", "NoLFIStores", "true",
+  "Disable LFI sandboxing for store instructions">;
+def FeatureNoLFISegue : SubtargetFeature<"no-lfi-segue", "NoLFISegue", "true",
+  "Disable LFI use of GS segment for memory sandboxing">;
+def FeatureLFIGSContext : SubtargetFeature<"lfi-gs-context", "LFIGSContext", "true",
+  "Use the GS segment as the LFI context register instead of r15 (requires no-lfi-segue)">;
+def FeatureLFILargeSandbox : SubtargetFeature<"lfi-large-sandbox", "LFILargeSandbox", "true",
+  "Use the LFI large-sandbox scheme, supporting any power-of-two sandbox size "
+  "(r15 becomes the sandbox mask register)",
+  [FeatureNoLFISegue, FeatureLFIGSContext]>;
+def FeatureLFIUseRet : SubtargetFeature<"lfi-use-ret", "LFIUseRet", "true",
+  "Leave return instructions unrewritten by LFI (use the native ret)">;
+
 //===----------------------------------------------------------------------===//
 // X86 Subtarget Tuning features
 //===----------------------------------------------------------------------===//

@@ -13,13 +13,14 @@
 #ifndef LLVM_LIB_TARGET_X86_MCTARGETDESC_X86MCLFIREWRITER_H
 #define LLVM_LIB_TARGET_X86_MCTARGETDESC_X86MCLFIREWRITER_H
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCRegisterInfo.h"
 
 namespace llvm {
 class MCContext;
-class MCInst;
 class MCStreamer;
 class MCSubtargetInfo;
 
@@ -38,15 +39,92 @@ private:
   /// Recursion guard to prevent infinite loops when emitting instructions.
   bool Guard = false;
 
+  /// Set once the subtarget feature configuration has been validated.
+  bool ConfigChecked = false;
+
+  /// Accumulated prefix instructions (LOCK, REP, etc.) to emit alongside the
+  /// next non-prefix instruction.
+  SmallVector<MCInst, 2> Prefixes;
+
+  /// Subtarget feature checks.
+  bool hasSegue(const MCSubtargetInfo &STI) const;
+  bool hasNoLFILoads(const MCSubtargetInfo &STI) const;
+  bool hasNoLFIStores(const MCSubtargetInfo &STI) const;
+
+  /// Returns true if the large-sandbox scheme is enabled, which supports any
+  /// power-of-two sandbox size by masking addresses with the r15 mask register
+  /// instead of relying on a fixed 4GiB truncation. Implies Segue is disabled
+  /// and GS-context mode (which frees r15 to serve as the mask register).
+  bool hasLargeSandbox(const MCSubtargetInfo &STI) const;
+
+  /// Returns true if the context register is the %gs segment base (instead of
+  /// r15). Requires Segue to be disabled.
+  bool hasGSContext(const MCSubtargetInfo &STI) const;
+
+  /// Returns true if return instructions are left unrewritten (the native ret
+  /// is used instead of the masked pop/jmp sequence).
+  bool hasUseRet(const MCSubtargetInfo &STI) const;
+
+  /// Main dispatch function for instruction rewriting.
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+                     const MCSubtargetInfo &STI, bool EmitPrefixes);
+
+  /// Emit an instruction, optionally flushing the accumulated prefix queue
+  /// first.
+  void emitInstruction(const MCInst &Inst, MCStreamer &Out,
+                       const MCSubtargetInfo &STI, bool EmitPrefixes);
+
+  /// Emit the mask sequence (andl $-32, %eX; addq %r14, %rX) that turns
+  /// an arbitrary register value into a valid sandbox address aligned to a
+  /// bundle boundary.
+  void emitSandboxBranchReg(MCRegister Reg, MCStreamer &Out,
+                            const MCSubtargetInfo &STI);
+
+  void rewriteIndirectJumpReg(MCRegister Reg, MCStreamer &Out,
+                              const MCSubtargetInfo &STI);
+  void rewriteIndirectCallReg(MCRegister Reg, MCStreamer &Out,
+                              const MCSubtargetInfo &STI);
+
+  void rewriteIndirectBranch(const MCInst &Inst, MCStreamer &Out,
+                             const MCSubtargetInfo &STI);
+  void rewriteDirectCall(const MCInst &Inst, MCStreamer &Out,
+                         const MCSubtargetInfo &STI);
+  void rewriteReturn(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
 
+  /// Expand load/store instructions with memory sandboxing.
+  void rewriteLoadStore(const MCInst &Inst, MCStreamer &Out,
+                        const MCSubtargetInfo &STI, bool EmitPrefixes);
+
+  /// Expand string operations (rep movs, rep stos, etc.).
+  void rewriteStringOperation(const MCInst &Inst, MCStreamer &Out,
+                              const MCSubtargetInfo &STI, bool EmitPrefixes);
+
+  /// Expand instructions that explicitly modify the stack pointer.
+  void rewriteStackModification(MCRegister StackReg, const MCInst &Inst,
+                                MCStreamer &Out, const MCSubtargetInfo &STI,
+                                bool EmitPrefixes);
+
+  /// Expand syscall instruction.
   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
                       const MCSubtargetInfo &STI);
 
+  /// Returns true if Inst has a memory operand using the %fs segment override.
   bool isFSAccess(const MCInst &Inst);
+
+  /// Rewrite a %fs-segmented memory access into a thread-pointer-relative
+  /// access via the context register.
   void rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI);
+
+  /// Apply sandboxing to all memory operands of \p Inst. Returns true if a
+  /// bundle lock is still open and needs to be closed by the caller.
+  bool emitSandboxMemOps(MCInst &Inst, MCRegister ScratchReg, MCStreamer &Out,
+                         const MCSubtargetInfo &STI, bool EmitInstructions);
+
+  /// Apply sandboxing to a single memory operand at index \p MemIdx.
+  void emitSandboxMemOp(MCInst &Inst, int MemIdx, MCRegister ScratchReg,
+                        MCStreamer &Out, const MCSubtargetInfo &STI);
 };
 
 } // namespace X86
