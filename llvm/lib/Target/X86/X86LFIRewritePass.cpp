@@ -85,17 +85,18 @@ bool X86LFIRewritePass::runOnMachineFunction(MachineFunction &MF) {
   // LLVM does not consider basic blocks which are the targets of jump tables
   // to be address-taken (the address can't escape anywhere else), but they are
   // used for indirect branches, so need to be properly aligned.
-  SmallPtrSet<MachineBasicBlock *, 8> JumpTableTargets;
   if (auto *JTI = MF.getJumpTableInfo())
     for (auto &JTE : JTI->getJumpTables())
-      for (auto *MBB : JTE.MBBs)
-        JumpTableTargets.insert(MBB);
+      for (auto *MBB : JTE.MBBs) {
+        MBB->setAlignment(llvm::Align(32));
+        Modified = true;
+      }
 
   const X86TargetMachine *TM =
       static_cast<const X86TargetMachine *>(&MF.getTarget());
 
   for (MachineBasicBlock &MBB : MF) {
-    if (MBB.hasAddressTaken() || JumpTableTargets.count(&MBB) || AlignDirectBranches) {
+    if (MBB.hasAddressTaken() || AlignDirectBranches) {
       MBB.setAlignment(llvm::Align(32));
       Modified = true;
     }
