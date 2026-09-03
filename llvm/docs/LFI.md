@@ -86,6 +86,13 @@ that is already safe and should not be modified by the rewriter.
 
 Re-enables LFI assembly rewrites after a previous `.lfi_rewrite_disable`.
 
+### `.lfi_flags_dead`
+
+Asserts that the processor flags are dead at the current location, letting the
+rewriter use a cheaper flag-clobbering sandboxing sequence for memory accesses
+(on X86-64 in large-sandbox mode, `andq` instead of `pext`). The assertion ends
+at the first instruction that redefines the flags.
+
 Example:
 
 ```gas
@@ -97,10 +104,14 @@ ldr x0, [x27, w1, uxtw]
 
 ## Compiler Options
 
-The LFI target has several configuration options, specified via `-mattr=`:
+The LFI targets have several configuration options, specified via `-mattr=`
+(or `-Xclang -target-feature` in clang). Options common to both targets:
 
 - `+no-lfi-loads`: Disable sandboxing for load instructions (stores-only mode).
 - `+no-lfi-stores`: Disable sandboxing for store instructions.
+- `+lfi-large-sandbox`: Use the large-sandbox scheme, which supports a sandbox
+  of any power-of-two size instead of the default fixed 4GiB (see the
+  per-target "Large sandbox mode" sections).
 
 Use `+no-lfi-loads` to create a "stores-only" sandbox that may read, but not
 write, outside the sandbox region.
@@ -109,6 +120,21 @@ Use `+no-lfi-loads,+no-lfi-stores` to create a "jumps-only" sandbox that may
 read/write outside the sandbox region but may not transfer control outside
 (e.g., may not execute system calls directly). This is primarily useful in
 combination with some other form of memory sandboxing, such as Intel MPK.
+
+Additional X86-64-only options (`+no-lfi-segue`, `+lfi-gs-context`,
+`+lfi-use-ret`) are described in the X86-64 section.
+
+Clang provides the high-level `-mlfi=` driver option, which accepts a
+comma-separated list of configuration knobs and translates them into the
+subtarget features above: `no-loads`, `no-stores`, `large-sandbox`, and (X86-64
+only) `no-segue`, `gs-context`, `use-ret`. Knobs that require Segue to be
+disabled (`gs-context`, `large-sandbox`) automatically imply `no-segue`, and on
+X86-64 `large-sandbox` also implies `gs-context` (see the X86-64 large sandbox
+section). Each
+enabled knob also defines a corresponding preprocessor macro
+(`__LFI_NO_LOADS__`, `__LFI_NO_STORES__`, `__LFI_LARGE_SANDBOX__`,
+`__LFI_NO_SEGUE__`, `__LFI_GS_CONTEXT__`, `__LFI_USE_RET__`) alongside the
+always-present `__LFI__`.
 
 ## AArch64
 
@@ -128,12 +154,17 @@ that must be maintained.
 - `x30`: always holds an address within the sandbox.
 - `x26`: scratch register.
 - `x25`: context register (see [Context Register](#context-register)).
+- `x24`: offset register, reserved only in [large sandbox
+  mode](#large-sandbox-mode-aarch64). Always holds a value in
+  `[0, sandbox_size - 1]`.
 
-The current design only supports 4GiB sandboxes, which requires the sandbox
-base address to be 4GiB-aligned. This is because LFI's ABI stores pointers as
-their full 64-bit values, rather than just 32-bit offsets from the base. This
+The default design supports 4GiB sandboxes, which requires the sandbox base
+address to be 4GiB-aligned. This is because LFI's ABI stores pointers as their
+full 64-bit values, rather than just 32-bit offsets from the base. This
 enables stores-only mode, where loads are not sandboxed but stores are, and
-allows the host to directly pass pointers to the sandbox.
+allows the host to directly pass pointers to the sandbox. Sandboxes of other
+power-of-two sizes are supported by [large sandbox
+mode](#large-sandbox-mode-aarch64).
 
 ### Assembly Rewrites
 
@@ -591,21 +622,131 @@ In certain cases, guards may be hoisted outside of loops.
     ```
 :::
 
+(large-sandbox-mode-aarch64)=
+### Large sandbox mode
+
+The standard AArch64 scheme restricts sandboxes to exactly 4GiB by truncating
+addresses to 32 bits with `uxtw` (unsigned extend word). `+lfi-large-sandbox`
+selects a scheme supporting any power-of-2 sandbox size, set at compile time
+with `-aarch64-lfi-sandbox-bits=N` (default 32, i.e. 4GiB): the data-access
+mask becomes `2^N - 1`, encoded directly as a logical immediate operand of
+`and`.
+
+The single-instruction `add` guard becomes a two-instruction sequence: an `and`
+applying the sandbox mask, then an `add` combining it with the sandbox base.
+The additional reserved offset register `x24` always holds a masked offset,
+which makes both instructions independently safe even if a program jumps
+directly to the second:
+
+- `and x24, xN, #mask`: whatever `xN` holds, `x24` ends up in
+  `[0, sandbox_size - 1]`.
+- `add x28, x27, x24`: since `x24` is a valid offset, `x28` is always
+  `base + valid_offset`, within the sandbox.
+
+Targeting `x28` twice instead would be unsafe: a program jumping directly to
+the `add` could find `x28` holding a previously computed sandbox address rather
+than a bare offset, yielding an address outside the sandbox.
+
+The main rewrites change as follows (`#mask` is the sandbox size mask):
+
+:::{list-table}
+:header-rows: 1
+
+* - Original
+  - Rewritten
+* - ```gas
+    LDSTr xN, [xM]
+    ```
+  - ```gas
+    and x24, xM, #mask
+    LDSTr xN, [x27, x24]
+    ```
+* - ```gas
+    LDSTr xN, [xM, #I]
+    ```
+  - ```gas
+    and x24, xM, #mask
+    add x28, x27, x24
+    LDSTr xN, [x28, #I]
+    ```
+* - ```gas
+    {add,sub} sp, sp, {#I,xN}
+    ```
+  - ```gas
+    {add,sub} x26, sp, {#I,xN}
+    and x24, x26, #mask
+    add sp, x27, x24
+    ```
+:::
+
+Zero-offset register-register accesses use the `[x27, x24]` addressing mode
+directly, avoiding the explicit `add`.
+
+Control-flow guards (indirect branches and calls, and guards on the link
+register) do **not** use the wide mask. The runtime guarantees that the code
+segment lives in the first 4GiB of the sandbox, so they keep the cheaper
+single-instruction guard (`add x28, x27, wN, uxtw`). Only data accesses, which
+may target the full sandbox, need the `and` + `add` sequence, giving a +1
+instruction overhead on data rewrites and none on control-flow rewrites.
+
 ## X86-64
 
 The X86-64 LFI target is `x86_64_lfi`.
+
+### Compiler Options
+
+In addition to the common options, the X86-64 LFI target supports:
+
+- `+no-lfi-segue`: disable use of the `%gs` segment for memory sandboxing
+  (Segue). Effective addresses are instead computed into the scratch register
+  and combined with the sandbox base `%r14`.
+- `+lfi-gs-context`: place the context register in the `%gs` segment base
+  instead of `r15` (see [GS context mode](#gs-context-mode)). Requires
+  `+no-lfi-segue`.
+- `+lfi-large-sandbox`: use the large-sandbox scheme, which supports a sandbox
+  of any power-of-two size instead of the default fixed 4GiB. Implies
+  `+no-lfi-segue` and `+lfi-gs-context`: the context register file moves to
+  the `%gs` segment base, freeing `%r15` to serve as the sandbox mask register
+  (see [Large sandbox mode](#large-sandbox-mode-x86-64)).
+- `+lfi-use-ret`: leave `ret` instructions unrewritten, emitting the native
+  `ret` instead of the masked pop/jump sequence. This relies on return
+  addresses being trusted by some other means (e.g. a shadow stack).
 
 ### Reserved Registers
 
 The X86-64 LFI target reserves the following registers:
 
 - `r14`: always holds the sandbox base address. Also used as the runtime call
-  table pointer (the runtime call table is stored at the sandbox base).
-- `gs`: always holds the sandbox base address (used as a segment register for
-  memory access sandboxing).
+  table pointer (the runtime call table is stored at a fixed negative offset
+  from the sandbox base).
+- `gs`: in the default configuration, holds the sandbox base address (used as
+  a segment register for memory access sandboxing, i.e. Segue). In
+  [GS context mode](#gs-context-mode) it instead holds the context register
+  base.
 - `rsp`: always holds an address within the sandbox.
-- `r15`: context register (see [Context Register](#context-register)).
+- `r15`: context register (see [Context Register](#context-register)). In
+  [GS context mode](#gs-context-mode) this role moves to `%gs` and `r15`
+  becomes general-purpose, except in [Large sandbox
+  mode](#large-sandbox-mode-x86-64), where it holds the sandbox size mask
+  (`2^k - 1`) instead.
 - `r11`: scratch register.
+
+(gs-context-mode)=
+### GS context mode
+
+By default the X86-64 context register is `r15`. With `+lfi-gs-context`, the
+context register file is addressed through the `%gs` segment base instead: the
+thread pointer is read from `%gs:16` rather than `16(%r15)`, and `r15` becomes
+an unreserved general-purpose register.
+
+The `%gs` segment base can only hold one value, so it cannot serve as both the
+sandbox base (Segue) and the context register. `+lfi-gs-context` therefore
+requires Segue to be disabled -- enabling both is an error -- and memory
+accesses use the non-Segue sandboxing sequence.
+
+[Large sandbox mode](#large-sandbox-mode-x86-64) always operates in GS-context
+mode, since it repurposes `r15` as the sandbox mask register. `r15` stays
+reserved there, as the mask register rather than the context register.
 
 ### Bundling
 
@@ -624,9 +765,6 @@ entered in the middle wraps that sequence in `.bundle_lock` / `.bundle_unlock`.
 This keeps the whole group within a single bundle, so no masked indirect branch
 can land between its instructions.
 
-**Note**: the masking of indirect branch targets is part of the control flow
-rewrites, which have not been implemented yet.
-
 Bundling is specific to X86-64. AArch64 instructions are fixed-width and
 naturally aligned, and the AArch64 LFI target confines indirect branches by
 guarding the target register instead.
@@ -642,19 +780,178 @@ In the following assembly rewrites, some shorthand is used.
 
 #### Control flow
 
-**Note**: these rewrites have not been implemented.
+Indirect jumps first apply a mask that zeroes the top 32 bits and bottom 5 bits
+of the target, truncating it to the low 4GiB and aligning it to a bundle
+boundary; an `addq` then fills in the top 32 bits with the sandbox base. The
+sequence is wrapped in a bundle lock so a masked branch cannot land between the
+mask and the branch.
+
+Indirect calls are similar, but the call is placed at the end of the bundle
+(`.bundle_lock align_to_end`) so the return address is bundle-aligned. Direct
+calls are also placed at the end of a bundle. Returns pop the return address
+into the scratch register and dispatch through the same masked-jump sequence,
+unless `+lfi-use-ret` emits the native `ret`.
+
+The addressing mode `LFI:N(...)` denotes applying the LFI memory-access
+transformation (see the next section) to the addressing mode.
+
+:::{list-table}
+:header-rows: 1
+
+* - Original
+  - Rewritten
+* - ```gas
+    jmpq *%rX
+    ```
+  - ```gas
+    .bundle_lock
+    andl $-32, %eX
+    addq %r14, %rX
+    jmpq *%rX
+    .bundle_unlock
+    ```
+* - ```gas
+    jmpq *N(...)
+    ```
+  - ```gas
+    movq LFI:N(...), %r11
+    .bundle_lock
+    andl $-32, %r11d
+    addq %r14, %r11
+    jmpq *%r11
+    .bundle_unlock
+    ```
+* - ```gas
+    callq *%rX
+    ```
+  - ```gas
+    .bundle_lock align_to_end
+    andl $-32, %eX
+    addq %r14, %rX
+    callq *%rX
+    .bundle_unlock
+    ```
+* - ```gas
+    ret
+    ```
+  - ```gas
+    popq %r11
+    .bundle_lock
+    andl $-32, %r11d
+    addq %r14, %r11
+    jmpq *%r11
+    .bundle_unlock
+    ```
+* - ```gas
+    call ...
+    ```
+  - ```gas
+    .bundle_lock align_to_end
+    call ...
+    .bundle_unlock
+    ```
+:::
 
 #### Memory accesses
 
-**Note**: these rewrites have not been implemented.
+In the default configuration, memory accesses are made safe by rewriting the
+addressing mode: the rewrite prefixes it with `%gs:` (Segue) to make the access
+relative to the sandbox base, and demotes the address registers to their 32-bit
+forms (`%eX`) so the offset is truncated to 4GiB.
+
+Accesses whose base register always holds a valid sandbox address (`%rsp`,
+`%rip`, or the base `%r14`) are left unchanged, as are `lea` instructions,
+which perform no memory access.
+
+:::{list-table}
+:header-rows: 1
+
+* - Original
+  - Rewritten
+* - ```gas
+    N(%rsp)
+    ```
+  - ```gas
+    N(%rsp)
+    ```
+* - ```gas
+    N(%rip)
+    ```
+  - ```gas
+    N(%rip)
+    ```
+* - ```gas
+    N(%rX)
+    ```
+  - ```gas
+    %gs:N(%eX)
+    ```
+* - ```gas
+    N(%rX, %rY, S)
+    ```
+  - ```gas
+    %gs:N(%eX, %eY, S)
+    ```
+:::
+
+With `+no-lfi-segue`, the `%gs` segment is not used: the effective address is
+computed into the scratch register with a 32-bit `lea` (truncating it to 4GiB),
+and the access is performed relative to the sandbox base (`(%r14, %r11)`). Both
+are wrapped in a bundle lock so a masked indirect branch cannot separate them.
+A register-destination load can use its destination as the scratch register.
 
 #### String instructions
 
-**Note**: these rewrites have not been implemented.
+String instructions perform memory accesses using the implicit `%rsi`/`%rdi`
+registers, which are guarded before the instruction, inside a single bundle.
+For example, `rep movsq` becomes:
+
+```gas
+.bundle_lock
+movl %edi, %edi
+leaq (%r14,%rdi), %rdi
+movl %esi, %esi
+leaq (%r14,%rsi), %rsi
+rep movsq
+.bundle_unlock
+```
+
+The same rewrite is applied to the `REP_MOVS`/`REP_STOS` pseudo instructions
+that LLVM generates internally for `memcpy`/`memset`.
 
 #### Stack modification
 
-**Note**: these rewrites have not been implemented.
+Since the stack pointer must always contain a valid sandbox address, any
+modification of it is rewritten to operate on `%esp` (truncating the result to
+4GiB) and then restore the sandbox base with `leaq (%rsp,%r14), %rsp`. The
+`leaq` form avoids modifying the flags, unlike `addq %r14, %rsp`. Both are
+wrapped in a bundle lock.
+
+:::{list-table}
+:header-rows: 1
+
+* - Original
+  - Rewritten
+* - ```gas
+    MOD ..., %rsp
+    ```
+  - ```gas
+    .bundle_lock
+    MOD ..., %esp
+    leaq (%rsp,%r14), %rsp
+    .bundle_unlock
+    ```
+* - ```gas
+    popq %rsp
+    ```
+  - ```gas
+    popq %r11
+    .bundle_lock
+    movl %r11d, %esp
+    leaq (%rsp,%r14), %rsp
+    .bundle_unlock
+    ```
+:::
 
 #### System instructions
 
@@ -729,6 +1026,144 @@ such instruction.
     Op %rS, N(%r11, %rY, S)
     ```
 :::
+
+The resulting non-`%fs` access is then sandboxed by the standard memory-access
+rewrite. In [GS context mode](#gs-context-mode) the context register file is
+addressed through the `%gs` segment base, so each `16(%r15)` above becomes
+`%gs:16`.
+
+(large-sandbox-mode-x86-64)=
+### Large sandbox mode
+
+The default X86-64 sandbox occupies a fixed 4GiB region, which is what makes
+the default memory-sandboxing sequences so cheap: an address is confined to the
+sandbox by truncating it to its low 32 bits (through the 32-bit form of a
+register, or implicitly through the `%gs` segment base under Segue), costing no
+extra instruction and leaving the processor flags alone.
+
+`+lfi-large-sandbox` selects a scheme supporting a sandbox of any power-of-two
+size `2^k` (for example 256GiB). The sandbox must be contiguous with its base
+aligned to its size, so the low `k` bits of an address form an offset within
+the sandbox and the higher bits identify the sandbox itself. The reserved *mask
+register* `%r15` holds `2^k - 1`, loaded by the runtime during sandbox
+initialization; the compiler only refers to `%r15` and never needs to know `k`,
+so the same code runs in a sandbox of any size.
+
+To confine an address, the rewriter computes the effective address into a
+register, clears every bit at or above bit `k` with `andq %r15`, and adds the
+sandbox base `%r14`. Since `%r14` is aligned to `2^k`, masking an absolute
+pointer `base + offset` discards the base (whose low `k` bits are zero) and
+leaves the offset, which the add re-attaches.
+
+Executable code must be confined to the low 4GiB of the sandbox, so indirect
+branches can reuse the cheaper fixed-4GiB control-flow mask (`andl $-32, %eX`)
+instead of `%r15`; only data accesses, which may target the full `2^k` region,
+need the `%r15` mask.
+
+Masking can no longer be folded into a 32-bit truncation or the `%gs` segment
+base, so large-sandbox mode implies `+no-lfi-segue`. That frees `%gs`, which
+large-sandbox mode reuses by also implying [GS context
+mode](#gs-context-mode); that in turn frees `%r15` from its default role as the
+context register so it can serve as the mask register. The net register cost is
+therefore zero: `%gs` and `%r15` simply swap roles.
+
+#### Memory accesses (large sandbox)
+
+The effective address is computed into a scratch register, masked, and combined
+with the base. A register-destination load can use its destination as the
+scratch register; otherwise `%r11` is used. The sequence is placed in a single
+bundle so the masked address cannot be targeted by a jump.
+
+A register-relative store `movq %rN, (%rM)` becomes:
+
+```gas
+movq %rM, %r11
+andq %r15, %r11
+movq %rN, (%r14, %r11)
+```
+
+A load with a full addressing mode `movq I(%rM, %rX, S), %rN` becomes, reusing
+the destination as the scratch register:
+
+```gas
+leaq I(%rM, %rX, S), %rN
+andq %r15, %rN
+movq (%r14, %rN), %rN
+```
+
+Accesses based on a register that always holds a valid sandbox address
+(`%rsp`, `%rip`, or the base `%r14`) are left unchanged.
+
+#### Control flow (large sandbox)
+
+Control-flow masking does **not** use `%r15`. All executable code is confined
+to the low 4GiB of the sandbox, so a branch target only needs confining to that
+window and the rewriter reuses the default fixed-4GiB sequence: `andl $-32, %eX`
+truncates the target to 32 bits and clears the low five bits (bundle
+alignment), then the base is added. Such a target always lands on a bundle
+boundary within the low 4GiB -- on valid code, or on a non-executable page that
+faults -- saving an instruction on every indirect branch. As in the default
+scheme the sequence is bundled, and indirect calls are aligned to the end of
+the bundle so the return address is bundle-aligned.
+
+#### Stack modification (large sandbox)
+
+Any explicit modification of `%rsp` is followed by a mask and a base fixup, so
+the stack pointer may occupy any part of the `2^k` region. The 64-bit
+instruction is kept (no demotion to `%esp`), the result is masked with `pext`
+(see "Flag preservation" below), and the base is re-attached with `leaq`:
+
+```gas
+subq $I, %rsp
+pext %r15, %rsp, %rsp
+leaq (%rsp, %r14), %rsp
+```
+
+#### String instructions (large sandbox)
+
+The `%rsi` and `%rdi` pointers used by string instructions are masked with
+`pext` and rebased before the instruction, where the default scheme truncates
+them to 32 bits:
+
+```gas
+pext %r15, %rdi, %rdi
+leaq (%r14, %rdi), %rdi
+pext %r15, %rsi, %rsi
+leaq (%r14, %rsi), %rsi
+rep movsq
+```
+
+#### Flag preservation
+
+The `andq` used for masking modifies the processor flags. In two cases this is
+free:
+
+- Read-modify-write accesses such as `addq %rN, (%rM)`: the mask precedes the
+  original instruction, which sets the flags itself.
+- Indirect branches: an indirect `jmp`, `call`, or `ret` does not read the flags
+  and control does not fall through (the default 4GiB scheme masks these with a
+  flag-clobbering `and` as well).
+
+For every other masked access -- a plain `movq` load or store, a `push`/`pop`,
+a vector load/store, a stack-pointer mask, or a string-pointer fixup -- the
+mask is the last flag-touching instruction in the sequence, so it must not
+clobber live flags. A late code-generation pass marks each such access across
+which the flags are provably dead (the common case for compiler-generated
+code), allowing the cheap `andq`.
+
+Where the flags may be live across the access -- including hand-written
+assembly, which the compiler cannot analyze -- the rewriter preserves them by
+masking with `pext` instead:
+
+```gas
+pext %r15, %rM, %r11        # %r11 = %rM & (2^k - 1), flags untouched
+movq %rN, (%r14, %r11)
+```
+
+`pext` with the contiguous mask `2^k - 1` extracts the low `k` bits of the
+address, producing the same result as `andq` without touching the flags. In
+hand-written assembly, `.lfi_flags_dead` asserts that the flags are dead at a
+given point, allowing the rewriter to use `andq` there.
 
 ## References
 
