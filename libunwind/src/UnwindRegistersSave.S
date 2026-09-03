@@ -145,8 +145,15 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
   movq  %r11, 88(PTR)
   movq  %r12, 96(PTR)
   movq  %r13,104(PTR)
+#if !defined(__LFI__)
   movq  %r14,112(PTR)
   movq  %r15,120(PTR)
+#elif defined(__LFI_GS_CONTEXT__) && !defined(__LFI_LARGE_SANDBOX__)
+  # Skip spilling r14; reserved by LFI ABI.
+  movq  %r15,120(PTR)
+#else
+  # Skip spilling r14-r15; reserved by LFI ABI.
+#endif
   movq  (%rsp),TMP
   movq  TMP,128(PTR) # store return address as rip
   # skip rflags
@@ -799,7 +806,9 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
   stp    x20,x21, [x0, #0x0A0]
   stp    x22,x23, [x0, #0x0B0]
 #if defined(__LFI__)
+#if !defined(__LFI_LARGE_SANDBOX__)
   str    x24,     [x0, #0x0C0]
+#endif
   // Skip spilling x25-x28; reserved by LFI ABI.
   str    x29,     [x0, #0x0E8]
 #else

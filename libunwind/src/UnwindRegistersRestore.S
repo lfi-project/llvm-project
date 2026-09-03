@@ -113,8 +113,15 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
   movq   88(%rdi), %r11
   movq   96(%rdi), %r12
   movq  104(%rdi), %r13
+#if !defined(__LFI__)
   movq  112(%rdi), %r14
   movq  120(%rdi), %r15
+#elif defined(__LFI_GS_CONTEXT__) && !defined(__LFI_LARGE_SANDBOX__)
+  # Skip reloading r14; reserved by LFI ABI.
+  movq  120(%rdi), %r15
+#else
+  # Skip reloading r14-r15; reserved by LFI ABI.
+#endif
   # skip rflags
   # skip cs
   # skip fs
@@ -679,7 +686,9 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_arm64_jumpto)
   ldp    x20,x21, [x0, #0x0A0]
   ldp    x22,x23, [x0, #0x0B0]
 #if defined(__LFI__)
+#if !defined(__LFI_LARGE_SANDBOX__)
   ldr    x24,     [x0, #0x0C0]
+#endif
   // Skip reloading x25-x28; reserved by LFI ABI.
   ldr    x29,     [x0, #0x0E8]
 #else

@@ -877,6 +877,8 @@ if (APPLE)
 endif()
 
 set(amdgcn_SOURCES ${GENERIC_SOURCES})
+
+set(x86_64_lfi_SOURCES ${x86_64_SOURCES})
 set(amdgpu_SOURCES ${GENERIC_SOURCES})
 
 set(armv4t_SOURCES ${arm_min_SOURCES})
