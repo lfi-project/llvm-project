@@ -410,6 +410,15 @@ void X86MCInstLower::Lower(const MachineInstr *MI, MCInst &OutMI) const {
     if (auto Op = LowerMachineOperand(MI, MO); Op.isValid())
       OutMI.addOperand(Op);
 
+  // Record the dead implicit EFLAGS def that X86LFIRewritePass adds to memory
+  // accesses whose EFLAGS is dead, so the LFI rewriter can mask with andq.
+  if (MF.getSubtarget<X86Subtarget>().isLFILargeSandbox()) {
+    const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
+    if (MI->definesRegister(X86::EFLAGS, TRI) &&
+        !MI->getDesc().hasImplicitDefOfPhysReg(X86::EFLAGS))
+      OutMI.setFlags(OutMI.getFlags() | X86::IP_LFI_FLAGS_DEAD);
+  }
+
   bool In64BitMode = AsmPrinter.getSubtarget().is64Bit();
   if (X86::optimizeInstFromVEX3ToVEX2(OutMI, MI->getDesc()) ||
       X86::optimizeShiftRotateWithImmediateOne(OutMI) ||
