@@ -120,7 +120,14 @@ AArch64InstrInfo::AArch64InstrInfo(const AArch64Subtarget &STI)
 /// NOTE: the size estimates here must be kept in sync with the rewrites in
 /// AArch64MCLFIRewriter.cpp. Sizes may be overestimates of the rewritten
 /// instruction sequences.
-static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI) {
+static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI,
+                                                     bool LargeSandbox) {
+  // In large-sandbox mode, data guards use a two-instruction sequence
+  // (and + add) instead of the single-instruction 4 GiB guard, adding 4 bytes
+  // to every rewrite that contains one. Control-flow guards (indirect
+  // branches, returns, LR restores) still use the single-instruction form.
+  unsigned DataGuardExtra = LargeSandbox ? 4 : 0;
+
   switch (MI.getOpcode()) {
   case AArch64::SVC:
     // SVC expands to 4 instructions.
@@ -162,7 +169,7 @@ static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI) {
     // VA-based DC/IC ops (op1=3, Cn=7, op2=1) expand to 2 instructions.
     if (MI.getOperand(0).getImm() == 3 && MI.getOperand(1).getImm() == 7 &&
         MI.getOperand(3).getImm() == 1)
-      return 8;
+      return 8 + DataGuardExtra;
     return std::nullopt;
   default:
     break;
@@ -187,13 +194,17 @@ static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI) {
   // this may be an overestimate.
   if (MI.mayLoadOrStore()) {
     unsigned Size = isLFIPrePostMemAccess(MI.getOpcode()) ? 12 : 8;
+    Size += DataGuardExtra;
     if (ModifiesLR)
       Size += 4;
     return Size;
   }
 
-  // Non memory operations that modify LR or SP expand to 2 instructions.
-  if (ModifiesSP || ModifiesLR)
+  // Non memory operations that modify LR or SP expand to 2 instructions
+  // (3 with a large-sandbox data guard for SP).
+  if (ModifiesSP)
+    return 8 + DataGuardExtra;
+  if (ModifiesLR)
     return 8;
 
   // Default case: instructions that don't cause expansion.
@@ -228,7 +239,7 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   // LFI rewriter expansions that supersede normal sizing.
   const auto &STI = MF->getSubtarget<AArch64Subtarget>();
   if (STI.isLFI())
-    if (auto Size = getLFIInstSizeInBytes(MI))
+    if (auto Size = getLFIInstSizeInBytes(MI, STI.lFILargeSandbox()))
       return *Size;
 
   if (!MI.isBundle() && isTailCallReturnInst(MI)) {

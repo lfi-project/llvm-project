@@ -43,6 +43,9 @@ class MCSymbol;
 /// - X25: context register (points to thread-local runtime data)
 /// - SP:  Stack pointer (always within sandbox)
 /// - X30: Link register (always within sandbox)
+///
+/// Additional reserved register (large sandbox mode):
+/// - X24: Offset register (always within [0, sandbox_size - 1])
 class AArch64MCLFIRewriter : public MCLFIRewriter {
 public:
   AArch64MCLFIRewriter(MCContext &Ctx, std::unique_ptr<MCRegisterInfo> &&RI,
@@ -82,14 +85,24 @@ private:
 
   // Instruction classification. Returns the reserved register that may be
   // modified, or an invalid register if no reserved register is touched.
-  MCRegister mayModifyReserved(const MCInst &Inst) const;
+  MCRegister mayModifyReserved(const MCInst &Inst,
+                               const MCSubtargetInfo &STI) const;
   bool mayModifySP(const MCInst &Inst) const;
 
-  // Instruction emission.
+  // Large sandbox helpers. In large-sandbox mode, data guards mask the
+  // address with a configurable power-of-two sandbox mask via the reserved
+  // offset register x24 instead of relying on the fixed 4 GiB truncation.
+  bool isLargeSandbox(const MCSubtargetInfo &STI) const;
+  uint64_t getSandboxMask() const;
+  uint64_t getSandboxMaskEncoding() const;
+
+  // Instruction emission. emitAddMask emits a data guard by default; pass
+  // ControlFlow=true for guards on branch targets and LR, which may use the
+  // cheaper 4 GiB form even in large-sandbox mode.
   void emitInst(const MCInst &Inst, MCStreamer &Out,
                 const MCSubtargetInfo &STI);
   void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,
-                   const MCSubtargetInfo &STI);
+                   const MCSubtargetInfo &STI, bool ControlFlow = false);
   void emitBranch(unsigned Opcode, MCRegister Target, MCStreamer &Out,
                   const MCSubtargetInfo &STI);
   void emitPendingTLSDescCall(MCStreamer &Out, const MCSubtargetInfo &STI);

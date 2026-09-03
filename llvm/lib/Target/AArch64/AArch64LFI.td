@@ -36,22 +36,23 @@ def LFI_AM_Post : LFIAddrMode<4>;
 //===----------------------------------------------------------------------===//
 // LFIVariant - scalar load/store variants
 //
-// One record per (family, addressing mode) combination. RoWInst is the
-// matching RoW variant of the same family.
+// One record per (family, addressing mode) combination. RoWInst/RoXInst are
+// the matching RoW/RoX variants of the same family.
 //===----------------------------------------------------------------------===//
 
 class LFIVariant<Instruction inst, bits<3> addrMode, bits<3> log2Size,
-                 Instruction roWInst> {
+                 Instruction roWInst, Instruction roXInst> {
   Instruction Inst     = inst;
   bits<3>     AddrMode = addrMode;
   bits<3>     Log2Size = log2Size;
   Instruction RoWInst  = roWInst;
+  Instruction RoXInst  = roXInst;
 }
 
 def LFIVariantTable : GenericTable {
   let FilterClass    = "LFIVariant";
   let CppTypeName    = "LFIVariantEntry";
-  let Fields         = ["Inst", "AddrMode", "Log2Size", "RoWInst"];
+  let Fields         = ["Inst", "AddrMode", "Log2Size", "RoWInst", "RoXInst"];
   let PrimaryKey     = ["Inst"];
   let PrimaryKeyName = "lookupLFIVariantByOpcode";
 }
@@ -166,11 +167,11 @@ foreach f = AArch64ScalarMemFamilies in {
   defvar Pre  = !cast<Instruction>(f.Base # "pre");
   defvar Post = !cast<Instruction>(f.Base # "post");
 
-  def : LFIVariant<Ui,   LFI_AM_Ui.Value,   f.Log2, RoW>;
-  def : LFIVariant<RoW,  LFI_AM_RoW.Value,  f.Log2, RoW>;
-  def : LFIVariant<RoX,  LFI_AM_RoX.Value,  f.Log2, RoW>;
-  def : LFIVariant<Pre,  LFI_AM_Pre.Value,  f.Log2, RoW>;
-  def : LFIVariant<Post, LFI_AM_Post.Value, f.Log2, RoW>;
+  def : LFIVariant<Ui,   LFI_AM_Ui.Value,   f.Log2, RoW, RoX>;
+  def : LFIVariant<RoW,  LFI_AM_RoW.Value,  f.Log2, RoW, RoX>;
+  def : LFIVariant<RoX,  LFI_AM_RoX.Value,  f.Log2, RoW, RoX>;
+  def : LFIVariant<Pre,  LFI_AM_Pre.Value,  f.Log2, RoW, RoX>;
+  def : LFIVariant<Post, LFI_AM_Post.Value, f.Log2, RoW, RoX>;
 
   // Indexed / register-offset / register-offset-W / register-offset-X all
   // share the same operand layout: Rt, [Rn, ...].
@@ -183,9 +184,9 @@ foreach f = AArch64ScalarMemFamilies in {
 }
 
 // PRFM has ui, roW, roX but no pre/post forms. Log2 = 3 (doubleword scale).
-def : LFIVariant<PRFMui,  LFI_AM_Ui.Value,  3, PRFMroW>;
-def : LFIVariant<PRFMroW, LFI_AM_RoW.Value, 3, PRFMroW>;
-def : LFIVariant<PRFMroX, LFI_AM_RoX.Value, 3, PRFMroW>;
+def : LFIVariant<PRFMui,  LFI_AM_Ui.Value,  3, PRFMroW, PRFMroX>;
+def : LFIVariant<PRFMroW, LFI_AM_RoW.Value, 3, PRFMroW, PRFMroX>;
+def : LFIVariant<PRFMroX, LFI_AM_RoX.Value, 3, PRFMroW, PRFMroX>;
 
 def : MemIndexed<PRFMui,  1, 2>;
 def : MemIndexed<PRFMroW, 1, 2>;

@@ -443,6 +443,9 @@ AArch64RegisterInfo::getStrictlyReservedRegs(const MachineFunction &MF) const {
     markSuperRegs(Reserved, AArch64::W27);
     markSuperRegs(Reserved, AArch64::W26);
     markSuperRegs(Reserved, AArch64::W25);
+    // Large-sandbox mode also reserves x24 as the offset register.
+    if (MF.getSubtarget<AArch64Subtarget>().lFILargeSandbox())
+      markSuperRegs(Reserved, AArch64::W24);
     if (!MF.getProperties().hasNoVRegs()) {
       markSuperRegs(Reserved, AArch64::LR);
       markSuperRegs(Reserved, AArch64::W30);
