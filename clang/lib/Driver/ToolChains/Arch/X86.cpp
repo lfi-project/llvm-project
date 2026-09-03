@@ -317,12 +317,8 @@ void x86::getX86TargetFeatures(const Driver &D, const llvm::Triple &Triple,
     }
   }
 
-  // Translate the high-level -mlfi=<list> option into LFI subtarget features.
-  // Each comma-separated token names an LFI configuration knob. gs-context and
-  // large-sandbox both require Segue to be disabled, so they imply
-  // +no-lfi-segue (added once). large-sandbox additionally implies
-  // +lfi-gs-context: the context register file moves to the %gs segment base,
-  // freeing r15 to serve as the sandbox mask register.
+  // large-sandbox and small-sandbox imply +lfi-gs-context; all of gs-context,
+  // large-sandbox and small-sandbox imply +no-lfi-segue.
   if (const Arg *A = Args.getLastArg(options::OPT_mlfi_EQ)) {
     if (!Triple.isLFI()) {
       D.Diag(diag::err_drv_unsupported_opt_for_target)
@@ -341,6 +337,7 @@ void x86::getX86TargetFeatures(const Driver &D, const llvm::Triple &Triple,
                                 .Case("no-stores", "+no-lfi-stores")
                                 .Case("gs-context", "+lfi-gs-context")
                                 .Case("large-sandbox", "+lfi-large-sandbox")
+                                .Case("small-sandbox", "+lfi-small-sandbox")
                                 .Case("use-ret", "+lfi-use-ret")
                                 .Default("");
         if (Feature.empty()) {
@@ -351,9 +348,10 @@ void x86::getX86TargetFeatures(const Driver &D, const llvm::Triple &Triple,
         Features.push_back(Feature);
         if (Value == "gs-context")
           HasGSContext = true;
-        if (Value == "gs-context" || Value == "large-sandbox")
+        if (Value == "gs-context" || Value == "large-sandbox" ||
+            Value == "small-sandbox")
           NeedNoSegue = true;
-        if (Value == "large-sandbox")
+        if (Value == "large-sandbox" || Value == "small-sandbox")
           NeedGSContext = true;
       }
       if (NeedGSContext && !HasGSContext)

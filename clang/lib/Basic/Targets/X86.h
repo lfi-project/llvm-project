@@ -161,6 +161,7 @@ class LLVM_LIBRARY_VISIBILITY X86TargetInfo : public TargetInfo {
   bool HasLFINoSegue = false;
   bool HasLFIGSContext = false;
   bool HasLFILargeSandbox = false;
+  bool HasLFISmallSandbox = false;
   bool HasLFIUseRet = false;
 
 protected:

@@ -468,6 +468,9 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasLFIGSContext = true;
     } else if (Feature == "+lfi-large-sandbox") {
       HasLFILargeSandbox = true;
+    } else if (Feature == "+lfi-small-sandbox") {
+      HasLFISmallSandbox = true;
+      HasLFILargeSandbox = true;
     } else if (Feature == "+lfi-use-ret") {
       HasLFIUseRet = true;
     }
@@ -561,6 +564,8 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
       Builder.defineMacro("__LFI_GS_CONTEXT__");
     if (HasLFILargeSandbox)
       Builder.defineMacro("__LFI_LARGE_SANDBOX__");
+    if (HasLFISmallSandbox)
+      Builder.defineMacro("__LFI_SMALL_SANDBOX__");
     if (HasLFIUseRet)
       Builder.defineMacro("__LFI_USE_RET__");
   }

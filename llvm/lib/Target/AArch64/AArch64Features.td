@@ -1166,6 +1166,11 @@ def FeatureLFILargeSandbox : SubtargetFeature<"lfi-large-sandbox",
   "LFILargeSandbox", "true",
   "Use the LFI large-sandbox scheme, supporting any power-of-two sandbox "
   "size">;
+def FeatureLFISmallSandbox : SubtargetFeature<"lfi-small-sandbox",
+  "LFISmallSandbox", "true",
+  "Use the LFI small-sandbox scheme, for sandboxes smaller than 4GiB "
+  "(implies lfi-large-sandbox)",
+  [FeatureLFILargeSandbox]>;
 
 // Only intended to be used by disassemblers.
 def FeatureAll

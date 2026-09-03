@@ -121,32 +121,32 @@ AArch64InstrInfo::AArch64InstrInfo(const AArch64Subtarget &STI)
 /// AArch64MCLFIRewriter.cpp. Sizes may be overestimates of the rewritten
 /// instruction sequences.
 static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI,
-                                                     bool LargeSandbox) {
-  // In large-sandbox mode, data guards use a two-instruction sequence
-  // (and + add) instead of the single-instruction 4 GiB guard, adding 4 bytes
-  // to every rewrite that contains one. Control-flow guards (indirect
-  // branches, returns, LR restores) still use the single-instruction form.
+                                                     bool LargeSandbox,
+                                                     bool SmallSandbox) {
+  // In large-sandbox mode data guards take an extra instruction, and in
+  // small-sandbox mode control-flow guards do too.
   unsigned DataGuardExtra = LargeSandbox ? 4 : 0;
+  unsigned CFGuardExtra = SmallSandbox ? 4 : 0;
 
   switch (MI.getOpcode()) {
   case AArch64::SVC:
-    // SVC expands to 4 instructions.
-    return 16;
+    // SVC expands to 4 instructions (the last is an LR control-flow guard).
+    return 16 + CFGuardExtra;
   case AArch64::BR:
   case AArch64::BLR:
     // Indirect branches/calls expand to 2 instructions (guard + br/blr).
-    return 8;
+    return 8 + CFGuardExtra;
   case AArch64::RET:
     // RET through LR is not rewritten, but RET through another register
     // expands to 2 instructions (guard + ret).
     if (MI.getOperand(0).getReg() != AArch64::LR)
-      return 8;
+      return 8 + CFGuardExtra;
     return 4;
   case AArch64::RETAA:
   case AArch64::RETAB:
     // Authenticated returns expand to 3 instructions (authenticate + guard +
     // ret).
-    return 12;
+    return 12 + CFGuardExtra;
   case AArch64::BRAA:
   case AArch64::BRAAZ:
   case AArch64::BRAB:
@@ -157,14 +157,14 @@ static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI,
   case AArch64::BLRABZ:
     // Authenticated branches/calls expand to 3 instructions (authenticate +
     // guard + branch).
-    return 12;
+    return 12 + CFGuardExtra;
   case AArch64::AUTIASP:
   case AArch64::AUTIBSP:
   case AArch64::AUTIAZ:
   case AArch64::AUTIBZ:
   case AArch64::XPACLRI:
     // Authenticating LR expands to the instruction plus a deferred LR guard.
-    return 8;
+    return 8 + CFGuardExtra;
   case AArch64::SYSxt:
     // VA-based DC/IC ops (op1=3, Cn=7, op2=1) expand to 2 instructions.
     if (MI.getOperand(0).getImm() == 3 && MI.getOperand(1).getImm() == 7 &&
@@ -196,16 +196,15 @@ static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI,
     unsigned Size = isLFIPrePostMemAccess(MI.getOpcode()) ? 12 : 8;
     Size += DataGuardExtra;
     if (ModifiesLR)
-      Size += 4;
+      Size += 4 + CFGuardExtra;
     return Size;
   }
 
-  // Non memory operations that modify LR or SP expand to 2 instructions
-  // (3 with a large-sandbox data guard for SP).
+  // Non memory operations that modify LR or SP expand to 2 instructions.
   if (ModifiesSP)
     return 8 + DataGuardExtra;
   if (ModifiesLR)
-    return 8;
+    return 8 + CFGuardExtra;
 
   // Default case: instructions that don't cause expansion.
   // - TP accesses in LFI are a single load/store, so no expansion.
@@ -239,7 +238,8 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   // LFI rewriter expansions that supersede normal sizing.
   const auto &STI = MF->getSubtarget<AArch64Subtarget>();
   if (STI.isLFI())
-    if (auto Size = getLFIInstSizeInBytes(MI, STI.lFILargeSandbox()))
+    if (auto Size = getLFIInstSizeInBytes(MI, STI.lFILargeSandbox(),
+                                          STI.lFISmallSandbox()))
       return *Size;
 
   if (!MI.isBundle() && isTailCallReturnInst(MI)) {

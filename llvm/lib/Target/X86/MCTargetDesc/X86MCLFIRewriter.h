@@ -51,32 +51,29 @@ private:
   bool hasNoLFILoads(const MCSubtargetInfo &STI) const;
   bool hasNoLFIStores(const MCSubtargetInfo &STI) const;
 
-  /// Returns true if the large-sandbox scheme is enabled, which supports any
-  /// power-of-two sandbox size by masking addresses with the r15 mask register
-  /// instead of relying on a fixed 4GiB truncation. Implies Segue is disabled
-  /// and GS-context mode (which frees r15 to serve as the mask register).
+  /// Masks addresses with the r15 mask register instead of relying on a fixed
+  /// 4GiB truncation, supporting any power-of-two sandbox size.
   bool hasLargeSandbox(const MCSubtargetInfo &STI) const;
 
+  /// The large-sandbox scheme applied to a sandbox that may be smaller than
+  /// 4GiB. Implies the large-sandbox scheme.
+  bool hasSmallSandbox(const MCSubtargetInfo &STI) const;
+
   /// Returns true if the context register is the %gs segment base (instead of
-  /// r15). Requires Segue to be disabled.
+  /// r15).
   bool hasGSContext(const MCSubtargetInfo &STI) const;
 
-  /// Returns true if return instructions are left unrewritten (the native ret
-  /// is used instead of the masked pop/jmp sequence).
+  /// Returns true if return instructions are left unrewritten.
   bool hasUseRet(const MCSubtargetInfo &STI) const;
 
-  /// Main dispatch function for instruction rewriting.
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI, bool EmitPrefixes);
 
-  /// Emit an instruction, optionally flushing the accumulated prefix queue
-  /// first.
   void emitInstruction(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI, bool EmitPrefixes);
 
-  /// Emit the mask sequence (andl $-32, %eX; addq %r14, %rX) that turns
-  /// an arbitrary register value into a valid sandbox address aligned to a
-  /// bundle boundary.
+  /// Emit the mask sequence (andl $-32, %eX; addq %r14, %rX) that turns an
+  /// arbitrary register value into a bundle-aligned sandbox address.
   void emitSandboxBranchReg(MCRegister Reg, MCStreamer &Out,
                             const MCSubtargetInfo &STI);
 

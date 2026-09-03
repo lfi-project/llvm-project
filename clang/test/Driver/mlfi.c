@@ -10,6 +10,14 @@
 // RUN:   | FileCheck --check-prefix=X86-GS %s
 // X86-GS: "-target-feature" "+lfi-gs-context" "-target-feature" "+lfi-use-ret" "-target-feature" "+no-lfi-segue"
 
+// RUN: %clang -### --target=x86_64_lfi-linux-musl -mlfi=small-sandbox %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=X86-SMALL %s
+// X86-SMALL: "-target-feature" "+lfi-small-sandbox" "-target-feature" "+lfi-gs-context" "-target-feature" "+no-lfi-segue"
+
+// RUN: %clang -### --target=aarch64_lfi-linux-musl -mlfi=small-sandbox %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=AARCH64-SMALL %s
+// AARCH64-SMALL: "-target-feature" "+lfi-small-sandbox"
+
 // RUN: %clang -### --target=aarch64_lfi-linux-musl -mlfi=no-loads,large-sandbox %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=AARCH64 %s
 // AARCH64: "-target-feature" "+no-lfi-loads" "-target-feature" "+lfi-large-sandbox"

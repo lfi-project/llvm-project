@@ -5964,8 +5964,9 @@ def mharden_sls_EQ : Joined<["-"], "mharden-sls=">, Group<m_Group>,
 def mlfi_EQ : CommaJoined<["-"], "mlfi=">, Group<m_Group>,
   HelpText<"Configure Lightweight Fault Isolation (LFI) sandboxing (LFI targets"
            " only). <arg> is a comma-separated list of: no-loads, no-stores,"
-           " large-sandbox, no-segue(X86), gs-context(X86), use-ret(X86)">,
-  Values<"no-loads,no-stores,large-sandbox,no-segue,gs-context,use-ret">;
+           " large-sandbox, small-sandbox, no-segue(X86), gs-context(X86),"
+           " use-ret(X86)">,
+  Values<"no-loads,no-stores,large-sandbox,small-sandbox,no-segue,gs-context,use-ret">;
 
 def matomics : Flag<["-"], "matomics">, Group<m_wasm_Features_Group>;
 def mno_atomics : Flag<["-"], "mno-atomics">, Group<m_wasm_Features_Group>;

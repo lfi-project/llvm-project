@@ -424,6 +424,8 @@ void AArch64TargetInfo::getTargetDefines(const LangOptions &Opts,
       Builder.defineMacro("__LFI_NO_STORES__");
     if (HasLFILargeSandbox)
       Builder.defineMacro("__LFI_LARGE_SANDBOX__");
+    if (HasLFISmallSandbox)
+      Builder.defineMacro("__LFI_SMALL_SANDBOX__");
   }
 
   // Inline assembly supports AArch64 flag outputs.
@@ -1172,6 +1174,10 @@ bool AArch64TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasLFINoStores = true;
     if (Feature == "+lfi-large-sandbox")
       HasLFILargeSandbox = true;
+    if (Feature == "+lfi-small-sandbox") {
+      HasLFISmallSandbox = true;
+      HasLFILargeSandbox = true;
+    }
     if (Feature == "+crc")
       HasCRC = true;
     if (Feature == "+rcpc")

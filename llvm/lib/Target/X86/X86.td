@@ -502,6 +502,10 @@ def FeatureLFILargeSandbox : SubtargetFeature<"lfi-large-sandbox", "LFILargeSand
   "Use the LFI large-sandbox scheme, supporting any power-of-two sandbox size "
   "(r15 becomes the sandbox mask register)",
   [FeatureNoLFISegue, FeatureLFIGSContext]>;
+def FeatureLFISmallSandbox : SubtargetFeature<"lfi-small-sandbox", "LFISmallSandbox", "true",
+  "Use the LFI small-sandbox scheme, for sandboxes smaller than 4GiB "
+  "(implies lfi-large-sandbox)",
+  [FeatureLFILargeSandbox]>;
 def FeatureLFIUseRet : SubtargetFeature<"lfi-use-ret", "LFIUseRet", "true",
   "Leave return instructions unrewritten by LFI (use the native ret)">;
 

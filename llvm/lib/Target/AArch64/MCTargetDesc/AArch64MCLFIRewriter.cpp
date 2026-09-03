@@ -349,6 +349,10 @@ bool AArch64MCLFIRewriter::isLargeSandbox(const MCSubtargetInfo &STI) const {
   return STI.hasFeature(AArch64::FeatureLFILargeSandbox);
 }
 
+bool AArch64MCLFIRewriter::isSmallSandbox(const MCSubtargetInfo &STI) const {
+  return STI.hasFeature(AArch64::FeatureLFISmallSandbox);
+}
+
 uint64_t AArch64MCLFIRewriter::getSandboxMask() const {
   assert(LFISandboxBits > 0 && LFISandboxBits < 64 &&
          "sandbox bits must be in [1, 63]");
@@ -384,21 +388,25 @@ void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
   // In large sandbox mode, control flow guards (LR, indirect branches/calls)
   // can use the cheaper single-instruction 4 GiB guard form because the
   // sandbox runtime guarantees the code segment lives in the first 4 GiB of
-  // the sandbox region. Data guards must still use the wide mask.
-  bool UseSmallGuard = !isLargeSandbox(STI) || ControlFlow;
+  // the sandbox region. Data guards must still use the wide mask. In
+  // small-sandbox mode the sandbox may be smaller than 4 GiB, so control flow
+  // guards use the wide mask as well.
+  bool Use4GiBGuard =
+      !isLargeSandbox(STI) || (ControlFlow && !isSmallSandbox(STI));
 
-  // CF and data guards produce different x28 values for the same Src in large
-  // sandbox mode, so they must not elide each other or share guard state. In
-  // small sandbox mode the two forms are identical and the ControlFlow bit
-  // has no semantic effect.
-  bool MixedKind = isLargeSandbox(STI) && ControlFlow;
+  // CF and data guards produce different x28 values for the same Src when
+  // they use different forms, so they must not elide each other or share
+  // guard state. This only happens in large-sandbox (but not small-sandbox)
+  // mode; in every other configuration the two forms are identical and the
+  // ControlFlow bit has no semantic effect.
+  bool MixedKind = isLargeSandbox(STI) && ControlFlow && !isSmallSandbox(STI);
 
   // If x28 already holds the guarded value of Src, this guard is redundant and
   // can be skipped.
   if (LFIGuardElim && !MixedKind && Dest == LFIAddrReg && ActiveGuardReg == Src)
     return;
 
-  if (!UseSmallGuard) {
+  if (!Use4GiBGuard) {
     // Large sandbox: and x24, Src, #mask; add Dest, x27, x24
     MCInst AndInst;
     AndInst.setOpcode(AArch64::ANDXri);

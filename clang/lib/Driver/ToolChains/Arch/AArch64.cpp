@@ -562,6 +562,7 @@ void aarch64::getAArch64TargetFeatures(const Driver &D,
                                 .Case("no-loads", "+no-lfi-loads")
                                 .Case("no-stores", "+no-lfi-stores")
                                 .Case("large-sandbox", "+lfi-large-sandbox")
+                                .Case("small-sandbox", "+lfi-small-sandbox")
                                 .Default("");
         if (Feature.empty()) {
           D.Diag(diag::err_drv_unsupported_option_argument)
