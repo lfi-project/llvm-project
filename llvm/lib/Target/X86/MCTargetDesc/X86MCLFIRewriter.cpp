@@ -167,6 +167,11 @@ static bool isSyscall(const MCInst &Inst) {
   return Inst.getOpcode() == X86::SYSCALL;
 }
 
+static bool hasNoTrackPrefix(const MCInst &Inst, const MCInstrInfo &InstInfo) {
+  return (InstInfo.get(Inst.getOpcode()).TSFlags & X86II::NOTRACK) ||
+         (Inst.getFlags() & X86::IP_HAS_NOTRACK);
+}
+
 static bool isDirectCall(const MCInst &Inst) {
   switch (Inst.getOpcode()) {
   case X86::CALLpcrel32:
@@ -267,7 +272,7 @@ void X86::X86MCLFIRewriter::emitInstruction(const MCInst &Inst, MCStreamer &Out,
 void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
-  MCRegister Reg32 = getReg32(Reg);
+  MCRegister Reg32 = RegInfo->getSubReg(Reg, X86::sub_32bit);
   MCRegister Reg64 = getReg64(Reg);
 
   MCInst And;
@@ -296,13 +301,16 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
 
 void X86::X86MCLFIRewriter::rewriteIndirectJumpReg(MCRegister Reg,
                                                    MCStreamer &Out,
-                                                   const MCSubtargetInfo &STI) {
+                                                   const MCSubtargetInfo &STI,
+                                                   bool NoTrack) {
   Out.emitBundleLock(/*AlignToEnd=*/false, STI);
   emitSandboxBranchReg(Reg, Out, STI);
 
   MCInst Jmp;
   Jmp.setOpcode(X86::JMP64r);
   Jmp.addOperand(MCOperand::createReg(getReg64(Reg)));
+  if (NoTrack)
+    Jmp.setFlags(Jmp.getFlags() | X86::IP_HAS_NOTRACK);
   Out.emitInstruction(Jmp, STI);
 
   Out.emitBundleUnlock(STI);
@@ -310,13 +318,16 @@ void X86::X86MCLFIRewriter::rewriteIndirectJumpReg(MCRegister Reg,
 
 void X86::X86MCLFIRewriter::rewriteIndirectCallReg(MCRegister Reg,
                                                    MCStreamer &Out,
-                                                   const MCSubtargetInfo &STI) {
+                                                   const MCSubtargetInfo &STI,
+                                                   bool NoTrack) {
   Out.emitBundleLock(/*AlignToEnd=*/true, STI);
   emitSandboxBranchReg(Reg, Out, STI);
 
   MCInst Call;
   Call.setOpcode(X86::CALL64r);
   Call.addOperand(MCOperand::createReg(getReg64(Reg)));
+  if (NoTrack)
+    Call.setFlags(Call.getFlags() | X86::IP_HAS_NOTRACK);
   Out.emitInstruction(Call, STI);
 
   Out.emitBundleUnlock(STI);
@@ -344,10 +355,11 @@ void X86::X86MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
     Target = Inst.getOperand(0).getReg();
   }
 
+  bool NoTrack = hasNoTrackPrefix(Inst, *InstInfo);
   if (isCall(Inst))
-    rewriteIndirectCallReg(Target, Out, STI);
+    rewriteIndirectCallReg(Target, Out, STI, NoTrack);
   else
-    rewriteIndirectJumpReg(Target, Out, STI);
+    rewriteIndirectJumpReg(Target, Out, STI, NoTrack);
 }
 
 void X86::X86MCLFIRewriter::rewriteDirectCall(const MCInst &Inst,
