@@ -93,12 +93,20 @@ private:
   // address with a configurable power-of-two sandbox mask via the reserved
   // offset register x24 instead of relying on the fixed 4 GiB truncation.
   bool isLargeSandbox(const MCSubtargetInfo &STI) const;
+
+  // Returns true if the small-sandbox scheme is enabled: the large-sandbox
+  // masking scheme applied to a sandbox that may be smaller than 4 GiB, so
+  // control-flow guards also use the sandbox size mask instead of the fixed
+  // 4 GiB form. Implies the large-sandbox scheme.
+  bool isSmallSandbox(const MCSubtargetInfo &STI) const;
+
   uint64_t getSandboxMask() const;
   uint64_t getSandboxMaskEncoding() const;
 
   // Instruction emission. emitAddMask emits a data guard by default; pass
   // ControlFlow=true for guards on branch targets and LR, which may use the
-  // cheaper 4 GiB form even in large-sandbox mode.
+  // cheaper 4 GiB form in large-sandbox mode (but not in small-sandbox mode,
+  // where the sandbox may be smaller than 4 GiB).
   void emitInst(const MCInst &Inst, MCStreamer &Out,
                 const MCSubtargetInfo &STI);
   void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,

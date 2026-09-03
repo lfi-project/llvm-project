@@ -112,6 +112,9 @@ The LFI targets have several configuration options, specified via `-mattr=`
 - `+lfi-large-sandbox`: Use the large-sandbox scheme, which supports a sandbox
   of any power-of-two size instead of the default fixed 4GiB (see the
   per-target "Large sandbox mode" sections).
+- `+lfi-small-sandbox`: Use the small-sandbox scheme, for a sandbox that may be
+  smaller than 4GiB. Implies `+lfi-large-sandbox` (see the per-target "Small
+  sandbox mode" sections).
 
 Use `+no-lfi-loads` to create a "stores-only" sandbox that may read, but not
 write, outside the sandbox region.
@@ -124,17 +127,15 @@ combination with some other form of memory sandboxing, such as Intel MPK.
 Additional X86-64-only options (`+no-lfi-segue`, `+lfi-gs-context`,
 `+lfi-use-ret`) are described in the X86-64 section.
 
-Clang provides the high-level `-mlfi=` driver option, which accepts a
-comma-separated list of configuration knobs and translates them into the
-subtarget features above: `no-loads`, `no-stores`, `large-sandbox`, and (X86-64
-only) `no-segue`, `gs-context`, `use-ret`. Knobs that require Segue to be
-disabled (`gs-context`, `large-sandbox`) automatically imply `no-segue`, and on
-X86-64 `large-sandbox` also implies `gs-context` (see the X86-64 large sandbox
-section). Each
-enabled knob also defines a corresponding preprocessor macro
-(`__LFI_NO_LOADS__`, `__LFI_NO_STORES__`, `__LFI_LARGE_SANDBOX__`,
-`__LFI_NO_SEGUE__`, `__LFI_GS_CONTEXT__`, `__LFI_USE_RET__`) alongside the
-always-present `__LFI__`.
+Clang's `-mlfi=` driver option takes a comma-separated list of knobs and
+translates them into the subtarget features above: `no-loads`, `no-stores`,
+`large-sandbox`, `small-sandbox`, and (X86-64 only) `no-segue`, `gs-context`,
+`use-ret`. On X86-64, `gs-context`, `large-sandbox` and `small-sandbox` imply
+`no-segue`, and the latter two also imply `gs-context`. Each enabled knob
+defines a corresponding macro (`__LFI_NO_LOADS__`, `__LFI_NO_STORES__`,
+`__LFI_LARGE_SANDBOX__`, `__LFI_SMALL_SANDBOX__`, `__LFI_NO_SEGUE__`,
+`__LFI_GS_CONTEXT__`, `__LFI_USE_RET__`) alongside the always-present
+`__LFI__`; `small-sandbox` defines `__LFI_LARGE_SANDBOX__` as well.
 
 ## AArch64
 
@@ -689,6 +690,41 @@ single-instruction guard (`add x28, x27, wN, uxtw`). Only data accesses, which
 may target the full sandbox, need the `and` + `add` sequence, giving a +1
 instruction overhead on data rewrites and none on control-flow rewrites.
 
+(small-sandbox-mode-aarch64)=
+### Small sandbox mode
+
+Large-sandbox mode keeps the fixed-4GiB `uxtw` form for control-flow guards by
+assuming the sandbox spans at least 4GiB. `+lfi-small-sandbox` drops that
+assumption, so the same masking scheme works for a sandbox smaller than 4GiB
+(`-aarch64-lfi-sandbox-bits=N` with `N < 32`). It implies `+lfi-large-sandbox`;
+the only change is that control-flow guards use the same two-instruction masked
+sequence as data guards:
+
+:::{list-table}
+:header-rows: 1
+
+* - Original
+  - Rewritten
+* - ```gas
+    br xN
+    ```
+  - ```gas
+    and x24, xN, #mask
+    add x28, x27, x24
+    br x28
+    ```
+:::
+
+Being identical, control-flow and data guards now participate in guard
+elimination together; in large-sandbox mode they produce different values and
+must not elide each other.
+
+Memory rewrites are unchanged: every displacement encodable in an AArch64
+load/store (at most 65520 bytes) is well within the 128KiB guard regions
+surrounding the sandbox, so a displacement applied after the mask cannot
+escape. PC-relative literal loads are resolved by the linker within the image
+and are exempt, as in the other modes.
+
 ## X86-64
 
 The X86-64 LFI target is `x86_64_lfi`.
@@ -703,13 +739,12 @@ In addition to the common options, the X86-64 LFI target supports:
 - `+lfi-gs-context`: place the context register in the `%gs` segment base
   instead of `r15` (see [GS context mode](#gs-context-mode)). Requires
   `+no-lfi-segue`.
-- `+lfi-large-sandbox`: use the large-sandbox scheme, which supports a sandbox
-  of any power-of-two size instead of the default fixed 4GiB. Implies
-  `+no-lfi-segue` and `+lfi-gs-context`: the context register file moves to
-  the `%gs` segment base, freeing `%r15` to serve as the sandbox mask register
-  (see [Large sandbox mode](#large-sandbox-mode-x86-64)).
-- `+lfi-use-ret`: leave `ret` instructions unrewritten, emitting the native
-  `ret` instead of the masked pop/jump sequence. This relies on return
+- `+lfi-large-sandbox`: use the large-sandbox scheme (see [Large sandbox
+  mode](#large-sandbox-mode-x86-64)). Implies `+no-lfi-segue` and
+  `+lfi-gs-context`, which frees `%r15` to serve as the sandbox mask register.
+- `+lfi-small-sandbox`: use the small-sandbox scheme (see [Small sandbox
+  mode](#small-sandbox-mode-x86-64)). Implies `+lfi-large-sandbox`.
+- `+lfi-use-ret`: leave `ret` instructions unrewritten, relying on return
   addresses being trusted by some other means (e.g. a shadow stack).
 
 ### Reserved Registers
@@ -1164,6 +1199,73 @@ movq %rN, (%r14, %r11)
 address, producing the same result as `andq` without touching the flags. In
 hand-written assembly, `.lfi_flags_dead` asserts that the flags are dead at a
 given point, allowing the rewriter to use `andq` there.
+
+(small-sandbox-mode-x86-64)=
+### Small sandbox mode
+
+The large-sandbox scheme assumes the sandbox spans at least 4GiB in two places:
+indirect branches reuse the fixed-4GiB control-flow mask, and a displacement
+left on a trusted base (`%rsp`, `%r14`, or an absolute address) may be any
+32-bit value, since the guard regions around a 4GiB sandbox absorb it.
+`+lfi-small-sandbox` drops both assumptions, so the same masking scheme works
+for a sandbox of `2^k < 4GiB` bytes surrounded by 128KiB guard regions. It
+implies `+lfi-large-sandbox` (and therefore `+no-lfi-segue` and
+`+lfi-gs-context`); everything not described here matches large-sandbox mode.
+
+#### Control flow (small sandbox)
+
+After the `andl` has truncated a branch target to 32 bits and cleared its low
+five bits, the target is also masked with `%r15` before the base is added. The
+`andq` only clears bits at or above the sandbox size, so the result is still a
+bundle boundary, now confined to the sandbox. `jmpq *%rN` becomes:
+
+```gas
+andl $-32, %eN
+andq %r15, %rN
+addq %r14, %rN
+jmpq *%rN
+```
+
+Returns (`popq %r11` followed by the same sequence through `%r11`) and indirect
+calls (aligned to the end of the bundle) change in the same way. Direct calls
+are unchanged; the linker resolves their targets within the image.
+
+#### Memory displacements
+
+An access whose base is `%rsp` or `%r14`, or an absolute address (which is
+rebased onto `%r14`), is normally left unmasked, since the base already holds a
+sandbox address. In small-sandbox mode its displacement must keep the access
+within the guard region, so a displacement is left in place only when it is an
+immediate inside the window `(-128KiB, 128KiB - 16KiB)` -- the 16KiB being
+headroom for the size of the access itself, up to an `xsave` area. Anything
+larger, or symbolic (which the assembler cannot evaluate), is folded into the
+effective-address computation before the mask, where it wraps within the
+sandbox. A store `movq %rN, I(%rsp)` with `I` outside the window becomes:
+
+```gas
+leaq I(%rsp), %r11
+pext %r15, %r11, %r11
+movq %rN, (%r14, %r11)
+```
+
+An access `I(%r14)` is rewritten the same way with `leaq I(%r14), %r11`, and an
+absolute address `I` (or symbol) is materialized with a base-less, index-less
+`leaq I, %r11`. The mask follows the usual flag-preservation rules (`andq` when
+the access defines the flags or a late pass has proved them dead, `pext`
+otherwise), and a register-destination load uses its destination as the scratch
+register. Since the compiler emits large `%rsp`-relative displacements for any
+stack frame of 128KiB or more, this rewrite is what keeps such frames confined;
+accesses through a frame pointer are masked in any case, as `%rbp` is not
+trusted.
+
+A `pop` with a memory destination computes its address after `%rsp` has been
+incremented, whereas the `lea` runs before the `pop`, so the rewriter adds the
+operand size to an `%rsp`-relative displacement to compensate (`popq I(%rsp)`
+uses `leaq I+8(%rsp), %r11`).
+
+`%rip`-relative accesses are left alone whatever their displacement: the
+rewriter cannot evaluate a symbolic one, and the linker resolves the target
+within the image. Bounding the resolved address is the verifier's job.
 
 ## References
 

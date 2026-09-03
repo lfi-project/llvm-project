@@ -41,6 +41,15 @@ static constexpr unsigned BundleSize = 32;
 // thread pointer is stored.
 static constexpr int TPOffset = 16;
 
+// Small-sandbox mode: size of the guard regions surrounding the sandbox. Only
+// a displacement within (-LFISmallGuardSize, LFISmallGuardSize -
+// LFISmallMaxAccess) may be left on a trusted base; anything else is folded
+// into the effective address before the mask, where it wraps within the
+// sandbox. LFISmallMaxAccess is headroom for the size of the access itself
+// (the largest, an xsave area with AMX state, is about 11KiB).
+static constexpr int64_t LFISmallGuardSize = 128 * 1024;
+static constexpr int64_t LFISmallMaxAccess = 16 * 1024;
+
 //===----------------------------------------------------------------------===//
 // Feature checking
 //===----------------------------------------------------------------------===//
@@ -55,6 +64,10 @@ bool X86::X86MCLFIRewriter::hasGSContext(const MCSubtargetInfo &STI) const {
 
 bool X86::X86MCLFIRewriter::hasLargeSandbox(const MCSubtargetInfo &STI) const {
   return STI.hasFeature(X86::FeatureLFILargeSandbox);
+}
+
+bool X86::X86MCLFIRewriter::hasSmallSandbox(const MCSubtargetInfo &STI) const {
+  return STI.hasFeature(X86::FeatureLFISmallSandbox);
 }
 
 bool X86::X86MCLFIRewriter::hasNoLFILoads(const MCSubtargetInfo &STI) const {
@@ -104,6 +117,34 @@ static bool isAbsoluteReg(MCRegister Reg) {
 
 static bool isHighReg(MCRegister Reg) {
   return Reg == X86::AH || Reg == X86::BH || Reg == X86::CH || Reg == X86::DH;
+}
+
+// Returns true if the displacement operand \p Offset is small enough to leave
+// on a trusted base in small-sandbox mode (see LFISmallGuardSize). A symbolic
+// displacement that cannot be evaluated is treated as large.
+static bool isSmallDisp(const MCOperand &Offset) {
+  int64_t Value;
+  if (Offset.isImm())
+    Value = Offset.getImm();
+  else if (!Offset.isExpr() || !Offset.getExpr()->evaluateAsAbsolute(Value))
+    return false;
+  return Value > -LFISmallGuardSize &&
+         Value < LFISmallGuardSize - LFISmallMaxAccess;
+}
+
+// For a pop with a memory destination, the amount by which %rsp is incremented
+// before the destination address is computed; 0 for any other instruction.
+static int64_t popStackAdjust(unsigned Opcode) {
+  switch (Opcode) {
+  case X86::POP16rmm:
+    return 2;
+  case X86::POP32rmm:
+    return 4;
+  case X86::POP64rmm:
+    return 8;
+  default:
+    return 0;
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -216,15 +257,13 @@ void X86::X86MCLFIRewriter::emitInstruction(const MCInst &Inst, MCStreamer &Out,
 
 // Emit:
 //   andl $-BundleSize, %eX
+//   andq %r15, %rX               (small-sandbox mode only)
 //   addq %r14, %rX
 // This zeroes the top 32 bits and bottom log2(BundleSize) bits of the target,
-// then fills in the top 32 bits with the sandbox base.
-//
-// Large-sandbox mode uses this same fixed-4GiB sequence rather than the %r13
-// mask used for data accesses. Executable code is confined to the low 4GiB of
-// the sandbox, so a target truncated to 4GiB and bundle-aligned always lands on
-// a valid in-sandbox bundle boundary (or a non-executable address that faults).
-// This saves an instruction and avoids %r13 on every indirect branch.
+// then fills in the top 32 bits with the sandbox base. Large-sandbox mode uses
+// the same fixed-4GiB sequence, since executable code is confined to the low
+// 4GiB of the sandbox. Small-sandbox mode cannot assume the sandbox spans 4GiB,
+// so the (already bundle-aligned) target is also masked with the sandbox size.
 void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
                                                  MCStreamer &Out,
                                                  const MCSubtargetInfo &STI) {
@@ -237,6 +276,15 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
   And.addOperand(MCOperand::createReg(Reg32));
   And.addOperand(MCOperand::createImm(-static_cast<int>(BundleSize)));
   Out.emitInstruction(And, STI);
+
+  if (hasSmallSandbox(STI)) {
+    MCInst AndMask;
+    AndMask.setOpcode(X86::AND64rr);
+    AndMask.addOperand(MCOperand::createReg(Reg64));
+    AndMask.addOperand(MCOperand::createReg(Reg64));
+    AndMask.addOperand(MCOperand::createReg(LFIMaskReg));
+    Out.emitInstruction(AndMask, STI);
+  }
 
   MCInst Add;
   Add.setOpcode(X86::ADD64rr);
@@ -538,18 +586,24 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
 //===----------------------------------------------------------------------===//
 
 // Returns true if emitSandboxMemOp would emit any auxiliary instructions for
-// the memory operand at \p Idx (i.e., something more than rewriting the
-// addressing mode in place).
-static bool willEmitSandboxInsts(const MCInst &Inst, int Idx) {
+// the memory operand at \p Idx, rather than just rewriting the addressing mode
+// in place. Must agree with the early-outs taken by emitSandboxMemOp.
+static bool willEmitSandboxInsts(const MCInst &Inst, int Idx,
+                                 bool SmallSandbox) {
   const MCOperand &Base = Inst.getOperand(Idx);
   const MCOperand &Scale = Inst.getOperand(Idx + 1);
   const MCOperand &Index = Inst.getOperand(Idx + 2);
+  const MCOperand &Offset = Inst.getOperand(Idx + 3);
+
+  // In small-sandbox mode a large displacement cannot be left on a trusted
+  // base (except %rip), so the operand takes the masked path instead.
+  bool DispOK = !SmallSandbox || isSmallDisp(Offset);
 
   if (isAbsoluteReg(Base.getReg()) && Index.getReg() == X86::NoRegister)
-    return false;
+    return !DispOK && getReg64(Base.getReg()) != X86::RIP;
   if (Base.getReg() == X86::NoRegister && isAbsoluteReg(Index.getReg()) &&
       Scale.isImm() && Scale.getImm() == 1)
-    return false;
+    return !DispOK;
   return true;
 }
 
@@ -577,26 +631,36 @@ void X86::X86MCLFIRewriter::emitSandboxMemOp(MCInst &Inst, int MemIdx,
   // the addressing mode must stay valid, but needs no sandbox prefix.
   bool NoMemAccess = !mayLoad(Inst) && !mayStore(Inst);
 
+  // Small-sandbox mode: a displacement left on a trusted base must keep the
+  // access within the guard region (see LFISmallGuardSize); anything larger
+  // falls through to the masked path below. %rip-relative operands are exempt,
+  // since the linker resolves them within the image.
+  bool DispOK = !hasSmallSandbox(STI) || isSmallDisp(Offset);
+
   // Case 1: base is an absolute register and there is no index.
-  if (isAbsoluteReg(Base.getReg()) && Index.getReg() == X86::NoRegister) {
+  if (isAbsoluteReg(Base.getReg()) && Index.getReg() == X86::NoRegister &&
+      (DispOK || getReg64(Base.getReg()) == X86::RIP)) {
     Base.setReg(getReg64(Base.getReg()));
     return;
   }
 
   // Case 2: only an index, with scale 1, and the index is absolute.
   if (Base.getReg() == X86::NoRegister && isAbsoluteReg(Index.getReg()) &&
-      Scale.isImm() && Scale.getImm() == 1) {
+      Scale.isImm() && Scale.getImm() == 1 && DispOK) {
     Base.setReg(getReg64(Index.getReg()));
     Index.setReg(X86::NoRegister);
     return;
   }
 
-  // Case 3: pure absolute address (no base, no index). Use %r14 as the base.
+  // Case 3: pure absolute address (no base, no index). Use %r14 as the base,
+  // unless the displacement is too large for the small sandbox.
   if (Base.getReg() == X86::NoRegister && Index.getReg() == X86::NoRegister) {
     if (NoMemAccess)
       return;
-    Base.setReg(LFIBaseReg);
-    return;
+    if (DispOK) {
+      Base.setReg(LFIBaseReg);
+      return;
+    }
   }
 
   // Case 4: prefer the %gs segment if available. This is the cheap path: no
@@ -658,6 +722,19 @@ void X86::X86MCLFIRewriter::emitSandboxMemOp(MCInst &Inst, int MemIdx,
           Scale.getImm() == 1) {
         Lea.getOperand(1).setReg(getReg64(Index.getReg()));
         Lea.getOperand(3).setReg(X86::NoRegister);
+      }
+      // A pop with a memory destination computes its address after %rsp has
+      // been incremented, but the lea runs before the pop, so compensate.
+      int64_t PopAdj = popStackAdjust(Inst.getOpcode());
+      if (PopAdj != 0 && getReg64(Base.getReg()) == X86::RSP) {
+        MCOperand &LeaOffset = Lea.getOperand(4);
+        if (LeaOffset.isImm())
+          LeaOffset.setImm(LeaOffset.getImm() + PopAdj);
+        else
+          LeaOffset = MCOperand::createExpr(MCBinaryExpr::createAdd(
+              LeaOffset.getExpr(),
+              MCConstantExpr::create(PopAdj, Out.getContext()),
+              Out.getContext()));
       }
       Out.emitInstruction(Lea, STI);
       AddrReg = ScratchReg64;
@@ -773,12 +850,13 @@ bool X86::X86MCLFIRewriter::emitSandboxMemOps(MCInst &Inst,
   const ArrayRef<MCOperandInfo> OpInfo = Desc.operands();
 
   bool BundleLockOpened = false;
+  bool SmallSandbox = hasSmallSandbox(STI);
 
   for (int I = 0, E = Inst.getNumOperands(); I < E; ++I) {
     if (OpInfo[I].OperandType != MCOI::OPERAND_MEMORY)
       continue;
 
-    if (!BundleLockOpened && willEmitSandboxInsts(Inst, I)) {
+    if (!BundleLockOpened && willEmitSandboxInsts(Inst, I, SmallSandbox)) {
       if (!EmitInstructions)
         return true;
 
