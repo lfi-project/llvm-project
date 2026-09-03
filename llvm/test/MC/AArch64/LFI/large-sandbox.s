@@ -1,4 +1,4 @@
-// RUN: llvm-mc -triple aarch64_lfi -mattr=+lfi-large-sandbox --aarch64-lfi-guard-elim=false --aarch64-lfi-sandbox-bits=33 %s | FileCheck %s
+// RUN: llvm-mc -triple aarch64_lfi --lfi-config=large-sandbox,sandbox-bits=33 --aarch64-lfi-guard-elim=false %s | FileCheck %s
 
 // Memory: zero offset (RoX fast path)
 ldr x0, [x1]

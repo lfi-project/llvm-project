@@ -51,8 +51,10 @@ public:
   void disable() { Enabled = false; }
   void enable() { Enabled = true; }
 
-  /// Assert that the flags are dead at the current location (see the
-  /// .lfi_flags_dead assembler directive).
+  /// Replace the rewriter's LFI configuration with the given specification
+  /// string (see llvm::AArch64::parseLFIConfig).
+  virtual void setConfigString(StringRef) {}
+
   void markFlagsDead() { FlagsDeadActive = true; }
 
   LLVM_ABI bool isCall(const MCInst &Inst) const;

@@ -186,6 +186,10 @@ struct AssemblerInvocation {
   /// otherwise.
   std::string TargetABI;
 
+  /// Canonical LFI sandboxing configuration, from -mlfi-config. Empty
+  /// otherwise.
+  std::string LFIConfig;
+
   /// Darwin target variant triple, the variant of the deployment target
   /// for which the code is being compiled.
   std::optional<llvm::Triple> DarwinTargetVariantTriple;
@@ -370,6 +374,7 @@ bool AssemblerInvocation::CreateFromArgs(AssemblerInvocation &Opts,
   Opts.RelocationModel =
       std::string(Args.getLastArgValue(OPT_mrelocation_model, "pic"));
   Opts.TargetABI = std::string(Args.getLastArgValue(OPT_target_abi));
+  Opts.LFIConfig = std::string(Args.getLastArgValue(OPT_mlfi_config));
   Opts.IncrementalLinkerCompatible =
       Args.hasArg(OPT_mincremental_linker_compatible);
   Opts.SymbolDefs = Args.getAllArgValues(OPT_defsym);
@@ -565,6 +570,7 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
   MCOptions.AsmVerbose = true;
   MCOptions.MCUseDwarfDirectory = MCTargetOptions::EnableDwarfDirectory;
   MCOptions.ABIName = Opts.TargetABI;
+  MCOptions.LFIConfig = Opts.LFIConfig;
 
   // FIXME: There is a bit of code duplication with addPassesToEmitFile.
   if (Opts.OutputType == AssemblerInvocation::FT_Asm) {

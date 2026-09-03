@@ -18,6 +18,7 @@
 #include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCRegister.h"
 #include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/TargetParser/AArch64TargetParser.h"
 
 #include <optional>
 
@@ -49,8 +50,9 @@ class MCSymbol;
 class AArch64MCLFIRewriter : public MCLFIRewriter {
 public:
   AArch64MCLFIRewriter(MCContext &Ctx, std::unique_ptr<MCRegisterInfo> &&RI,
-                       std::unique_ptr<MCInstrInfo> &&II)
-      : MCLFIRewriter(Ctx, std::move(RI), std::move(II)) {}
+                       std::unique_ptr<MCInstrInfo> &&II);
+
+  void setConfigString(StringRef Config) override;
 
   bool rewriteInst(const MCInst &Inst, MCStreamer &Out,
                    const MCSubtargetInfo &STI) override;
@@ -72,6 +74,14 @@ private:
   /// Most recently seen MCSubtargetInfo.
   const MCSubtargetInfo *LastSTI = nullptr;
 
+  /// The active LFI configuration. Not derived from subtarget features, which
+  /// .arch/.cpu directives reset mid-file.
+  AArch64::LFIConfig Config;
+
+  /// Parse Spec and install it as the active configuration; reports a fatal
+  /// error on an invalid specification.
+  void applyConfig(StringRef Spec);
+
   /// Deferred `.tlsdesccall` symbol. The directive attaches a
   /// R_AARCH64_TLSDESC_CALL relocation to the following BLR. Since LFI inserts
   /// a guard before that BLR, the marker is deferred and re-emitted between
@@ -85,28 +95,20 @@ private:
 
   // Instruction classification. Returns the reserved register that may be
   // modified, or an invalid register if no reserved register is touched.
-  MCRegister mayModifyReserved(const MCInst &Inst,
-                               const MCSubtargetInfo &STI) const;
+  MCRegister mayModifyReserved(const MCInst &Inst) const;
   bool mayModifySP(const MCInst &Inst) const;
 
-  // Large sandbox helpers. In large-sandbox mode, data guards mask the
-  // address with a configurable power-of-two sandbox mask via the reserved
-  // offset register x24 instead of relying on the fixed 4 GiB truncation.
-  bool isLargeSandbox(const MCSubtargetInfo &STI) const;
-
-  // Returns true if the small-sandbox scheme is enabled: the large-sandbox
-  // masking scheme applied to a sandbox that may be smaller than 4 GiB, so
-  // control-flow guards also use the sandbox size mask instead of the fixed
-  // 4 GiB form. Implies the large-sandbox scheme.
-  bool isSmallSandbox(const MCSubtargetInfo &STI) const;
+  // Large sandbox helpers. In large-sandbox mode data guards mask the address
+  // with a power-of-two sandbox mask through x24 instead of relying on the
+  // fixed 4 GiB truncation; small-sandbox mode masks control-flow guards too.
+  bool isLargeSandbox() const { return Config.LargeSandbox; }
+  bool isSmallSandbox() const { return Config.SmallSandbox; }
 
   uint64_t getSandboxMask() const;
   uint64_t getSandboxMaskEncoding() const;
 
   // Instruction emission. emitAddMask emits a data guard by default; pass
-  // ControlFlow=true for guards on branch targets and LR, which may use the
-  // cheaper 4 GiB form in large-sandbox mode (but not in small-sandbox mode,
-  // where the sandbox may be smaller than 4 GiB).
+  // ControlFlow=true for guards on branch targets and LR.
   void emitInst(const MCInst &Inst, MCStreamer &Out,
                 const MCSubtargetInfo &STI);
   void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,

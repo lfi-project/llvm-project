@@ -1382,6 +1382,13 @@ void CodeGenModule::Release() {
       getModule().addModuleFlag(llvm::Module::Min,
                                 "sign-return-address-with-bkey", 2);
 
+    // The LFI configuration is a whole-module ABI property: Error behavior
+    // makes linking modules with different configurations fail.
+    if (getTriple().isLFI() && !CodeGenOpts.LFIConfig.empty())
+      getModule().addModuleFlag(
+          llvm::Module::Error, "lfi-config",
+          llvm::MDString::get(VMContext, CodeGenOpts.LFIConfig));
+
     if (LangOpts.PointerAuthELFGOT)
       getModule().addModuleFlag(llvm::Module::Min, "ptrauth-elf-got", 1);
 
