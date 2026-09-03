@@ -78,9 +78,9 @@ private:
                             const MCSubtargetInfo &STI);
 
   void rewriteIndirectJumpReg(MCRegister Reg, MCStreamer &Out,
-                              const MCSubtargetInfo &STI);
+                              const MCSubtargetInfo &STI, bool NoTrack = false);
   void rewriteIndirectCallReg(MCRegister Reg, MCStreamer &Out,
-                              const MCSubtargetInfo &STI);
+                              const MCSubtargetInfo &STI, bool NoTrack = false);
 
   void rewriteIndirectBranch(const MCInst &Inst, MCStreamer &Out,
                              const MCSubtargetInfo &STI);
