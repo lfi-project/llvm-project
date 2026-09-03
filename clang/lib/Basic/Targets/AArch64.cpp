@@ -416,8 +416,15 @@ void AArch64TargetInfo::getTargetDefines(const LangOptions &Opts,
     Builder.defineMacro("__aarch64__");
   }
 
-  if (getTriple().isLFI())
+  if (getTriple().isLFI()) {
     Builder.defineMacro("__LFI__");
+    if (HasLFINoLoads)
+      Builder.defineMacro("__LFI_NO_LOADS__");
+    if (HasLFINoStores)
+      Builder.defineMacro("__LFI_NO_STORES__");
+    if (HasLFILargeSandbox)
+      Builder.defineMacro("__LFI_LARGE_SANDBOX__");
+  }
 
   // Inline assembly supports AArch64 flag outputs.
   Builder.defineMacro("__GCC_ASM_FLAG_OUTPUTS__");
@@ -1159,6 +1166,12 @@ bool AArch64TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasWFxT = true;
     if (Feature == "-fmv")
       HasFMV = false;
+    if (Feature == "+no-lfi-loads")
+      HasLFINoLoads = true;
+    if (Feature == "+no-lfi-stores")
+      HasLFINoStores = true;
+    if (Feature == "+lfi-large-sandbox")
+      HasLFILargeSandbox = true;
     if (Feature == "+crc")
       HasCRC = true;
     if (Feature == "+rcpc")

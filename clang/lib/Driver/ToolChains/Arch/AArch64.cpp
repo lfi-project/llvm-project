@@ -10,6 +10,7 @@
 #include "clang/Driver/CommonArgs.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Options/Options.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/TargetParser/AArch64TargetParser.h"
 #include "llvm/TargetParser/Host.h"
@@ -547,6 +548,30 @@ void aarch64::getAArch64TargetFeatures(const Driver &D,
 
   if (Args.getLastArg(options::OPT_mno_bti_at_return_twice))
     Features.push_back("+no-bti-at-return-twice");
+
+  // Translate the high-level -mlfi=<list> option into LFI subtarget features.
+  // Each comma-separated token names an LFI configuration knob. no-segue,
+  // gs-context, and use-ret are X86-only and rejected here.
+  if (const Arg *A = Args.getLastArg(options::OPT_mlfi_EQ)) {
+    if (!Triple.isLFI()) {
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << A->getSpelling() << Triple.getTriple();
+    } else {
+      for (StringRef Value : A->getValues()) {
+        StringRef Feature = llvm::StringSwitch<StringRef>(Value)
+                                .Case("no-loads", "+no-lfi-loads")
+                                .Case("no-stores", "+no-lfi-stores")
+                                .Case("large-sandbox", "+lfi-large-sandbox")
+                                .Default("");
+        if (Feature.empty()) {
+          D.Diag(diag::err_drv_unsupported_option_argument)
+              << A->getSpelling() << Value;
+          continue;
+        }
+        Features.push_back(Feature);
+      }
+    }
+  }
 }
 
 /// Is the triple {aarch64.aarch64_be}-none-elf?

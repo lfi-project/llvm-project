@@ -458,6 +458,18 @@ bool X86TargetInfo::handleTargetFeatures(std::vector<std::string> &Features,
       HasJMPABS = true;
     } else if (Feature == "+branch-hint") {
       HasBranchHint = true;
+    } else if (Feature == "+no-lfi-loads") {
+      HasLFINoLoads = true;
+    } else if (Feature == "+no-lfi-stores") {
+      HasLFINoStores = true;
+    } else if (Feature == "+no-lfi-segue") {
+      HasLFINoSegue = true;
+    } else if (Feature == "+lfi-gs-context") {
+      HasLFIGSContext = true;
+    } else if (Feature == "+lfi-large-sandbox") {
+      HasLFILargeSandbox = true;
+    } else if (Feature == "+lfi-use-ret") {
+      HasLFIUseRet = true;
     }
 
     X86SSEEnum Level = llvm::StringSwitch<X86SSEEnum>(Feature)
@@ -539,6 +551,18 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
 
   if (getTriple().isLFI()) {
     Builder.defineMacro("__LFI__");
+    if (HasLFINoLoads)
+      Builder.defineMacro("__LFI_NO_LOADS__");
+    if (HasLFINoStores)
+      Builder.defineMacro("__LFI_NO_STORES__");
+    if (HasLFINoSegue)
+      Builder.defineMacro("__LFI_NO_SEGUE__");
+    if (HasLFIGSContext)
+      Builder.defineMacro("__LFI_GS_CONTEXT__");
+    if (HasLFILargeSandbox)
+      Builder.defineMacro("__LFI_LARGE_SANDBOX__");
+    if (HasLFIUseRet)
+      Builder.defineMacro("__LFI_USE_RET__");
   }
 
   Builder.defineMacro("__SEG_GS");

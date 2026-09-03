@@ -12,6 +12,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/X86TargetParser.h"
@@ -313,6 +314,52 @@ void x86::getX86TargetFeatures(const Driver &D, const llvm::Triple &Triple,
     } else if (Scope != "none") {
       D.Diag(diag::err_drv_unsupported_option_argument)
           << A->getSpelling() << Scope;
+    }
+  }
+
+  // Translate the high-level -mlfi=<list> option into LFI subtarget features.
+  // Each comma-separated token names an LFI configuration knob. gs-context and
+  // large-sandbox both require Segue to be disabled, so they imply
+  // +no-lfi-segue (added once). large-sandbox additionally implies
+  // +lfi-gs-context: the context register file moves to the %gs segment base,
+  // freeing r15 to serve as the sandbox mask register.
+  if (const Arg *A = Args.getLastArg(options::OPT_mlfi_EQ)) {
+    if (!Triple.isLFI()) {
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << A->getSpelling() << Triple.getTriple();
+    } else {
+      bool NeedNoSegue = false;
+      bool NeedGSContext = false;
+      bool HasGSContext = false;
+      for (StringRef Value : A->getValues()) {
+        if (Value == "no-segue") {
+          NeedNoSegue = true;
+          continue;
+        }
+        StringRef Feature = llvm::StringSwitch<StringRef>(Value)
+                                .Case("no-loads", "+no-lfi-loads")
+                                .Case("no-stores", "+no-lfi-stores")
+                                .Case("gs-context", "+lfi-gs-context")
+                                .Case("large-sandbox", "+lfi-large-sandbox")
+                                .Case("use-ret", "+lfi-use-ret")
+                                .Default("");
+        if (Feature.empty()) {
+          D.Diag(diag::err_drv_unsupported_option_argument)
+              << A->getSpelling() << Value;
+          continue;
+        }
+        Features.push_back(Feature);
+        if (Value == "gs-context")
+          HasGSContext = true;
+        if (Value == "gs-context" || Value == "large-sandbox")
+          NeedNoSegue = true;
+        if (Value == "large-sandbox")
+          NeedGSContext = true;
+      }
+      if (NeedGSContext && !HasGSContext)
+        Features.push_back("+lfi-gs-context");
+      if (NeedNoSegue)
+        Features.push_back("+no-lfi-segue");
     }
   }
 

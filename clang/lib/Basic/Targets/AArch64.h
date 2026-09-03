@@ -102,6 +102,9 @@ class LLVM_LIBRARY_VISIBILITY AArch64TargetInfo : public TargetInfo {
   bool HasJSCVT = false;
   bool HasFCMA = false;
   bool HasNoFP = false;
+  bool HasLFINoLoads = false;
+  bool HasLFINoStores = false;
+  bool HasLFILargeSandbox = false;
   bool HasNoNeon = false;
   bool HasNoSVE = false;
   bool HasFMV = true;

@@ -156,6 +156,13 @@ class LLVM_LIBRARY_VISIBILITY X86TargetInfo : public TargetInfo {
   bool HasInlineAsmUseGPR32 = false;
   bool HasBranchHint = false;
 
+  bool HasLFINoLoads = false;
+  bool HasLFINoStores = false;
+  bool HasLFINoSegue = false;
+  bool HasLFIGSContext = false;
+  bool HasLFILargeSandbox = false;
+  bool HasLFIUseRet = false;
+
 protected:
   llvm::X86::CPUKind CPU = llvm::X86::CK_None;
 
