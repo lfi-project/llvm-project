@@ -1,4 +1,4 @@
-// RUN: llvm-mc -triple aarch64_lfi -mattr=+no-lfi-loads %s | FileCheck %s
+// RUN: llvm-mc -triple aarch64_lfi --lfi-config=no-loads %s | FileCheck %s
 
 // Stores-only mode: loads pass through, stores are sandboxed.
 

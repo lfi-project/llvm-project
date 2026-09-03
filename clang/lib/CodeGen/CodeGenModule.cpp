@@ -1619,6 +1619,13 @@ void CodeGenModule::Release() {
       getModule().addModuleFlag(llvm::Module::Max,
                                 "aarch64-jump-table-hardening", 1);
 
+    // The LFI configuration is a whole-module ABI property: Error behavior
+    // makes linking modules with different configurations fail.
+    if (getTriple().isLFI() && !CodeGenOpts.LFIConfig.empty())
+      getModule().addModuleFlag(
+          llvm::Module::Error, "lfi-config",
+          llvm::MDString::get(VMContext, CodeGenOpts.LFIConfig));
+
     if (getTriple().isOSBinFormatELF()) {
       // The following ptrauth-* flags are emitted unconditionally: value 1 if
       // the corresponding feature is set and value 0 otherwise. It is required

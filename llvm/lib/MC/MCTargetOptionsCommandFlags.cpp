@@ -62,6 +62,7 @@ MCOPT(bool, X86Sse2Avx)
 MCOPT(RelocSectionSymType, RelocSectionSym)
 MCOPT(bool, LargeEHEncoding)
 MCSTROPT(ABIName)
+MCSTROPT(LFIConfig)
 MCSTROPT(AsSecureLogFile)
 
 llvm::mc::RegisterMCTargetOptionsFlags::RegisterMCTargetOptionsFlags() {
@@ -203,6 +204,14 @@ llvm::mc::RegisterMCTargetOptionsFlags::RegisterMCTargetOptionsFlags() {
       "as-secure-log-file", cl::desc("As secure log file name"), cl::Hidden);
   MCBINDOPT(AsSecureLogFile);
 
+  static cl::opt<std::string> LFIConfig(
+      "lfi-config",
+      cl::desc("LFI sandboxing configuration (comma-separated list of "
+               "no-loads, no-stores, large-sandbox, small-sandbox, "
+               "sandbox-bits=<N>)"),
+      cl::init(""));
+  MCBINDOPT(LFIConfig);
+
 #undef MCBINDOPT
 }
 
@@ -215,6 +224,7 @@ MCTargetOptions llvm::mc::InitMCTargetOptionsFromFlags() {
   Options.DwarfVersion = getDwarfVersion();
   Options.ShowMCInst = getShowMCInst();
   Options.ABIName = getABIName();
+  Options.LFIConfig = getLFIConfig();
   Options.MCFatalWarnings = getFatalWarnings();
   Options.MCNoWarn = getNoWarn();
   Options.MCNoDeprecatedWarn = getNoDeprecatedWarn();

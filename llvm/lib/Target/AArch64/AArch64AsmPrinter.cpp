@@ -53,6 +53,7 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstBuilder.h"
+#include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
@@ -416,6 +417,13 @@ static bool getOptionalBooleanModuleFlag(Module &M, StringRef Name) {
 
 void AArch64AsmPrinter::emitStartOfAsmFile(Module &M) {
   const Triple &TT = TM.getTargetTriple();
+
+  // Install the module's LFI configuration into the MC LFI rewriter.
+  if (TT.isLFI())
+    if (auto *ConfigFlag =
+            dyn_cast_or_null<MDString>(M.getModuleFlag("lfi-config")))
+      if (MCLFIRewriter *Rewriter = OutStreamer->getLFIRewriter())
+        Rewriter->setConfigString(ConfigFlag->getString());
 
   if (TT.isOSBinFormatCOFF()) {
     emitCOFFFeatureSymbol(M);

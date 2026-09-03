@@ -342,6 +342,10 @@ public:
   /// attribute in the skeleton CU.
   std::string SplitDwarfFile;
 
+  /// Canonical LFI sandboxing configuration, from -mlfi-config. Empty for
+  /// non-LFI targets.
+  std::string LFIConfig;
+
   /// Output filename for the split debug info, not used in the skeleton CU.
   std::string SplitDwarfOutput;
 

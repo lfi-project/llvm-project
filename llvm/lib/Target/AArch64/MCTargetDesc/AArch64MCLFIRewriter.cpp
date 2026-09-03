@@ -17,12 +17,15 @@
 #include "Utils/AArch64BaseInfo.h"
 
 #include "llvm/ADT/Twine.h"
+#include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Error.h"
 
 using namespace llvm;
 
@@ -81,10 +84,24 @@ enum LFIAddrMode : uint8_t {
 #include "AArch64GenSystemOperands.inc"
 } // namespace llvm::AArch64
 
-static cl::opt<unsigned>
-    LFISandboxBits("aarch64-lfi-sandbox-bits", cl::Hidden,
-                   cl::desc("Number of address bits for the LFI large sandbox"),
-                   cl::init(32));
+AArch64MCLFIRewriter::AArch64MCLFIRewriter(MCContext &Ctx,
+                                           std::unique_ptr<MCRegisterInfo> &&RI,
+                                           std::unique_ptr<MCInstrInfo> &&II)
+    : MCLFIRewriter(Ctx, std::move(RI), std::move(II)) {
+  applyConfig(Ctx.getTargetOptions().LFIConfig);
+}
+
+void AArch64MCLFIRewriter::setConfigString(StringRef Spec) {
+  applyConfig(Spec);
+}
+
+void AArch64MCLFIRewriter::applyConfig(StringRef Spec) {
+  Expected<AArch64::LFIConfig> ConfigOrErr = AArch64::parseLFIConfig(Spec);
+  if (!ConfigOrErr)
+    reportFatalUsageError(Twine("invalid LFI configuration '") + Spec +
+                          "': " + toString(ConfigOrErr.takeError()));
+  Config = *ConfigOrErr;
+}
 
 // LFI reserved registers.
 static constexpr MCRegister LFIBaseReg = AArch64::X27;
@@ -306,14 +323,12 @@ bool AArch64MCLFIRewriter::mayModifySP(const MCInst &Inst) const {
   return mayModifyRegister(Inst, AArch64::SP);
 }
 
-MCRegister
-AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst,
-                                        const MCSubtargetInfo &STI) const {
+MCRegister AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
   for (MCRegister Reg : {LFIAddrReg, LFIBaseReg, LFICtxReg}) {
     if (mayModifyRegister(Inst, Reg))
       return Reg;
   }
-  if (isLargeSandbox(STI) && mayModifyRegister(Inst, LFIOffsetReg))
+  if (isLargeSandbox() && mayModifyRegister(Inst, LFIOffsetReg))
     return LFIOffsetReg;
   return {};
 }
@@ -345,18 +360,10 @@ void AArch64MCLFIRewriter::finish(MCStreamer &Out) {
   }
 }
 
-bool AArch64MCLFIRewriter::isLargeSandbox(const MCSubtargetInfo &STI) const {
-  return STI.hasFeature(AArch64::FeatureLFILargeSandbox);
-}
-
-bool AArch64MCLFIRewriter::isSmallSandbox(const MCSubtargetInfo &STI) const {
-  return STI.hasFeature(AArch64::FeatureLFISmallSandbox);
-}
-
 uint64_t AArch64MCLFIRewriter::getSandboxMask() const {
-  assert(LFISandboxBits > 0 && LFISandboxBits < 64 &&
+  assert(Config.SandboxBits > 0 && Config.SandboxBits < 64 &&
          "sandbox bits must be in [1, 63]");
-  return (1ULL << LFISandboxBits) - 1;
+  return (1ULL << Config.SandboxBits) - 1;
 }
 
 uint64_t AArch64MCLFIRewriter::getSandboxMaskEncoding() const {
@@ -374,7 +381,7 @@ void AArch64MCLFIRewriter::emitInst(const MCInst &Inst, MCStreamer &Out,
         mayModifyRegister(Inst, *ActiveGuardReg) ||
         mayModifyRegister(Inst, getWRegFromXReg(*ActiveGuardReg)) ||
         mayModifyRegister(Inst, LFIAddrReg) ||
-        (isLargeSandbox(STI) && mayModifyRegister(Inst, LFIOffsetReg)))
+        (isLargeSandbox() && mayModifyRegister(Inst, LFIOffsetReg)))
       ActiveGuardReg = std::nullopt;
   }
 
@@ -385,21 +392,14 @@ void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
                                        MCStreamer &Out,
                                        const MCSubtargetInfo &STI,
                                        bool ControlFlow) {
-  // In large sandbox mode, control flow guards (LR, indirect branches/calls)
-  // can use the cheaper single-instruction 4 GiB guard form because the
-  // sandbox runtime guarantees the code segment lives in the first 4 GiB of
-  // the sandbox region. Data guards must still use the wide mask. In
-  // small-sandbox mode the sandbox may be smaller than 4 GiB, so control flow
-  // guards use the wide mask as well.
-  bool Use4GiBGuard =
-      !isLargeSandbox(STI) || (ControlFlow && !isSmallSandbox(STI));
+  // Control flow guards can use the cheaper 4 GiB form in large-sandbox mode:
+  // the runtime guarantees the code segment lives in the first 4 GiB of the
+  // sandbox. In small-sandbox mode the sandbox may be smaller than that.
+  bool Use4GiBGuard = !isLargeSandbox() || (ControlFlow && !isSmallSandbox());
 
-  // CF and data guards produce different x28 values for the same Src when
-  // they use different forms, so they must not elide each other or share
-  // guard state. This only happens in large-sandbox (but not small-sandbox)
-  // mode; in every other configuration the two forms are identical and the
-  // ControlFlow bit has no semantic effect.
-  bool MixedKind = isLargeSandbox(STI) && ControlFlow && !isSmallSandbox(STI);
+  // When the two forms differ they produce different x28 values for the same
+  // Src, so they must not elide each other or share guard state.
+  bool MixedKind = isLargeSandbox() && ControlFlow && !isSmallSandbox();
 
   // If x28 already holds the guarded value of Src, this guard is redundant and
   // can be skipped.
@@ -528,7 +528,7 @@ void AArch64MCLFIRewriter::emitAddRegExtend(MCRegister Dest, MCRegister Src1,
 void AArch64MCLFIRewriter::emitMemRoW(unsigned Opcode, const MCOperand &DataOp,
                                       MCRegister BaseReg, MCStreamer &Out,
                                       const MCSubtargetInfo &STI) {
-  if (isLargeSandbox(STI)) {
+  if (isLargeSandbox()) {
     // Large sandbox: and x24, BaseReg, #mask; Op DataOp, [x27, x24].
     MCInst AndInst;
     AndInst.setOpcode(AArch64::ANDXri);
@@ -934,8 +934,8 @@ void AArch64MCLFIRewriter::rewriteLoadStore(const MCInst &Inst, MCStreamer &Out,
   bool IsStore = mayStore(Inst);
   bool IsLoad = mayLoad(Inst) || mayPrefetch(Inst);
 
-  bool SkipLoads = STI.hasFeature(AArch64::FeatureNoLFILoads);
-  bool SkipStores = STI.hasFeature(AArch64::FeatureNoLFIStores);
+  bool SkipLoads = Config.NoLoads;
+  bool SkipStores = Config.NoStores;
 
   if ((!IsLoad || SkipLoads) && (!IsStore || SkipStores))
     return emitInst(Inst, Out, STI);
@@ -963,8 +963,8 @@ void AArch64MCLFIRewriter::rewriteSPModification(const MCInst &Inst,
   }
 
   // No stack sandboxing if sandboxing is disabled for both loads and stores.
-  bool SkipLoads = STI.hasFeature(AArch64::FeatureNoLFILoads);
-  bool SkipStores = STI.hasFeature(AArch64::FeatureNoLFIStores);
+  bool SkipLoads = Config.NoLoads;
+  bool SkipStores = Config.NoStores;
   if (SkipLoads && SkipStores)
     return emitInst(Inst, Out, STI);
 
@@ -1009,7 +1009,7 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   }
 
   // Reserved register modification is an error.
-  if (MCRegister Reg = mayModifyReserved(Inst, STI)) {
+  if (MCRegister Reg = mayModifyReserved(Inst)) {
     error(Inst, Twine("illegal modification of reserved LFI register ") +
                     RegInfo->getName(Reg));
     return;

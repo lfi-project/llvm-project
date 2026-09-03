@@ -76,6 +76,10 @@ public:
 
   std::optional<unsigned> OutputAsmVariant;
 
+  /// LFI sandboxing configuration specification for the MC LFI rewriter;
+  /// empty selects the default configuration.
+  std::string LFIConfig;
+
   EmitDwarfUnwindType EmitDwarfUnwind;
 
   int DwarfVersion = 0;

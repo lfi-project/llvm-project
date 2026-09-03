@@ -10,6 +10,7 @@
 #include "clang/Driver/CommonArgs.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Options/Options.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/TargetParser/AArch64TargetParser.h"
@@ -549,30 +550,46 @@ void aarch64::getAArch64TargetFeatures(const Driver &D,
   if (Args.getLastArg(options::OPT_mno_bti_at_return_twice))
     Features.push_back("+no-bti-at-return-twice");
 
-  // Translate the high-level -mlfi=<list> option into LFI subtarget features.
-  // Each comma-separated token names an LFI configuration knob. no-segue,
-  // gs-context, and use-ret are X86-only and rejected here.
   if (const Arg *A = Args.getLastArg(options::OPT_mlfi_EQ)) {
     if (!Triple.isLFI()) {
       D.Diag(diag::err_drv_unsupported_opt_for_target)
           << A->getSpelling() << Triple.getTriple();
     } else {
-      for (StringRef Value : A->getValues()) {
-        StringRef Feature = llvm::StringSwitch<StringRef>(Value)
-                                .Case("no-loads", "+no-lfi-loads")
-                                .Case("no-stores", "+no-lfi-stores")
-                                .Case("large-sandbox", "+lfi-large-sandbox")
-                                .Case("small-sandbox", "+lfi-small-sandbox")
-                                .Default("");
-        if (Feature.empty()) {
-          D.Diag(diag::err_drv_unsupported_option_argument)
-              << A->getSpelling() << Value;
-          continue;
-        }
-        Features.push_back(Feature);
+      llvm::Expected<llvm::AArch64::LFIConfig> Config =
+          llvm::AArch64::parseLFIConfig(llvm::join(A->getValues(), ","));
+      if (!Config) {
+        D.Diag(diag::err_drv_unsupported_option_argument)
+            << A->getSpelling() << toString(Config.takeError());
+      } else {
+        if (Config->NoLoads)
+          Features.push_back("+no-lfi-loads");
+        if (Config->NoStores)
+          Features.push_back("+no-lfi-stores");
+        if (Config->SmallSandbox)
+          Features.push_back("+lfi-small-sandbox");
+        else if (Config->LargeSandbox)
+          Features.push_back("+lfi-large-sandbox");
       }
     }
   }
+}
+
+std::optional<std::string>
+aarch64::getAArch64LFIConfigString(const llvm::opt::ArgList &Args,
+                                   const llvm::Triple &Triple) {
+  if (!Triple.isLFI())
+    return std::nullopt;
+  // Invalid specifications are diagnosed by getAArch64TargetFeatures.
+  std::string Spec;
+  if (const Arg *A = Args.getLastArg(options::OPT_mlfi_EQ))
+    Spec = llvm::join(A->getValues(), ",");
+  llvm::Expected<llvm::AArch64::LFIConfig> Config =
+      llvm::AArch64::parseLFIConfig(Spec);
+  if (!Config) {
+    llvm::consumeError(Config.takeError());
+    return std::nullopt;
+  }
+  return llvm::AArch64::getLFIConfigString(*Config);
 }
 
 /// Is the triple {aarch64.aarch64_be}-none-elf?

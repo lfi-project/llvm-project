@@ -35,6 +35,10 @@ getAArch64TargetTuneCPU(const llvm::opt::ArgList &Args,
 
 bool isAArch64BareMetal(const llvm::Triple &Triple);
 
+std::optional<std::string>
+getAArch64LFIConfigString(const llvm::opt::ArgList &Args,
+                          const llvm::Triple &Triple);
+
 } // end namespace aarch64
 } // end namespace target
 } // end namespace driver

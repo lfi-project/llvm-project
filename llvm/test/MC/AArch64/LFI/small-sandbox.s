@@ -1,5 +1,5 @@
-// RUN: llvm-mc -triple aarch64_lfi -mattr=+lfi-small-sandbox --aarch64-lfi-guard-elim=false --aarch64-lfi-sandbox-bits=30 %s | FileCheck %s
-// RUN: llvm-mc -triple aarch64_lfi -mattr=+lfi-small-sandbox --aarch64-lfi-sandbox-bits=30 %s | FileCheck %s --check-prefix=ELIM
+// RUN: llvm-mc -triple aarch64_lfi --lfi-config=small-sandbox,sandbox-bits=30 --aarch64-lfi-guard-elim=false %s | FileCheck %s
+// RUN: llvm-mc -triple aarch64_lfi --lfi-config=small-sandbox,sandbox-bits=30 %s | FileCheck %s --check-prefix=ELIM
 
 // Small-sandbox mode applies the large-sandbox masking scheme to a sandbox
 // that may be smaller than 4GiB, so control-flow guards use the sandbox size

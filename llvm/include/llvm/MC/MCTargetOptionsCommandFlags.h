@@ -70,6 +70,8 @@ LLVM_ABI bool getLargeEHEncoding();
 
 LLVM_ABI StringRef getABIName();
 
+LLVM_ABI StringRef getLFIConfig();
+
 LLVM_ABI StringRef getAsSecureLogFile();
 
 /// Create this object with static storage to register mc-related command

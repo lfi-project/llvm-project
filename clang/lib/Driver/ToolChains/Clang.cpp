@@ -1665,6 +1665,12 @@ void Clang::AddAArch64TargetArgs(const ArgList &Args,
 
   RenderAArch64ABI(Triple, Args, CmdArgs);
 
+  if (std::optional<std::string> LFIConfig =
+          aarch64::getAArch64LFIConfigString(Args, Triple)) {
+    CmdArgs.push_back("-mlfi-config");
+    CmdArgs.push_back(Args.MakeArgString(*LFIConfig));
+  }
+
   // Forward the -mglobal-merge option for explicit control over the pass.
   if (Arg *A = Args.getLastArg(options::OPT_mglobal_merge,
                                options::OPT_mno_global_merge)) {
@@ -9304,6 +9310,13 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
 
   // Add the target features
   getTargetFeatures(D, Triple, Args, CmdArgs, true);
+
+  if (Triple.isAArch64())
+    if (std::optional<std::string> LFIConfig =
+            aarch64::getAArch64LFIConfigString(Args, Triple)) {
+      CmdArgs.push_back("-mlfi-config");
+      CmdArgs.push_back(Args.MakeArgString(*LFIConfig));
+    }
 
   // Ignore explicit -force_cpusubtype_ALL option.
   (void)Args.hasArg(options::OPT_force__cpusubtype__ALL);

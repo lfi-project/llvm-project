@@ -21,6 +21,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringTable.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/VersionTuple.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
@@ -294,6 +295,26 @@ LLVM_ABI void PrintSupportedExtensions();
 
 LLVM_ABI void
 printEnabledExtensions(const std::set<StringRef> &EnabledFeatureNames);
+
+// The LFI sandboxing configuration, as selected by clang's -mlfi= option.
+struct LFIConfig {
+  bool NoLoads = false;
+  bool NoStores = false;
+  // SmallSandbox implies LargeSandbox.
+  bool LargeSandbox = false;
+  bool SmallSandbox = false;
+  // log2 of the sandbox size.
+  unsigned SandboxBits = 32;
+};
+
+// Parse a comma-separated LFI configuration specification: no-loads,
+// no-stores, large-sandbox, small-sandbox, sandbox-bits=<N>. An empty
+// specification yields the default configuration.
+LLVM_ABI Expected<LFIConfig> parseLFIConfig(StringRef Spec);
+
+// Render Config back to its canonical specification string. Equal
+// configurations always render to equal strings.
+LLVM_ABI std::string getLFIConfigString(const LFIConfig &Config);
 
 } // namespace AArch64
 } // namespace llvm

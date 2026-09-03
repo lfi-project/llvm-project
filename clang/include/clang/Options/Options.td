@@ -5964,9 +5964,9 @@ def mharden_sls_EQ : Joined<["-"], "mharden-sls=">, Group<m_Group>,
 def mlfi_EQ : CommaJoined<["-"], "mlfi=">, Group<m_Group>,
   HelpText<"Configure Lightweight Fault Isolation (LFI) sandboxing (LFI targets"
            " only). <arg> is a comma-separated list of: no-loads, no-stores,"
-           " large-sandbox, small-sandbox, no-segue(X86), gs-context(X86),"
-           " use-ret(X86)">,
-  Values<"no-loads,no-stores,large-sandbox,small-sandbox,no-segue,gs-context,use-ret">;
+           " large-sandbox, small-sandbox, sandbox-bits=<N>(AArch64),"
+           " no-segue(X86), gs-context(X86), use-ret(X86)">,
+  Values<"no-loads,no-stores,large-sandbox,small-sandbox,sandbox-bits=,no-segue,gs-context,use-ret">;
 
 def matomics : Flag<["-"], "matomics">, Group<m_wasm_Features_Group>;
 def mno_atomics : Flag<["-"], "mno-atomics">, Group<m_wasm_Features_Group>;
@@ -7766,6 +7766,10 @@ let Visibility = [CC1Option, CC1AsOption] in {
 def target_abi : Separate<["-"], "target-abi">,
   HelpText<"Target a particular ABI type">,
   MarshallingInfoString<TargetOpts<"ABI">>;
+def mlfi_config : Separate<["-"], "mlfi-config">,
+  HelpText<"Canonical LFI sandboxing configuration (computed by the driver"
+           " from -mlfi=)">,
+  MarshallingInfoString<CodeGenOpts<"LFIConfig">>;
 def target_sdk_version_EQ : Joined<["-"], "target-sdk-version=">,
   HelpText<"The version of target SDK used for compilation">;
 def darwin_target_variant_sdk_version_EQ : Joined<["-"],

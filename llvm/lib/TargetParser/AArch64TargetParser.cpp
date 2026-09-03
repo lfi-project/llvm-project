@@ -12,6 +12,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/TargetParser/AArch64TargetParser.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
@@ -415,4 +417,59 @@ void AArch64::ExtensionSet::dump() const {
 const AArch64::ExtensionInfo &
 AArch64::getExtensionByID(AArch64::ArchExtKind ExtID) {
   return lookupExtensionByID(ExtID);
+}
+
+Expected<AArch64::LFIConfig> AArch64::parseLFIConfig(StringRef Spec) {
+  LFIConfig Config;
+  bool ExplicitBits = false;
+
+  SmallVector<StringRef, 4> Tokens;
+  Spec.split(Tokens, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (StringRef Token : Tokens) {
+    if (Token == "no-loads") {
+      Config.NoLoads = true;
+    } else if (Token == "no-stores") {
+      Config.NoStores = true;
+    } else if (Token == "large-sandbox") {
+      Config.LargeSandbox = true;
+    } else if (Token == "small-sandbox") {
+      Config.SmallSandbox = true;
+      Config.LargeSandbox = true;
+    } else if (Token.consume_front("sandbox-bits=")) {
+      if (Token.getAsInteger(10, Config.SandboxBits) ||
+          Config.SandboxBits < 1 || Config.SandboxBits > 63)
+        return createStringError(
+            "invalid sandbox-bits value '" + Token +
+            "' (expected an integer in [1, 63])");
+      ExplicitBits = true;
+    } else {
+      return createStringError("unknown LFI configuration token '" + Token +
+                               "'");
+    }
+  }
+
+  if (ExplicitBits && Config.SandboxBits != 32 && !Config.LargeSandbox)
+    return createStringError(
+        "sandbox-bits=" + Twine(Config.SandboxBits) +
+        " requires small-sandbox or large-sandbox");
+  if (Config.SandboxBits < 32 && !Config.SmallSandbox)
+    return createStringError("sandbox-bits=" + Twine(Config.SandboxBits) +
+                             " requires small-sandbox");
+
+  return Config;
+}
+
+std::string AArch64::getLFIConfigString(const LFIConfig &Config) {
+  std::string Str;
+  raw_string_ostream OS(Str);
+  if (Config.NoLoads)
+    OS << "no-loads,";
+  if (Config.NoStores)
+    OS << "no-stores,";
+  if (Config.SmallSandbox)
+    OS << "small-sandbox,";
+  else if (Config.LargeSandbox)
+    OS << "large-sandbox,";
+  OS << "sandbox-bits=" << Config.SandboxBits;
+  return Str;
 }
