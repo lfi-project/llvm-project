@@ -867,268 +867,209 @@ bool X86::X86MCLFIRewriter::emitSandboxMemOps(MCInst &Inst,
 // Opcode demotion (64-bit -> 32-bit)
 //===----------------------------------------------------------------------===//
 
-// Some 64-bit opcodes have a different "normalized" form when used with a
-// 32-bit operand register; map them to a canonical form before demotion.
+// The x87 arithmetic instructions come in two spellings that differ in which
+// stack slot is the destination. Map the "%st(i) is the destination" form onto
+// its counterpart so the rewriter has a single spelling to match against.
+// Returns the input unchanged if there is nothing to normalize.
+#define NORMALIZE_FP(NAME)                                                     \
+  case X86::NAME##_FrST0:                                                      \
+    return X86::NAME##_FST0r;
+
 static unsigned normalizeOpcode(unsigned Op) {
   switch (Op) {
-  case X86::ADD_FrST0:
-    return X86::ADD_FST0r;
-  case X86::DIVR_FrST0:
-    return X86::DIVR_FST0r;
-  case X86::DIV_FrST0:
-    return X86::DIV_FST0r;
-  case X86::MUL_FrST0:
-    return X86::MUL_FST0r;
-  case X86::SUBR_FrST0:
-    return X86::SUBR_FST0r;
-  case X86::SUB_FrST0:
-    return X86::SUB_FST0r;
-  default:
-    return Op;
+    NORMALIZE_FP(ADD)
+    NORMALIZE_FP(DIV) NORMALIZE_FP(DIVR) NORMALIZE_FP(MUL) NORMALIZE_FP(SUB)
+        NORMALIZE_FP(SUBR) default : return Op;
   }
 }
 
+#undef NORMALIZE_FP
+
+// Map a 64-bit opcode to the 32-bit opcode that performs the same operation on
+// the 32-bit subregisters. Returns the input unchanged if it has no 32-bit
+// counterpart, so callers can test for that by comparing against the input.
+//
+// The mapping is written with macros because it is almost entirely mechanical:
+// only the cases at the bottom name their 32-bit form differently.
+
+// FOO64<suffix> -> FOO32<suffix>.
+#define DEMOTE(NAME, SUFFIX)                                                   \
+  case X86::NAME##64##SUFFIX:                                                  \
+    return X86::NAME##32##SUFFIX;
+
+// FOO64<suffix> -> FOO<suffix>, for mnemonics that spell out the operand width.
+#define DEMOTE_CVT(NAME, SUFFIX)                                               \
+  case X86::NAME##64##SUFFIX:                                                  \
+    return X86::NAME##SUFFIX;
+
+#define DEMOTE_RR_RM(NAME) DEMOTE(NAME, rr) DEMOTE(NAME, rm)
+
+#define DEMOTE_ALU(NAME)                                                       \
+  DEMOTE_RR_RM(NAME)                                                           \
+  DEMOTE(NAME, ri8)                                                            \
+  case X86::NAME##64ri32:                                                      \
+    return X86::NAME##32ri;
+
 static unsigned demoteOpcode(unsigned Opcode) {
   switch (Opcode) {
-  case X86::ADC64rr:    return X86::ADC32rr;
-  case X86::ADC64ri8:   return X86::ADC32ri8;
-  case X86::ADC64ri32:  return X86::ADC32ri;
-  case X86::ADC64rm:    return X86::ADC32rm;
-  case X86::ADCX64rr:   return X86::ADCX32rr;
-  case X86::ADCX64rm:   return X86::ADCX32rm;
-  case X86::ADD64rr:    return X86::ADD32rr;
-  case X86::ADD64ri8:   return X86::ADD32ri8;
-  case X86::ADD64ri32:  return X86::ADD32ri;
-  case X86::ADD64rm:    return X86::ADD32rm;
-  case X86::ADOX64rr:   return X86::ADOX32rr;
-  case X86::ADOX64rm:   return X86::ADOX32rm;
-  case X86::ANDN64rr:   return X86::ANDN32rr;
-  case X86::ANDN64rm:   return X86::ANDN32rm;
-  case X86::AND64rr:    return X86::AND32rr;
-  case X86::AND64ri8:   return X86::AND32ri8;
-  case X86::AND64ri32:  return X86::AND32ri;
-  case X86::AND64rm:    return X86::AND32rm;
-  case X86::BEXTRI64ri: return X86::BEXTRI32ri;
-  case X86::BEXTRI64mi: return X86::BEXTRI32mi;
-  case X86::BEXTR64rr:  return X86::BEXTR32rr;
-  case X86::BEXTR64rm:  return X86::BEXTR32rm;
-  case X86::BLCFILL64rr:return X86::BLCFILL32rr;
-  case X86::BLCFILL64rm:return X86::BLCFILL32rm;
-  case X86::BLCI64rr:   return X86::BLCI32rr;
-  case X86::BLCI64rm:   return X86::BLCI32rm;
-  case X86::BLCIC64rr:  return X86::BLCIC32rr;
-  case X86::BLCIC64rm:  return X86::BLCIC32rm;
-  case X86::BLCMSK64rr: return X86::BLCMSK32rr;
-  case X86::BLCMSK64rm: return X86::BLCMSK32rm;
-  case X86::BLCS64rr:   return X86::BLCS32rr;
-  case X86::BLCS64rm:   return X86::BLCS32rm;
-  case X86::BLSFILL64rr:return X86::BLSFILL32rr;
-  case X86::BLSFILL64rm:return X86::BLSFILL32rm;
-  case X86::BLSIC64rr:  return X86::BLSIC32rr;
-  case X86::BLSIC64rm:  return X86::BLSIC32rm;
-  case X86::BLSI64rr:   return X86::BLSI32rr;
-  case X86::BLSI64rm:   return X86::BLSI32rm;
-  case X86::BLSMSK64rr: return X86::BLSMSK32rr;
-  case X86::BLSMSK64rm: return X86::BLSMSK32rm;
-  case X86::BLSR64rr:   return X86::BLSR32rr;
-  case X86::BLSR64rm:   return X86::BLSR32rm;
-  case X86::BSF64rr:    return X86::BSF32rr;
-  case X86::BSF64rm:    return X86::BSF32rm;
-  case X86::BSR64rr:    return X86::BSR32rr;
-  case X86::BSR64rm:    return X86::BSR32rm;
-  case X86::BSWAP64r:   return X86::BSWAP32r;
-  case X86::BTC64rr:    return X86::BTC32rr;
-  case X86::BTC64ri8:   return X86::BTC32ri8;
-  case X86::BT64rr:     return X86::BT32rr;
-  case X86::BT64ri8:    return X86::BT32ri8;
-  case X86::BTR64rr:    return X86::BTR32rr;
-  case X86::BTR64ri8:   return X86::BTR32ri8;
-  case X86::BTS64rr:    return X86::BTS32rr;
-  case X86::BTS64ri8:   return X86::BTS32ri8;
-  case X86::BZHI64rr:   return X86::BZHI32rr;
-  case X86::BZHI64rm:   return X86::BZHI32rm;
-  case X86::CALL64r:    return X86::CALL32r;
-  case X86::CMOV64rr:   return X86::CMOV32rr;
-  case X86::CMOV64rm:   return X86::CMOV32rm;
-  case X86::CMP64rr:    return X86::CMP32rr;
-  case X86::CMP64ri8:   return X86::CMP32ri8;
-  case X86::CMP64ri32:  return X86::CMP32ri;
-  case X86::CMP64rm:    return X86::CMP32rm;
-  case X86::CMPXCHG64rr:return X86::CMPXCHG32rr;
-  case X86::CRC32r64r8: return X86::CRC32r32r8;
-  case X86::CRC32r64r64:return X86::CRC32r32r32;
-  case X86::CRC32r64m64:return X86::CRC32r32m32;
-  case X86::CVTSD2SI64rr_Int: return X86::CVTSD2SIrr_Int;
-  case X86::CVTSD2SI64rm_Int: return X86::CVTSD2SIrm_Int;
-  case X86::CVTSS2SI64rr_Int: return X86::CVTSS2SIrr_Int;
-  case X86::CVTSS2SI64rm_Int: return X86::CVTSS2SIrm_Int;
-  case X86::CVTTSD2SI64rr:    return X86::CVTTSD2SIrr;
-  case X86::CVTTSD2SI64rm:    return X86::CVTTSD2SIrm;
-  case X86::CVTTSS2SI64rr:    return X86::CVTTSS2SIrr;
-  case X86::CVTTSS2SI64rm:    return X86::CVTTSS2SIrm;
-  case X86::DEC64r:    return X86::DEC32r;
-  case X86::DIV64r:    return X86::DIV32r;
-  case X86::IDIV64r:   return X86::IDIV32r;
-  case X86::IMUL64r:   return X86::IMUL32r;
-  case X86::IMUL64rr:  return X86::IMUL32rr;
-  case X86::IMUL64rri8:return X86::IMUL32rri8;
-  case X86::IMUL64rri32: return X86::IMUL32rri;
-  case X86::IMUL64rm:  return X86::IMUL32rm;
-  case X86::IMUL64rmi8:return X86::IMUL32rmi8;
-  case X86::IMUL64rmi32: return X86::IMUL32rmi;
-  case X86::INC64r:    return X86::INC32r;
-  case X86::INVEPT64:  return X86::INVEPT32;
-  case X86::INVPCID64: return X86::INVPCID32;
-  case X86::INVVPID64: return X86::INVVPID32;
-  case X86::JMP64r:    return X86::JMP32r;
-  case X86::LAR64rr:   return X86::LAR32rr;
-  case X86::LAR64rm:   return X86::LAR32rm;
-  case X86::LEA64r:    return X86::LEA32r;
-  case X86::LFS64rm:   return X86::LFS32rm;
-  case X86::LGS64rm:   return X86::LGS32rm;
-  case X86::LSL64rr:   return X86::LSL32rr;
-  case X86::LSL64rm:   return X86::LSL32rm;
-  case X86::LSS64rm:   return X86::LSS32rm;
-  case X86::LZCNT64rr: return X86::LZCNT32rr;
-  case X86::LZCNT64rm: return X86::LZCNT32rm;
-  case X86::MOV64ri:   return X86::MOV32ri;
-  case X86::MOVBE64rm: return X86::MOVBE32rm;
-  case X86::MOV64rr:   return X86::MOV32rr;
-  case X86::MMX_MOVD64from64rr: return X86::MMX_MOVD64grr;
-  case X86::MOVPQIto64rr: return X86::MOVPDI2DIrr;
-  case X86::MOV64rs:   return X86::MOV32rs;
-  case X86::MOV64rd:   return X86::MOV32rd;
-  case X86::MOV64rc:   return X86::MOV32rc;
-  case X86::MOV64ri32: return X86::MOV32ri;
-  case X86::MOV64rm:   return X86::MOV32rm;
-  case X86::MOVSX64rr8:  return X86::MOVSX32rr8;
-  case X86::MOVSX64rm8:  return X86::MOVSX32rm8;
-  case X86::MOVSX64rr32: return X86::MOV32rr;
-  case X86::MOVSX64rm32: return X86::MOV32rm;
-  case X86::MOVSX64rr16: return X86::MOVSX32rr16;
-  case X86::MOVSX64rm16: return X86::MOVSX32rm16;
-  case X86::MOVZX64rr8:  return X86::MOVZX32rr8;
-  case X86::MOVZX64rm8:  return X86::MOVZX32rm8;
-  case X86::MOVZX64rr16: return X86::MOVZX32rr16;
-  case X86::MOVZX64rm16: return X86::MOVZX32rm16;
-  case X86::MUL64r:    return X86::MUL32r;
-  case X86::MULX64rr:  return X86::MULX32rr;
-  case X86::MULX64rm:  return X86::MULX32rm;
-  case X86::NEG64r:    return X86::NEG32r;
-  case X86::NOT64r:    return X86::NOT32r;
-  case X86::OR64rr:    return X86::OR32rr;
-  case X86::OR64ri8:   return X86::OR32ri8;
-  case X86::OR64ri32:  return X86::OR32ri;
-  case X86::OR64rm:    return X86::OR32rm;
-  case X86::PDEP64rr:  return X86::PDEP32rr;
-  case X86::PDEP64rm:  return X86::PDEP32rm;
-  case X86::PEXT64rr:  return X86::PEXT32rr;
-  case X86::PEXT64rm:  return X86::PEXT32rm;
-  case X86::POPCNT64rr:return X86::POPCNT32rr;
-  case X86::POPCNT64rm:return X86::POPCNT32rm;
-  case X86::POP64r:    return X86::POP32r;
-  case X86::POP64rmr:  return X86::POP32rmr;
-  case X86::PUSH64r:   return X86::PUSH32r;
-  case X86::PUSH64rmr: return X86::PUSH32rmr;
-  case X86::RCL64r1:   return X86::RCL32r1;
-  case X86::RCL64rCL:  return X86::RCL32rCL;
-  case X86::RCL64ri:   return X86::RCL32ri;
-  case X86::RCR64r1:   return X86::RCR32r1;
-  case X86::RCR64rCL:  return X86::RCR32rCL;
-  case X86::RCR64ri:   return X86::RCR32ri;
-  case X86::RDFSBASE64:return X86::RDFSBASE;
-  case X86::RDGSBASE64:return X86::RDGSBASE;
-  case X86::RDRAND64r: return X86::RDRAND32r;
-  case X86::RDSEED64r: return X86::RDSEED32r;
-  case X86::ROL64r1:   return X86::ROL32r1;
-  case X86::ROL64rCL:  return X86::ROL32rCL;
-  case X86::ROL64ri:   return X86::ROL32ri;
-  case X86::ROR64r1:   return X86::ROR32r1;
-  case X86::ROR64rCL:  return X86::ROR32rCL;
-  case X86::ROR64ri:   return X86::ROR32ri;
-  case X86::RORX64ri:  return X86::RORX32ri;
-  case X86::SAR64r1:   return X86::SAR32r1;
-  case X86::SAR64rCL:  return X86::SAR32rCL;
-  case X86::SAR64ri:   return X86::SAR32ri;
-  case X86::SARX64rr:  return X86::SARX32rr;
-  case X86::SARX64rm:  return X86::SARX32rm;
-  case X86::SBB64rr:   return X86::SBB32rr;
-  case X86::SBB64ri8:  return X86::SBB32ri8;
-  case X86::SBB64ri32: return X86::SBB32ri;
-  case X86::SBB64rm:   return X86::SBB32rm;
-  case X86::SHLD64rrCL:return X86::SHLD32rrCL;
-  case X86::SHLD64rri8:return X86::SHLD32rri8;
-  case X86::SHL64r1:   return X86::SHL32r1;
-  case X86::SHL64rCL:  return X86::SHL32rCL;
-  case X86::SHL64ri:   return X86::SHL32ri;
-  case X86::SHLX64rr:  return X86::SHLX32rr;
-  case X86::SHLX64rm:  return X86::SHLX32rm;
-  case X86::SHRD64rrCL:return X86::SHRD32rrCL;
-  case X86::SHRD64rri8:return X86::SHRD32rri8;
-  case X86::SHR64r1:   return X86::SHR32r1;
-  case X86::SHR64rCL:  return X86::SHR32rCL;
-  case X86::SHR64ri:   return X86::SHR32ri;
-  case X86::SHRX64rr:  return X86::SHRX32rr;
-  case X86::SHRX64rm:  return X86::SHRX32rm;
-  case X86::SLDT64r:   return X86::SLDT32r;
-  case X86::SMSW64r:   return X86::SMSW32r;
-  case X86::STR64r:    return X86::STR32r;
-  case X86::SUB64rr:   return X86::SUB32rr;
-  case X86::SUB64ri8:  return X86::SUB32ri8;
-  case X86::SUB64ri32: return X86::SUB32ri;
-  case X86::SUB64rm:   return X86::SUB32rm;
-  case X86::T1MSKC64rr:return X86::T1MSKC32rr;
-  case X86::T1MSKC64rm:return X86::T1MSKC32rm;
-  case X86::TEST64rr:  return X86::TEST32rr;
-  case X86::TEST64ri32:return X86::TEST32ri;
-  case X86::TEST64mr:  return X86::TEST32mr;
-  case X86::TZCNT64rr: return X86::TZCNT32rr;
-  case X86::TZCNT64rm: return X86::TZCNT32rm;
-  case X86::TZMSK64rr: return X86::TZMSK32rr;
-  case X86::TZMSK64rm: return X86::TZMSK32rm;
-  case X86::VCVTSD2SI64rr_Int:  return X86::VCVTSD2SIrr_Int;
-  case X86::VCVTSD2SI64Zrr_Int: return X86::VCVTSD2SIZrr_Int;
-  case X86::VCVTSD2SI64Zrm_Int: return X86::VCVTSD2SIZrm_Int;
-  case X86::VCVTSD2SI64rm_Int:  return X86::VCVTSD2SIrm_Int;
-  case X86::VCVTSD2USI64Zrr_Int:return X86::VCVTSD2USIZrr_Int;
-  case X86::VCVTSD2USI64Zrm_Int:return X86::VCVTSD2USIZrm_Int;
-  case X86::VCVTSS2SI64rr_Int:  return X86::VCVTSS2SIrr_Int;
-  case X86::VCVTSS2SI64Zrr_Int: return X86::VCVTSS2SIZrr_Int;
-  case X86::VCVTSS2SI64Zrm_Int: return X86::VCVTSS2SIZrm_Int;
-  case X86::VCVTSS2SI64rm_Int:  return X86::VCVTSS2SIrm_Int;
-  case X86::VCVTSS2USI64Zrr_Int:return X86::VCVTSS2USIZrr_Int;
-  case X86::VCVTSS2USI64Zrm_Int:return X86::VCVTSS2USIZrm_Int;
-  case X86::VCVTTSD2SI64rr:   return X86::VCVTTSD2SIrr;
-  case X86::VCVTTSD2SI64Zrr:  return X86::VCVTTSD2SIZrr;
-  case X86::VCVTTSD2SI64Zrm:  return X86::VCVTTSD2SIZrm;
-  case X86::VCVTTSD2SI64rm:   return X86::VCVTTSD2SIrm;
-  case X86::VCVTTSD2USI64Zrr: return X86::VCVTTSD2USIZrr;
-  case X86::VCVTTSD2USI64Zrm: return X86::VCVTTSD2USIZrm;
-  case X86::VCVTTSS2SI64rr:   return X86::VCVTTSS2SIrr;
-  case X86::VCVTTSS2SI64Zrr:  return X86::VCVTTSS2SIZrr;
-  case X86::VCVTTSS2SI64Zrm:  return X86::VCVTTSS2SIZrm;
-  case X86::VCVTTSS2SI64rm:   return X86::VCVTTSS2SIrm;
-  case X86::VCVTTSS2USI64Zrr: return X86::VCVTTSS2USIZrr;
-  case X86::VCVTTSS2USI64Zrm: return X86::VCVTTSS2USIZrm;
-  case X86::VMOVPQIto64rr:    return X86::VMOVPDI2DIrr;
-  case X86::VMOVPQIto64Zrr:   return X86::VMOVPDI2DIZrr;
-  case X86::VMREAD64rr:       return X86::VMREAD32rr;
-  case X86::VMWRITE64rr:      return X86::VMWRITE32rr;
-  case X86::VMWRITE64rm:      return X86::VMWRITE32rm;
-  case X86::WRFSBASE64:       return X86::WRFSBASE;
-  case X86::WRGSBASE64:       return X86::WRGSBASE;
-  case X86::XADD64rr:         return X86::XADD32rr;
-  case X86::XCHG64ar:         return X86::XCHG32ar;
-  case X86::XCHG64rr:         return X86::XCHG32rr;
-  case X86::XCHG64rm:         return X86::XCHG32rm;
-  case X86::XOR64rr:          return X86::XOR32rr;
-  case X86::XOR64ri8:         return X86::XOR32ri8;
-  case X86::XOR64ri32:        return X86::XOR32ri;
-  case X86::XOR64rm:          return X86::XOR32rm;
-  default:
-    return Opcode;
+  // ALU instructions, in register, memory, 8-bit immediate and 32-bit
+  // immediate forms. The 32-bit form of a sign-extended 32-bit immediate
+  // is spelled ri, not ri32.
+  DEMOTE_ALU(ADC)
+  DEMOTE_ALU(ADD) DEMOTE_ALU(AND) DEMOTE_ALU(CMP) DEMOTE_ALU(OR) DEMOTE_ALU(SBB)
+      DEMOTE_ALU(SUB) DEMOTE_ALU(XOR)
+
+      // Instructions that exist only in register and memory forms.
+      DEMOTE_RR_RM(ADCX) DEMOTE_RR_RM(ADOX) DEMOTE_RR_RM(ANDN) DEMOTE_RR_RM(
+          BEXTR) DEMOTE_RR_RM(BLCFILL) DEMOTE_RR_RM(BLCI) DEMOTE_RR_RM(BLCIC)
+          DEMOTE_RR_RM(BLCMSK) DEMOTE_RR_RM(BLCS) DEMOTE_RR_RM(BLSFILL)
+              DEMOTE_RR_RM(BLSI) DEMOTE_RR_RM(BLSIC) DEMOTE_RR_RM(BLSMSK)
+                  DEMOTE_RR_RM(BLSR) DEMOTE_RR_RM(BSF) DEMOTE_RR_RM(BSR)
+                      DEMOTE_RR_RM(BZHI) DEMOTE_RR_RM(CMOV) DEMOTE_RR_RM(LAR)
+                          DEMOTE_RR_RM(LSL) DEMOTE_RR_RM(LZCNT)
+                              DEMOTE_RR_RM(MULX) DEMOTE_RR_RM(PDEP)
+                                  DEMOTE_RR_RM(PEXT) DEMOTE_RR_RM(POPCNT)
+                                      DEMOTE_RR_RM(SARX) DEMOTE_RR_RM(SHLX)
+                                          DEMOTE_RR_RM(SHRX)
+                                              DEMOTE_RR_RM(T1MSKC)
+                                                  DEMOTE_RR_RM(TZCNT)
+                                                      DEMOTE_RR_RM(TZMSK)
+                                                          DEMOTE_RR_RM(VMWRITE)
+
+      // Float-to-integer converts name the destination width in the mnemonic,
+      // so demoting drops the 64 instead of replacing it.
+      DEMOTE_CVT(CVTSD2SI, rm_Int) DEMOTE_CVT(CVTSD2SI, rr_Int) DEMOTE_CVT(
+          CVTSS2SI, rm_Int) DEMOTE_CVT(CVTSS2SI, rr_Int) DEMOTE_CVT(CVTTSD2SI,
+                                                                    rm)
+          DEMOTE_CVT(CVTTSD2SI, rr) DEMOTE_CVT(CVTTSS2SI, rm) DEMOTE_CVT(
+              CVTTSS2SI, rr) DEMOTE_CVT(VCVTSD2SI,
+                                        Zrm_Int) DEMOTE_CVT(VCVTSD2SI, Zrr_Int)
+              DEMOTE_CVT(VCVTSD2SI, rm_Int) DEMOTE_CVT(VCVTSD2SI, rr_Int)
+                  DEMOTE_CVT(VCVTSD2USI, Zrm_Int) DEMOTE_CVT(
+                      VCVTSD2USI, Zrr_Int) DEMOTE_CVT(VCVTSS2SI, Zrm_Int)
+                      DEMOTE_CVT(VCVTSS2SI, Zrr_Int) DEMOTE_CVT(
+                          VCVTSS2SI, rm_Int) DEMOTE_CVT(VCVTSS2SI, rr_Int)
+                          DEMOTE_CVT(VCVTSS2USI, Zrm_Int) DEMOTE_CVT(
+                              VCVTSS2USI, Zrr_Int) DEMOTE_CVT(VCVTTSD2SI, Zrm)
+                              DEMOTE_CVT(VCVTTSD2SI, Zrr) DEMOTE_CVT(
+                                  VCVTTSD2SI, rm) DEMOTE_CVT(VCVTTSD2SI, rr)
+                                  DEMOTE_CVT(VCVTTSD2USI,
+                                             Zrm) DEMOTE_CVT(VCVTTSD2USI, Zrr)
+                                      DEMOTE_CVT(VCVTTSS2SI, Zrm) DEMOTE_CVT(
+                                          VCVTTSS2SI,
+                                          Zrr) DEMOTE_CVT(VCVTTSS2SI, rm)
+                                          DEMOTE_CVT(VCVTTSS2SI, rr)
+                                              DEMOTE_CVT(VCVTTSS2USI, Zrm)
+                                                  DEMOTE_CVT(VCVTTSS2USI, Zrr)
+
+      // Everything else demotes by rewriting 64 to 32 in place.
+      DEMOTE(BEXTRI, mi) DEMOTE(BEXTRI, ri) DEMOTE(BSWAP, r) DEMOTE(
+          BT, ri8) DEMOTE(BT, rr) DEMOTE(BTC, ri8) DEMOTE(BTC, rr) DEMOTE(BTR,
+                                                                          ri8)
+          DEMOTE(BTR, rr) DEMOTE(BTS, ri8) DEMOTE(BTS, rr) DEMOTE(
+              CALL, r) DEMOTE(CMPXCHG, rr) DEMOTE(CRC32r, r8) DEMOTE(DEC, r)
+              DEMOTE(DIV, r) DEMOTE(IDIV, r) DEMOTE(IMUL, r) DEMOTE(IMUL, rm) DEMOTE(
+                  IMUL,
+                  rmi8) DEMOTE(IMUL,
+                               rr) DEMOTE(IMUL, rri8)
+                  DEMOTE(INC, r) DEMOTE(JMP, r) DEMOTE(LEA, r) DEMOTE(LFS, rm) DEMOTE(
+                      LGS, rm) DEMOTE(LSS, rm)
+                      DEMOTE(MOV,
+                             rc) DEMOTE(MOV,
+                                        rd) DEMOTE(MOV, ri)
+                          DEMOTE(MOV,
+                                 rm) DEMOTE(MOV,
+                                            rr) DEMOTE(MOV, rs)
+                              DEMOTE(MOVBE, rm) DEMOTE(MOVSX, rm16) DEMOTE(MOVSX, rm8) DEMOTE(
+                                  MOVSX,
+                                  rr16) DEMOTE(MOVSX,
+                                               rr8) DEMOTE(MOVZX,
+                                                           rm16) DEMOTE(MOVZX,
+                                                                        rm8) DEMOTE(MOVZX, rr16)
+                                  DEMOTE(MOVZX, rr8) DEMOTE(MUL, r) DEMOTE(NEG, r) DEMOTE(NOT, r) DEMOTE(
+                                      POP,
+                                      r) DEMOTE(POP,
+                                                rmr) DEMOTE(PUSH, r)
+                                      DEMOTE(PUSH, rmr) DEMOTE(RCL, r1) DEMOTE(
+                                          RCL, rCL) DEMOTE(RCL, ri) DEMOTE(RCR, r1)
+                                          DEMOTE(RCR, rCL) DEMOTE(RCR, ri) DEMOTE(
+                                              RDRAND,
+                                              r) DEMOTE(RDSEED,
+                                                        r) DEMOTE(ROL, r1)
+                                              DEMOTE(ROL, rCL) DEMOTE(ROL, ri) DEMOTE(ROR, r1) DEMOTE(
+                                                  ROR, rCL) DEMOTE(ROR, ri)
+                                                  DEMOTE(RORX, ri) DEMOTE(SAR, r1) DEMOTE(
+                                                      SAR, rCL) DEMOTE(SAR, ri) DEMOTE(SHL, r1)
+                                                      DEMOTE(SHL, rCL) DEMOTE(SHL, ri) DEMOTE(
+                                                          SHLD,
+                                                          rrCL) DEMOTE(SHLD,
+                                                                       rri8) DEMOTE(SHR, r1)
+                                                          DEMOTE(SHR, rCL) DEMOTE(
+                                                              SHR,
+                                                              ri) DEMOTE(SHRD, rrCL)
+                                                              DEMOTE(SHRD, rri8) DEMOTE(
+                                                                  SLDT,
+                                                                  r) DEMOTE(SMSW, r)
+                                                                  DEMOTE(STR, r) DEMOTE(
+                                                                      TEST,
+                                                                      mr) DEMOTE(TEST, rr)
+                                                                      DEMOTE(VMREAD, rr) DEMOTE(
+                                                                          XADD,
+                                                                          rr) DEMOTE(XCHG, ar)
+                                                                          DEMOTE(
+                                                                              XCHG,
+                                                                              rm)
+                                                                              DEMOTE(
+                                                                                  XCHG,
+                                                                                  rr)
+
+      // Irregular cases, where the 32-bit counterpart has a different name.
+      case X86::CRC32r64m64:
+    return X86::CRC32r32m32;
+  case X86::CRC32r64r64:
+    return X86::CRC32r32r32;
+  case X86::IMUL64rmi32:
+    return X86::IMUL32rmi;
+  case X86::IMUL64rri32:
+    return X86::IMUL32rri;
+  case X86::INVEPT64:
+    return X86::INVEPT32;
+  case X86::INVPCID64:
+    return X86::INVPCID32;
+  case X86::INVVPID64:
+    return X86::INVVPID32;
+  case X86::MMX_MOVD64from64rr:
+    return X86::MMX_MOVD64grr;
+  case X86::MOV64ri32:
+    return X86::MOV32ri;
+  case X86::MOVPQIto64rr:
+    return X86::MOVPDI2DIrr;
+  case X86::MOVSX64rm32:
+    return X86::MOV32rm;
+  case X86::MOVSX64rr32:
+    return X86::MOV32rr;
+  case X86::RDFSBASE64:
+    return X86::RDFSBASE;
+  case X86::RDGSBASE64:
+    return X86::RDGSBASE;
+  case X86::TEST64ri32:
+    return X86::TEST32ri;
+  case X86::VMOVPQIto64Zrr:
+    return X86::VMOVPDI2DIZrr;
+  case X86::VMOVPQIto64rr:
+    return X86::VMOVPDI2DIrr;
+  case X86::WRFSBASE64:
+    return X86::WRFSBASE;
+  case X86::WRGSBASE64:
+    return X86::WRGSBASE;
+    default : return Opcode;
   }
 }
+
+#undef DEMOTE_ALU
+#undef DEMOTE_RR_RM
+#undef DEMOTE_CVT
+#undef DEMOTE
 
 static void demoteInst(MCInst &Inst, const MCInstrInfo &InstInfo) {
   Inst.setOpcode(demoteOpcode(Inst.getOpcode()));
@@ -1169,8 +1110,7 @@ void X86::X86MCLFIRewriter::rewriteLoadStore(const MCInst &Inst, MCStreamer &Out
 
   MCInst SandboxedInst(Inst);
 
-  if (normalizeOpcode(Op) != Op)
-    SandboxedInst.setOpcode(normalizeOpcode(Op));
+  SandboxedInst.setOpcode(normalizeOpcode(Op));
 
   MCRegister ScratchReg = ElideScratchReg ? Inst.getOperand(0).getReg()
                                           : MCRegister(X86::R11D);
