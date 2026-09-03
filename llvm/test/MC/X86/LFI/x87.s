@@ -1,58 +1,58 @@
-// RUN: llvm-mc -filetype asm -triple x86_64_lfi %s | FileCheck %s
+// RUN: llvm-mc -filetype asm -triple x86_64_lfi -show-encoding %s | FileCheck %s
 
-// Test x87 FPU instructions - these don't need memory sandboxing but
-// the *_FrST0 forms get normalized to *_FST0r forms.
+// x87 register-to-register arithmetic touches no memory, so the rewriter must
+// leave it exactly as written. The encodings below are the ones a plain
+// x86-64 assembler produces.
+//
+// The %st(i)-destination forms and the %st-destination forms are distinct
+// instructions, 0xDC and 0xD8, so rewriting one into the other would change
+// which stack slot is written. AT&T syntax makes that easy to miss: the
+// assembler prints the 0xDC form of fsub as fsub and the 0xD8 form as fsubr.
 
-// fadd normalization: fadd %st, %st(N) -> fadd %st(N), %st
 fadd %st, %st(1)
-// CHECK: fadd %st(1), %st
+// CHECK: fadd %st, %st(1)
+// CHECK-SAME: encoding: [0xdc,0xc1]
 
-fadd %st, %st(2)
-// CHECK: fadd %st(2), %st
+fmul %st, %st(2)
+// CHECK: fmul %st, %st(2)
+// CHECK-SAME: encoding: [0xdc,0xca]
 
-// fmul normalization
-fmul %st, %st(1)
-// CHECK: fmul %st(1), %st
-
-fmul %st, %st(3)
-// CHECK: fmul %st(3), %st
-
-// fdiv normalization (fdiv %st, %st(N) uses fdivr opcode internally)
 fdiv %st, %st(1)
-// CHECK: fdivr %st(1), %st
+// CHECK: fdiv %st, %st(1)
+// CHECK-SAME: encoding: [0xdc,0xf1]
 
-fdiv %st, %st(2)
-// CHECK: fdivr %st(2), %st
-
-// fsub normalization (fsub %st, %st(N) uses fsubr opcode internally)
 fsub %st, %st(1)
-// CHECK: fsubr %st(1), %st
+// CHECK: fsub %st, %st(1)
+// CHECK-SAME: encoding: [0xdc,0xe1]
 
-fsub %st, %st(2)
-// CHECK: fsubr %st(2), %st
-
-// fdivr normalization
 fdivr %st, %st(1)
-// CHECK: fdiv %st(1), %st
+// CHECK: fdivr %st, %st(1)
+// CHECK-SAME: encoding: [0xdc,0xf9]
 
-// fsubr normalization
 fsubr %st, %st(1)
-// CHECK: fsub %st(1), %st
+// CHECK: fsubr %st, %st(1)
+// CHECK-SAME: encoding: [0xdc,0xe9]
 
-// The reverse forms (already in *_FST0r form) should be unchanged
+// The %st-destination forms are likewise unchanged.
+
 fadd %st(1), %st
 // CHECK: fadd %st(1), %st
+// CHECK-SAME: encoding: [0xd8,0xc1]
 
 fmul %st(2), %st
 // CHECK: fmul %st(2), %st
+// CHECK-SAME: encoding: [0xd8,0xca]
 
 fdiv %st(1), %st
 // CHECK: fdiv %st(1), %st
+// CHECK-SAME: encoding: [0xd8,0xf1]
 
 fsub %st(1), %st
 // CHECK: fsub %st(1), %st
+// CHECK-SAME: encoding: [0xd8,0xe1]
 
-// x87 memory operations need sandboxing
+// x87 memory operations are sandboxed like any other memory access.
+
 flds (%rax)
 // CHECK: flds %gs:(%eax)
 
@@ -89,7 +89,8 @@ fsubs (%rax)
 fsubl (%rax)
 // CHECK: fsubl %gs:(%eax)
 
-// x87 memory operations with RSP are safe (no sandboxing)
+// Accesses through %rsp are already in bounds and need no sandboxing.
+
 flds (%rsp)
 // CHECK: flds (%rsp)
 
