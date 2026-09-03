@@ -36,6 +36,10 @@ protected:
   std::unique_ptr<MCInstrInfo> InstInfo;
   std::unique_ptr<MCRegisterInfo> RegInfo;
 
+  /// Set by .lfi_flags_dead; cleared by the target rewriter once the flags are
+  /// redefined. While active the rewriter may clobber the flags.
+  bool FlagsDeadActive = false;
+
 public:
   MCLFIRewriter(MCContext &Ctx, std::unique_ptr<MCRegisterInfo> &&RI,
                 std::unique_ptr<MCInstrInfo> &&II)
@@ -46,6 +50,10 @@ public:
 
   void disable() { Enabled = false; }
   void enable() { Enabled = true; }
+
+  /// Assert that the flags are dead at the current location (see the
+  /// .lfi_flags_dead assembler directive).
+  void markFlagsDead() { FlagsDeadActive = true; }
 
   LLVM_ABI bool isCall(const MCInst &Inst) const;
   LLVM_ABI bool isBranch(const MCInst &Inst) const;
