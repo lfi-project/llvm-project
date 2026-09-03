@@ -19,6 +19,7 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInst.h"
+#include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCInstrDesc.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCStreamer.h"
@@ -408,26 +409,23 @@ void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
 
   if (!Use4GiBGuard) {
     // Large sandbox: and x24, Src, #mask; add Dest, x27, x24
-    MCInst AndInst;
-    AndInst.setOpcode(AArch64::ANDXri);
-    AndInst.addOperand(MCOperand::createReg(LFIOffsetReg));
-    AndInst.addOperand(MCOperand::createReg(Src));
-    AndInst.addOperand(MCOperand::createImm(getSandboxMaskEncoding()));
-    emitInst(AndInst, Out, STI);
+    emitInst(MCInstBuilder(AArch64::ANDXri)
+                 .addReg(LFIOffsetReg)
+                 .addReg(Src)
+                 .addImm(getSandboxMaskEncoding()),
+             Out, STI);
 
     // Use UXTX rather than LSL: ADDXrs encodes register 31 as XZR, not SP.
     emitAddRegExtend(Dest, LFIBaseReg, LFIOffsetReg, AArch64_AM::UXTX, 0, Out,
                      STI);
   } else {
     // Standard / control-flow: add Dest, LFIBaseReg, W(Src), uxtw
-    MCInst Inst;
-    Inst.setOpcode(AArch64::ADDXrx);
-    Inst.addOperand(MCOperand::createReg(Dest));
-    Inst.addOperand(MCOperand::createReg(LFIBaseReg));
-    Inst.addOperand(MCOperand::createReg(getWRegFromXReg(Src)));
-    Inst.addOperand(MCOperand::createImm(
-        AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)));
-    emitInst(Inst, Out, STI);
+    emitInst(MCInstBuilder(AArch64::ADDXrx)
+                 .addReg(Dest)
+                 .addReg(LFIBaseReg)
+                 .addReg(getWRegFromXReg(Src))
+                 .addImm(AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)),
+             Out, STI);
   }
 
   // Record Src as the new active guard.
@@ -438,19 +436,15 @@ void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
 void AArch64MCLFIRewriter::emitBranch(unsigned Opcode, MCRegister Target,
                                       MCStreamer &Out,
                                       const MCSubtargetInfo &STI) {
-  MCInst Branch;
-  Branch.setOpcode(Opcode);
-  Branch.addOperand(MCOperand::createReg(Target));
-  emitInst(Branch, Out, STI);
+  emitInst(MCInstBuilder(Opcode).addReg(Target), Out, STI);
 }
 
 void AArch64MCLFIRewriter::emitPendingTLSDescCall(MCStreamer &Out,
                                                   const MCSubtargetInfo &STI) {
   if (!PendingTLSDescCall)
     return;
-  MCInst Marker;
-  Marker.setOpcode(AArch64::TLSDESCCALL);
-  Marker.addOperand(MCOperand::createExpr(PendingTLSDescCall));
+  MCInst Marker =
+      MCInstBuilder(AArch64::TLSDESCCALL).addExpr(PendingTLSDescCall);
   PendingTLSDescCall = nullptr;
   emitInst(Marker, Out, STI);
 }
@@ -459,13 +453,12 @@ void AArch64MCLFIRewriter::emitMov(MCRegister Dest, MCRegister Src,
                                    MCStreamer &Out,
                                    const MCSubtargetInfo &STI) {
   // orr Dest, xzr, Src
-  MCInst Inst;
-  Inst.setOpcode(AArch64::ORRXrs);
-  Inst.addOperand(MCOperand::createReg(Dest));
-  Inst.addOperand(MCOperand::createReg(AArch64::XZR));
-  Inst.addOperand(MCOperand::createReg(Src));
-  Inst.addOperand(MCOperand::createImm(0));
-  emitInst(Inst, Out, STI);
+  emitInst(MCInstBuilder(AArch64::ORRXrs)
+               .addReg(Dest)
+               .addReg(AArch64::XZR)
+               .addReg(Src)
+               .addImm(0),
+           Out, STI);
 }
 
 void AArch64MCLFIRewriter::emitAddImm(MCRegister Dest, MCRegister Src,
@@ -496,14 +489,12 @@ void AArch64MCLFIRewriter::emitAddReg(MCRegister Dest, MCRegister Src1,
                                       MCStreamer &Out,
                                       const MCSubtargetInfo &STI) {
   // add Dest, Src1, Src2, lsl #Shift
-  MCInst Inst;
-  Inst.setOpcode(AArch64::ADDXrs);
-  Inst.addOperand(MCOperand::createReg(Dest));
-  Inst.addOperand(MCOperand::createReg(Src1));
-  Inst.addOperand(MCOperand::createReg(Src2));
-  Inst.addOperand(
-      MCOperand::createImm(AArch64_AM::getShifterImm(AArch64_AM::LSL, Shift)));
-  emitInst(Inst, Out, STI);
+  emitInst(MCInstBuilder(AArch64::ADDXrs)
+               .addReg(Dest)
+               .addReg(Src1)
+               .addReg(Src2)
+               .addImm(AArch64_AM::getShifterImm(AArch64_AM::LSL, Shift)),
+           Out, STI);
 }
 
 void AArch64MCLFIRewriter::emitAddRegExtend(MCRegister Dest, MCRegister Src1,
@@ -530,21 +521,19 @@ void AArch64MCLFIRewriter::emitMemRoW(unsigned Opcode, const MCOperand &DataOp,
                                       const MCSubtargetInfo &STI) {
   if (isLargeSandbox()) {
     // Large sandbox: and x24, BaseReg, #mask; Op DataOp, [x27, x24].
-    MCInst AndInst;
-    AndInst.setOpcode(AArch64::ANDXri);
-    AndInst.addOperand(MCOperand::createReg(LFIOffsetReg));
-    AndInst.addOperand(MCOperand::createReg(BaseReg));
-    AndInst.addOperand(MCOperand::createImm(getSandboxMaskEncoding()));
-    emitInst(AndInst, Out, STI);
+    emitInst(MCInstBuilder(AArch64::ANDXri)
+                 .addReg(LFIOffsetReg)
+                 .addReg(BaseReg)
+                 .addImm(getSandboxMaskEncoding()),
+             Out, STI);
 
     unsigned RoXOpcode = convertRoWToRoX(Opcode);
     assert(RoXOpcode != AArch64::INSTRUCTION_LIST_END &&
            "no RoX variant for RoW opcode");
-    MCInst Inst;
-    Inst.setOpcode(RoXOpcode);
-    Inst.addOperand(DataOp);
-    Inst.addOperand(MCOperand::createReg(LFIBaseReg));
-    Inst.addOperand(MCOperand::createReg(LFIOffsetReg));
+    MCInst Inst = MCInstBuilder(RoXOpcode)
+                      .addOperand(DataOp)
+                      .addReg(LFIBaseReg)
+                      .addReg(LFIOffsetReg);
     Inst.addOperand(MCOperand::createImm(0)); // S bit = 0 (LSL).
     Inst.addOperand(MCOperand::createImm(0)); // Shift amount = 0.
     emitInst(Inst, Out, STI);
@@ -552,11 +541,10 @@ void AArch64MCLFIRewriter::emitMemRoW(unsigned Opcode, const MCOperand &DataOp,
   }
 
   // Op DataOp, [LFIBaseReg, W(BaseReg), uxtw]
-  MCInst Inst;
-  Inst.setOpcode(Opcode);
-  Inst.addOperand(DataOp);
-  Inst.addOperand(MCOperand::createReg(LFIBaseReg));
-  Inst.addOperand(MCOperand::createReg(getWRegFromXReg(BaseReg)));
+  MCInst Inst = MCInstBuilder(Opcode)
+                    .addOperand(DataOp)
+                    .addReg(LFIBaseReg)
+                    .addReg(getWRegFromXReg(BaseReg));
   Inst.addOperand(MCOperand::createImm(0)); // S bit = 0 (UXTW).
   Inst.addOperand(MCOperand::createImm(0)); // Shift amount = 0 (unscaled).
   emitInst(Inst, Out, STI);
@@ -624,10 +612,9 @@ void AArch64MCLFIRewriter::rewriteLRModification(const MCInst &Inst,
 // ret
 void AArch64MCLFIRewriter::rewriteAuthenticatedReturn(
     const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-  MCInst Auth;
-  Auth.setOpcode(Inst.getOpcode() == AArch64::RETAA ? AArch64::AUTIASP
-                                                    : AArch64::AUTIBSP);
-  emitInst(Auth, Out, STI);
+  emitInst(MCInstBuilder(Inst.getOpcode() == AArch64::RETAA ? AArch64::AUTIASP
+                                                            : AArch64::AUTIBSP),
+           Out, STI);
 
   emitAddMask(AArch64::LR, AArch64::LR, Out, STI, /*ControlFlow=*/true);
   emitBranch(AArch64::RET, AArch64::LR, Out, STI);
@@ -689,12 +676,11 @@ void AArch64MCLFIRewriter::rewriteSyscall(const MCInst &, MCStreamer &Out,
   emitMov(LFIScratchReg, AArch64::LR, Out, STI);
 
   // Load syscall handler address from negative offset from sandbox base.
-  MCInst Load;
-  Load.setOpcode(AArch64::LDURXi);
-  Load.addOperand(MCOperand::createReg(AArch64::LR));
-  Load.addOperand(MCOperand::createReg(LFIBaseReg));
-  Load.addOperand(MCOperand::createImm(LFISyscallOffset));
-  emitInst(Load, Out, STI);
+  emitInst(MCInstBuilder(AArch64::LDURXi)
+               .addReg(AArch64::LR)
+               .addReg(LFIBaseReg)
+               .addImm(LFISyscallOffset),
+           Out, STI);
 
   // Call the runtime.
   emitBranch(AArch64::BLR, AArch64::LR, Out, STI);
@@ -710,12 +696,11 @@ void AArch64MCLFIRewriter::rewriteTPRead(const MCInst &Inst, MCStreamer &Out,
                                          const MCSubtargetInfo &STI) {
   MCRegister DestReg = Inst.getOperand(0).getReg();
 
-  MCInst Load;
-  Load.setOpcode(AArch64::LDRXui);
-  Load.addOperand(MCOperand::createReg(DestReg));
-  Load.addOperand(MCOperand::createReg(LFICtxReg));
-  Load.addOperand(MCOperand::createImm(LFITPOffset));
-  emitInst(Load, Out, STI);
+  emitInst(MCInstBuilder(AArch64::LDRXui)
+               .addReg(DestReg)
+               .addReg(LFICtxReg)
+               .addImm(LFITPOffset),
+           Out, STI);
 }
 
 // msr tpidr_el0, xN
@@ -725,12 +710,11 @@ void AArch64MCLFIRewriter::rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
   MCRegister SrcReg = Inst.getOperand(1).getReg();
 
-  MCInst Store;
-  Store.setOpcode(AArch64::STRXui);
-  Store.addOperand(MCOperand::createReg(SrcReg));
-  Store.addOperand(MCOperand::createReg(LFICtxReg));
-  Store.addOperand(MCOperand::createImm(LFITPOffset));
-  emitInst(Store, Out, STI);
+  emitInst(MCInstBuilder(AArch64::STRXui)
+               .addReg(SrcReg)
+               .addReg(LFICtxReg)
+               .addImm(LFITPOffset),
+           Out, STI);
 }
 
 bool AArch64MCLFIRewriter::rewriteLoadStoreRoW(const MCInst &Inst,
@@ -989,14 +973,13 @@ void AArch64MCLFIRewriter::rewriteVASysOp(const MCInst &Inst, MCStreamer &Out,
 
   emitAddMask(LFIAddrReg, AddrReg, Out, STI);
 
-  MCInst NewInst;
-  NewInst.setOpcode(AArch64::SYSxt);
-  NewInst.addOperand(Inst.getOperand(0));
-  NewInst.addOperand(Inst.getOperand(1));
-  NewInst.addOperand(Inst.getOperand(2));
-  NewInst.addOperand(Inst.getOperand(3));
-  NewInst.addOperand(MCOperand::createReg(LFIAddrReg));
-  emitInst(NewInst, Out, STI);
+  emitInst(MCInstBuilder(AArch64::SYSxt)
+               .addOperand(Inst.getOperand(0))
+               .addOperand(Inst.getOperand(1))
+               .addOperand(Inst.getOperand(2))
+               .addOperand(Inst.getOperand(3))
+               .addReg(LFIAddrReg),
+           Out, STI);
 }
 
 // NOTE: when adding new rewrites, the size estimates in
