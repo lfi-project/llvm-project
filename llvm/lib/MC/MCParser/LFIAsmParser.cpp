@@ -36,6 +36,7 @@ public:
         ".lfi_rewrite_disable");
     addDirectiveHandler<&LFIAsmParser::parseRewriteEnable>(
         ".lfi_rewrite_enable");
+    addDirectiveHandler<&LFIAsmParser::parseFlagsDead>(".lfi_flags_dead");
   }
 
   /// ::= {.lfi_rewrite_disable}
@@ -58,6 +59,18 @@ public:
     Lex();
 
     Rewriter->enable();
+
+    return false;
+  }
+
+  /// ::= {.lfi_flags_dead}
+  bool parseFlagsDead(StringRef Directive, SMLoc Loc) {
+    getParser().checkForValidSection();
+    if (getLexer().isNot(AsmToken::EndOfStatement))
+      return TokError("unexpected token");
+    Lex();
+
+    Rewriter->markFlagsDead();
 
     return false;
   }
