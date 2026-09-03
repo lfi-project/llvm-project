@@ -20,6 +20,8 @@
 #include "llvm/MC/MCInstBuilder.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSubtargetInfo.h"
+#include <algorithm>
+#include <optional>
 
 using namespace llvm;
 
@@ -28,9 +30,19 @@ static constexpr MCRegister LFIBaseReg = X86::R14;
 static constexpr MCRegister LFIScratchReg = X86::R11;
 static constexpr MCRegister LFITPReg = X86::R15;
 
+// Segment register whose base always holds the sandbox base address. Memory
+// accesses are confined to the sandbox by making them relative to it.
+static constexpr MCRegister LFIBaseSeg = X86::GS;
+
 // Byte offset into the context register file (pointed to by R15) where the
 // thread pointer is stored.
 static constexpr int TPOffset = 16;
+
+// A prefix written on its own line is parsed as a separate instruction.
+static bool isPrefix(const MCInst &Inst, const MCInstrInfo &InstInfo) {
+  return (InstInfo.get(Inst.getOpcode()).TSFlags & X86II::FormMask) ==
+         X86II::PrefixByte;
+}
 
 static bool isSyscall(const MCInst &Inst) {
   return Inst.getOpcode() == X86::SYSCALL;
@@ -97,6 +109,29 @@ static bool readsRegister(const MCInst &Inst, const MCInstrDesc &Desc,
 static bool isGR64OrNone(MCRegister Reg) {
   return Reg == X86::NoRegister ||
          getX86MCRegisterClass(X86::GR64RegClassID).contains(Reg);
+}
+
+MCRegister X86::X86MCLFIRewriter::getReg32(MCRegister Reg) const {
+  // An addressing mode may already use 32-bit registers, in which case the
+  // address is computed with a 32-bit address size and needs no change.
+  if (getX86MCRegisterClass(X86::GR32RegClassID).contains(Reg))
+    return Reg;
+  return RegInfo->getSubReg(Reg, X86::sub_32bit);
+}
+
+void X86::X86MCLFIRewriter::emitWithPrefixes(const MCInst &Inst,
+                                             MCStreamer &Out,
+                                             const MCSubtargetInfo &STI) {
+  for (const MCInst &Prefix : Prefixes)
+    Out.emitInstruction(Prefix, STI);
+  Prefixes.clear();
+  Out.emitInstruction(Inst, STI);
+}
+
+void X86::X86MCLFIRewriter::discardPrefixes() {
+  for (const MCInst &Prefix : Prefixes)
+    error(Prefix, "unsupported instruction prefix");
+  Prefixes.clear();
 }
 
 // syscall
@@ -170,7 +205,7 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
 //
 // jmpq *(%rdi)
 // ->
-// movq (%rdi), %r11
+// movq %gs:(%edi), %r11
 // .bundle_lock
 // andl $-32, %r11d
 // addq %r14, %r11
@@ -216,7 +251,7 @@ void X86::X86MCLFIRewriter::rewriteDirectCall(const MCInst &Inst,
                                               MCStreamer &Out,
                                               const MCSubtargetInfo &STI) {
   Out.emitBundleLock(/*AlignToEnd=*/true, STI);
-  Out.emitInstruction(Inst, STI);
+  emitWithPrefixes(Inst, Out, STI);
   Out.emitBundleUnlock(STI);
 }
 
@@ -273,8 +308,8 @@ bool X86::X86MCLFIRewriter::isFSAccess(const MCInst &Inst) {
 }
 
 // Rewrite %fs-segment memory accesses to use the virtual thread pointer stored
-// at TPOffset(%r15). The actual memory access is currently unsandboxed because
-// load/store sandboxing is not yet supported. Example rewrites:
+// at TPOffset(%r15). The rewritten access is fed back through the rewriter so
+// that it is sandboxed like any other memory access. Example rewrites:
 //
 // movq %fs:0, %rax
 // ->
@@ -283,13 +318,13 @@ bool X86::X86MCLFIRewriter::isFSAccess(const MCInst &Inst) {
 // movq %fs:(%rdi), %rax
 // ->
 // movq 16(%r15), %rax
-// movq (%rax, %rdi), %rax
+// movq %gs:(%eax,%edi), %rax
 //
 // movq %fs:8(%rdi, %rsi, 2), %rax
 // ->
 // movq 16(%r15), %rax
 // leaq (%rax, %rdi), %rax
-// movq 8(%rax, %rsi, 2), %rax
+// movq %gs:8(%eax, %esi, 2), %rax
 void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
                                             const MCSubtargetInfo &STI) {
   int MemIdx = findFSMemOperand(Inst, *InstInfo);
@@ -302,13 +337,14 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
   bool HasDisp = !Inst.getOperand(MemIdx + X86::AddrDisp).isImm() ||
                  Inst.getOperand(MemIdx + X86::AddrDisp).getImm() != 0;
 
-  // %fs:0 -> TPOffset(%r15)
+  // %fs:0 -> TPOffset(%r15). The context register always points into the
+  // runtime's thread-local block, so this access needs no sandboxing.
   if (!HasBase && !HasIndex && !HasDisp) {
     MCInst Modified(Inst);
     Modified.getOperand(MemIdx + X86::AddrBaseReg).setReg(LFITPReg);
     Modified.getOperand(MemIdx + X86::AddrDisp).setImm(TPOffset);
     Modified.getOperand(MemIdx + X86::AddrSegmentReg).setReg(X86::NoRegister);
-    return Out.emitInstruction(Modified, STI);
+    return emitWithPrefixes(Modified, Out, STI);
   }
 
   if (!isGR64OrNone(BaseReg) || !isGR64OrNone(IndexReg) ||
@@ -318,11 +354,12 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
   const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
 
   // Reuse operand 0 as the TP temporary when the instruction writes it without
-  // also reading it, otherwise use %r11.
+  // also reading it, otherwise use %r11. The stack pointer is not eligible: it
+  // must keep pointing into the sandbox at all times.
   MCRegister TPDest = LFIScratchReg;
   if (MemIdx > 0 && Inst.getOperand(0).isReg()) {
     MCRegister DestReg = Inst.getOperand(0).getReg();
-    if (Desc.getNumDefs() > 0 &&
+    if (Desc.getNumDefs() > 0 && DestReg != X86::RSP &&
         getX86MCRegisterClass(X86::GR64RegClassID).contains(DestReg) &&
         !readsRegister(Inst, Desc, DestReg, *RegInfo))
       TPDest = DestReg;
@@ -340,7 +377,7 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
   // ->
   // movq 16(%r15), %rax
   // leaq (%rax,%rdi), %rax
-  // movq 8(%rax,%rsi,2), %rax
+  // movq %gs:8(%eax,%esi,2), %rax
   if (HasBase && HasIndex) {
     Out.emitInstruction(MCInstBuilder(X86::LEA64r)
                             .addReg(TPDest)
@@ -353,30 +390,446 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
   }
 
   // Emit the access with TPDest as the new base, and the original base
-  // (offset from %fs) as the new index. For example:
+  // (offset from %fs) as the new index. The thread pointer is an address
+  // inside the sandbox like any other, so the result is fed back through the
+  // rewriter to be sandboxed. For example:
   //
   // movq %fs:(%rdi), %rax
   // ->
   // movq 16(%r15), %rax
-  // movq (%rax,%rdi), %rax
+  // movq %gs:(%eax,%edi), %rax
   MCInst Modified(Inst);
   Modified.getOperand(MemIdx + X86::AddrBaseReg).setReg(TPDest);
   if (HasBase && !HasIndex)
     Modified.getOperand(MemIdx + X86::AddrIndexReg).setReg(BaseReg);
   Modified.getOperand(MemIdx + X86::AddrSegmentReg).setReg(X86::NoRegister);
-  Out.emitInstruction(Modified, STI);
+  doRewriteInst(Modified, Out, STI);
 }
+
+//===----------------------------------------------------------------------===//
+// Memory sandboxing
+//===----------------------------------------------------------------------===//
+
+// Return true if a memory access based on Reg is already confined to the
+// sandbox: %r14 holds the sandbox base, and %rsp and %rip are maintained as
+// addresses inside the sandbox.
+static bool isSandboxBaseReg(MCRegister Reg) {
+  return Reg == LFIBaseReg || Reg == X86::RSP || Reg == X86::RIP;
+}
+
+// Return true if Inst reads or writes memory through an implicit pointer
+// register instead of an addressing mode, and so cannot be sandboxed by
+// rewriting its operands. String operations are excluded: they are handled by
+// guarding the pointer registers they use.
+static bool hasImplicitMemPointer(unsigned Opcode) {
+  switch (Opcode) {
+  // xlat loads from (%rbx,%al).
+  case X86::XLAT:
+  // maskmov stores to (%rdi).
+  case X86::MASKMOVDQU:
+  case X86::MASKMOVDQU64:
+  case X86::VMASKMOVDQU:
+  case X86::VMASKMOVDQU64:
+  case X86::MMX_MASKMOVQ:
+  case X86::MMX_MASKMOVQ64:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool X86::X86MCLFIRewriter::skipMemSandbox(const MCInst &Inst,
+                                           const MCSubtargetInfo &STI) const {
+  bool SkipLoads = STI.hasFeature(X86::FeatureNoLFILoads);
+  bool SkipStores = STI.hasFeature(X86::FeatureNoLFIStores);
+
+  if (SkipLoads && SkipStores)
+    return true;
+  // An instruction that both loads and stores is only exempt if both kinds of
+  // access are.
+  if (SkipLoads && !mayStore(Inst))
+    return true;
+  if (SkipStores && !mayLoad(Inst))
+    return true;
+  return false;
+}
+
+// Rewrite the addressing mode of the memory operand at MemIdx so that the
+// access it performs stays inside the sandbox. The address is computed from
+// 32-bit registers, so that it wraps within the 4GiB sandbox, and the %gs
+// segment supplies the sandbox base:
+//
+// movq 8(%rax,%rcx,4), %rdi
+// ->
+// movq %gs:8(%eax,%ecx,4), %rdi
+void X86::X86MCLFIRewriter::sandboxMemOperand(MCInst &Inst, int MemIdx) const {
+  MCOperand &Base = Inst.getOperand(MemIdx + X86::AddrBaseReg);
+  MCOperand &Index = Inst.getOperand(MemIdx + X86::AddrIndexReg);
+  MCOperand &Segment = Inst.getOperand(MemIdx + X86::AddrSegmentReg);
+
+  // A base register that always points into the sandbox needs no rewriting, as
+  // long as there is no index register to move the address back out of it.
+  if (isSandboxBaseReg(Base.getReg()) && !Index.getReg())
+    return;
+
+  // An absolute address has no register to truncate, so make it relative to
+  // the sandbox base instead.
+  if (!Base.getReg() && !Index.getReg()) {
+    Base.setReg(LFIBaseReg);
+    return;
+  }
+
+  Segment.setReg(LFIBaseSeg);
+  if (Base.getReg())
+    Base.setReg(getReg32(Base.getReg()));
+  if (Index.getReg())
+    Index.setReg(getReg32(Index.getReg()));
+}
+
+void X86::X86MCLFIRewriter::sandboxMemAccess(MCInst &Inst,
+                                             const MCSubtargetInfo &STI) const {
+  // lea and the prefetch instructions have a memory operand but never read or
+  // write through it, so their addressing mode does not need to be confined.
+  if (!mayLoad(Inst) && !mayStore(Inst))
+    return;
+
+  if (skipMemSandbox(Inst, STI))
+    return;
+
+  int MemIdx = X86II::getMemoryOperandIdx(InstInfo->get(Inst.getOpcode()));
+  if (MemIdx >= 0)
+    sandboxMemOperand(Inst, MemIdx);
+}
+
+void X86::X86MCLFIRewriter::rewriteMemAccess(const MCInst &Inst,
+                                             MCStreamer &Out,
+                                             const MCSubtargetInfo &STI) {
+  const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
+
+  // The moffs form of mov encodes an absolute address in the instruction
+  // instead of an addressing mode, so there is nothing to make relative to the
+  // sandbox base.
+  if ((Desc.TSFlags & X86II::FormMask) == X86II::RawFrmMemOffs ||
+      hasImplicitMemPointer(Inst.getOpcode()))
+    return error(Inst, "unsupported memory access");
+
+  MCInst Sandboxed(Inst);
+  sandboxMemAccess(Sandboxed, STI);
+  emitWithPrefixes(Sandboxed, Out, STI);
+}
+
+//===----------------------------------------------------------------------===//
+// String operations
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// The implicit pointer registers that a string instruction accesses memory
+/// through: %rdi for the destination and %rsi for the source.
+struct StringOpPointers {
+  /// Whether the instruction accesses memory through %rdi, and whether that
+  /// access is a store (movs, stos) rather than a load (cmps, scas).
+  bool UsesDest;
+  bool DestIsStore;
+  /// Whether the instruction loads through %rsi (movs, cmps, lods).
+  bool UsesSrc;
+};
+} // namespace
+
+static std::optional<StringOpPointers> getStringOpPointers(unsigned Opcode) {
+  switch (Opcode) {
+  case X86::STOSB:
+  case X86::STOSW:
+  case X86::STOSL:
+  case X86::STOSQ:
+    return StringOpPointers{true, true, false};
+  case X86::MOVSB:
+  case X86::MOVSW:
+  case X86::MOVSL:
+  case X86::MOVSQ:
+    return StringOpPointers{true, true, true};
+  case X86::CMPSB:
+  case X86::CMPSW:
+  case X86::CMPSL:
+  case X86::CMPSQ:
+    return StringOpPointers{true, false, true};
+  case X86::SCASB:
+  case X86::SCASW:
+  case X86::SCASL:
+  case X86::SCASQ:
+    return StringOpPointers{true, false, false};
+  case X86::LODSB:
+  case X86::LODSW:
+  case X86::LODSL:
+  case X86::LODSQ:
+    return StringOpPointers{false, false, true};
+  default:
+    return std::nullopt;
+  }
+}
+
+// Force the pointer register used implicitly by a string operation into the
+// sandbox: movl %eX, %eX truncates it to a sandbox offset, and the lea adds
+// the sandbox base back without disturbing the flags.
+static void emitStringPtrFixup(MCRegister Reg, MCRegister Reg32,
+                               MCStreamer &Out, const MCSubtargetInfo &STI) {
+  Out.emitInstruction(MCInstBuilder(X86::MOV32rr).addReg(Reg32).addReg(Reg32),
+                      STI);
+
+  Out.emitInstruction(MCInstBuilder(X86::LEA64r)
+                          .addReg(Reg)
+                          .addReg(LFIBaseReg)
+                          .addImm(1)
+                          .addReg(Reg)
+                          .addImm(0)
+                          .addReg(X86::NoRegister),
+                      STI);
+}
+
+// String operations address memory through %rdi and %rsi, which cannot be
+// replaced by an addressing mode, so the registers themselves are guarded
+// before the access. The guards and the access must stay in the same bundle,
+// so that control cannot enter between them.
+//
+// rep movsq
+// ->
+// .bundle_lock
+// movl %edi, %edi
+// leaq (%r14,%rdi), %rdi
+// movl %esi, %esi
+// leaq (%r14,%rsi), %rsi
+// rep movsq
+// .bundle_unlock
+void X86::X86MCLFIRewriter::rewriteStringOperation(const MCInst &Inst,
+                                                   MCStreamer &Out,
+                                                   const MCSubtargetInfo &STI) {
+  std::optional<StringOpPointers> Ptrs = getStringOpPointers(Inst.getOpcode());
+  assert(Ptrs);
+
+  bool SkipLoads = STI.hasFeature(X86::FeatureNoLFILoads);
+  bool SkipStores = STI.hasFeature(X86::FeatureNoLFIStores);
+
+  bool FixupDest =
+      Ptrs->UsesDest && !(Ptrs->DestIsStore ? SkipStores : SkipLoads);
+  bool FixupSrc = Ptrs->UsesSrc && !SkipLoads;
+
+  if (!FixupDest && !FixupSrc)
+    return emitWithPrefixes(Inst, Out, STI);
+
+  Out.emitBundleLock(/*AlignToEnd=*/false, STI);
+
+  if (FixupDest)
+    emitStringPtrFixup(X86::RDI, X86::EDI, Out, STI);
+  if (FixupSrc)
+    emitStringPtrFixup(X86::RSI, X86::ESI, Out, STI);
+
+  emitWithPrefixes(Inst, Out, STI);
+
+  Out.emitBundleUnlock(STI);
+}
+
+//===----------------------------------------------------------------------===//
+// Stack pointer modification
+//===----------------------------------------------------------------------===//
+
+// The 32-bit form of a 64-bit instruction, or 0 if the instruction has no
+// 32-bit form that can be used to modify the stack pointer.
+static unsigned demote64BitOpcode(unsigned Opcode) {
+  switch (Opcode) {
+  case X86::MOV64rr:
+    return X86::MOV32rr;
+  case X86::MOV64rm:
+    return X86::MOV32rm;
+  case X86::MOV64ri32:
+    return X86::MOV32ri;
+  // The 32-bit lea keeps 64-bit address registers, so only the destination
+  // changes size.
+  case X86::LEA64r:
+    return X86::LEA64_32r;
+  case X86::ADD64rr:
+    return X86::ADD32rr;
+  case X86::ADD64rm:
+    return X86::ADD32rm;
+  case X86::ADD64ri8:
+    return X86::ADD32ri8;
+  case X86::ADD64ri32:
+    return X86::ADD32ri;
+  case X86::SUB64rr:
+    return X86::SUB32rr;
+  case X86::SUB64rm:
+    return X86::SUB32rm;
+  case X86::SUB64ri8:
+    return X86::SUB32ri8;
+  case X86::SUB64ri32:
+    return X86::SUB32ri;
+  case X86::AND64rr:
+    return X86::AND32rr;
+  case X86::AND64rm:
+    return X86::AND32rm;
+  case X86::AND64ri8:
+    return X86::AND32ri8;
+  case X86::AND64ri32:
+    return X86::AND32ri;
+  case X86::OR64rr:
+    return X86::OR32rr;
+  case X86::OR64rm:
+    return X86::OR32rm;
+  case X86::OR64ri8:
+    return X86::OR32ri8;
+  case X86::OR64ri32:
+    return X86::OR32ri;
+  case X86::XOR64rr:
+    return X86::XOR32rr;
+  case X86::XOR64rm:
+    return X86::XOR32rm;
+  case X86::XOR64ri8:
+    return X86::XOR32ri8;
+  case X86::XOR64ri32:
+    return X86::XOR32ri;
+  default:
+    return 0;
+  }
+}
+
+MCRegister X86::X86MCLFIRewriter::getWrittenStackReg(const MCInst &Inst) const {
+  const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
+  for (unsigned I = 0, E = Desc.getNumDefs(); I < E; ++I) {
+    const MCOperand &Op = Inst.getOperand(I);
+    if (Op.isReg() && RegInfo->regsOverlap(Op.getReg(), X86::RSP))
+      return Op.getReg();
+  }
+  return X86::NoRegister;
+}
+
+// leaq (%rsp,%r14), %rsp
+//
+// Unlike addq %r14, %rsp, the lea form leaves the flags alone, so it can be
+// used after an instruction that computed a condition.
+static void emitStackFixup(MCStreamer &Out, const MCSubtargetInfo &STI) {
+  Out.emitInstruction(MCInstBuilder(X86::LEA64r)
+                          .addReg(X86::RSP)
+                          .addReg(X86::RSP)
+                          .addImm(1)
+                          .addReg(LFIBaseReg)
+                          .addImm(0)
+                          .addReg(X86::NoRegister),
+                      STI);
+}
+
+// The stack pointer must always hold an address inside the sandbox, so an
+// instruction that writes it is demoted to its 32-bit form, which clears the
+// top 32 bits, and the sandbox base is then added back. Both halves must be in
+// the same bundle, so that control cannot enter with an unsandboxed %rsp.
+//
+// addq $8, %rsp
+// ->
+// .bundle_lock
+// addl $8, %esp
+// leaq (%rsp,%r14), %rsp
+// .bundle_unlock
+void X86::X86MCLFIRewriter::rewriteStackModification(
+    MCRegister StackReg, const MCInst &Inst, MCStreamer &Out,
+    const MCSubtargetInfo &STI) {
+  // Without memory sandboxing the stack pointer does not have to stay inside
+  // the sandbox.
+  if (STI.hasFeature(X86::FeatureNoLFILoads) &&
+      STI.hasFeature(X86::FeatureNoLFIStores))
+    return emitWithPrefixes(Inst, Out, STI);
+
+  if (StackReg != X86::RSP && StackReg != X86::ESP)
+    return error(Inst, "unsupported modification of the stack pointer");
+
+  // popq %rsp loads through the stack pointer that it overwrites, so it cannot
+  // simply be demoted. Pop into the scratch register instead, and move the
+  // result into %esp.
+  if (Inst.getOpcode() == X86::POP64r) {
+    Out.emitInstruction(MCInstBuilder(X86::POP64r).addReg(LFIScratchReg), STI);
+
+    Out.emitBundleLock(/*AlignToEnd=*/false, STI);
+    Out.emitInstruction(
+        MCInstBuilder(X86::MOV32rr).addReg(X86::ESP).addReg(X86::R11D), STI);
+    emitStackFixup(Out, STI);
+    Out.emitBundleUnlock(STI);
+    return;
+  }
+
+  // An instruction that already writes %esp clears the top 32 bits itself, and
+  // only needs the sandbox base added back.
+  MCInst Modified(Inst);
+  if (StackReg == X86::RSP) {
+    unsigned Opcode = demote64BitOpcode(Inst.getOpcode());
+    if (!Opcode)
+      return error(Inst, "unsupported modification of the stack pointer");
+    Modified.setOpcode(Opcode);
+
+    // Demote the register operands to match. Address registers are left alone:
+    // they keep their size in the 32-bit form of the instruction.
+    ArrayRef<MCOperandInfo> OpInfo = InstInfo->get(Opcode).operands();
+    for (unsigned I = 0, E = std::min<unsigned>(OpInfo.size(),
+                                                Modified.getNumOperands());
+         I < E; ++I) {
+      MCOperand &Op = Modified.getOperand(I);
+      if (OpInfo[I].OperandType != MCOI::OPERAND_REGISTER || !Op.isReg())
+        continue;
+      if (getX86MCRegisterClass(X86::GR64RegClassID).contains(Op.getReg()))
+        Op.setReg(RegInfo->getSubReg(Op.getReg(), X86::sub_32bit));
+    }
+  }
+
+  sandboxMemAccess(Modified, STI);
+
+  Out.emitBundleLock(/*AlignToEnd=*/false, STI);
+  emitWithPrefixes(Modified, Out, STI);
+  emitStackFixup(Out, STI);
+  Out.emitBundleUnlock(STI);
+}
+
+// leave restores the stack pointer from the frame pointer, which is an
+// ordinary register under LFI. Expand it so that the restored stack pointer
+// goes through the stack pointer rewrite.
+//
+// leave
+// ->
+// .bundle_lock
+// movl %ebp, %esp
+// leaq (%rsp,%r14), %rsp
+// .bundle_unlock
+// popq %rbp
+void X86::X86MCLFIRewriter::rewriteLeave(const MCInst &Inst, MCStreamer &Out,
+                                         const MCSubtargetInfo &STI) {
+  doRewriteInst(MCInstBuilder(X86::MOV64rr).addReg(X86::RSP).addReg(X86::RBP),
+                Out, STI);
+  Out.emitInstruction(MCInstBuilder(X86::POP64r).addReg(X86::RBP), STI);
+}
+
+//===----------------------------------------------------------------------===//
+// Dispatch
+//===----------------------------------------------------------------------===//
 
 void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                                           const MCSubtargetInfo &STI) {
-  if (mayModifyRegister(Inst, LFIBaseReg) || mayModifyRegister(Inst, LFITPReg))
+  // Hold a stand-alone prefix back, so that a rewrite of the instruction it
+  // applies to cannot come between the two.
+  if (isPrefix(Inst, *InstInfo)) {
+    Prefixes.push_back(Inst);
+    return;
+  }
+
+  if (mayModifyRegister(Inst, LFIBaseReg) ||
+      mayModifyRegister(Inst, LFITPReg) || mayModifyRegister(Inst, LFIBaseSeg))
     return error(Inst, "illegal modification of reserved LFI register");
 
-  if (isSyscall(Inst))
-    return rewriteSyscall(Inst, Out, STI);
+  // The control flow rewrites below replace the instruction entirely, leaving
+  // a held-back prefix with nothing to apply to.
 
-  if (isReturn(Inst))
+  if (isSyscall(Inst)) {
+    discardPrefixes();
+    return rewriteSyscall(Inst, Out, STI);
+  }
+
+  if (isReturn(Inst)) {
+    discardPrefixes();
     return rewriteReturn(Inst, Out, STI);
+  }
 
   if (isDirectCall(Inst))
     return rewriteDirectCall(Inst, Out, STI);
@@ -384,13 +837,31 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
   if (isIndirectBranch(Inst) || isCall(Inst)) {
     if (!isSupportedIndirectBranch(Inst))
       return error(Inst, "unsupported indirect branch");
+    discardPrefixes();
     return rewriteIndirectBranch(Inst, Out, STI);
   }
+
+  // %gs is reserved: it is what makes a sandboxed memory access relative to
+  // the sandbox base.
+  for (const MCOperand &Op : Inst)
+    if (Op.isReg() && Op.getReg() == LFIBaseSeg)
+      return error(Inst, "invalid use of reserved segment register %gs");
 
   if (isFSAccess(Inst))
     return rewriteFSAccess(Inst, Out, STI);
 
-  Out.emitInstruction(Inst, STI);
+  if (getStringOpPointers(Inst.getOpcode()))
+    return rewriteStringOperation(Inst, Out, STI);
+
+  if (Inst.getOpcode() == X86::LEAVE64) {
+    discardPrefixes();
+    return rewriteLeave(Inst, Out, STI);
+  }
+
+  if (MCRegister StackReg = getWrittenStackReg(Inst))
+    return rewriteStackModification(StackReg, Inst, Out, STI);
+
+  rewriteMemAccess(Inst, Out, STI);
 }
 
 bool X86::X86MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
@@ -406,3 +877,11 @@ bool X86::X86MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
   Guard = false;
   return true;
 }
+
+void X86::X86MCLFIRewriter::onLabel(const MCSymbol *Symbol, MCStreamer &Out) {
+  // A prefix cannot be separated from the instruction it applies to by a
+  // branch target.
+  discardPrefixes();
+}
+
+void X86::X86MCLFIRewriter::finish(MCStreamer &Out) { discardPrefixes(); }

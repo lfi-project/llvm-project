@@ -646,6 +646,11 @@ In the following assembly rewrites, some shorthand is used.
 - `%rN` or `%eN`: refers to any general-purpose non-reserved register.
 - `{a,b,c}`: matches any of `a`, `b`, or `c`.
 - `N(...)`: refers to any memory addressing mode.
+- `N`: refers to any displacement, including none.
+- `S`: refers to any scale.
+- `Op`: refers to any instruction with a memory operand.
+- `MOD`: refers to any instruction that writes the stack pointer.
+- `x?`: matches an optional `x`.
 
 #### Control flow
 
@@ -655,7 +660,8 @@ in the top 32 bits with the sandbox base, producing an address that is both
 inside the sandbox and bundle-aligned.
 
 Indirect branches through memory first load the branch target into the scratch
-register (`%r11`), and then dispatch through it.
+register (`%r11`), and then dispatch through it. That load is itself sandboxed
+by the memory access rewrite below.
 
 Returns are rewritten to pop the return address into the scratch register,
 followed by a sandboxed indirect jump.
@@ -677,10 +683,10 @@ are resolved at link time. Direct calls are placed at the end of a bundle.
     jmpq *%rX
     ```
 * - ```gas
-    jmpq *N(...)
+    jmpq *N(%rX)
     ```
   - ```gas
-    movq N(...), %r11
+    movq %gs:N(%eX), %r11
     andl $-32, %r11d
     addq %r14, %r11
     jmpq *%r11
@@ -694,10 +700,10 @@ are resolved at link time. Direct calls are placed at the end of a bundle.
     callq *%rX
     ```
 * - ```gas
-    callq *N(...)
+    callq *N(%rX)
     ```
   - ```gas
-    movq N(...), %r11
+    movq %gs:N(%eX), %r11
     andl $-32, %r11d
     addq %r14, %r11
     callq *%r11
@@ -715,15 +721,210 @@ are resolved at link time. Direct calls are placed at the end of a bundle.
 
 #### Memory accesses
 
-**Note**: these rewrites have not been implemented.
+Memory accesses are confined to the sandbox by rewriting the addressing mode.
+The address is computed from 32-bit registers, so that it wraps within the
+4GiB sandbox rather than escaping it, and a `%gs` segment override supplies the
+sandbox base. No extra instructions are needed, so the rewrite does not need a
+bundle.
+
+An access based on a register that always holds an address inside the sandbox
+is already safe, and is left alone. Those registers are `%rsp`, `%rip`, and
+`%r14`. An index register can move such an address back out of the sandbox, so
+an access is only left alone if it has no index.
+
+An absolute address has no register to truncate, so it is made relative to
+`%r14` instead. `lea` computes an address but does not access memory, so it is
+never rewritten.
+
+Only the addressing mode changes, so the rewrites are listed as addressing
+modes rather than whole instructions.
+
+:::{list-table}
+:header-rows: 1
+
+* - Original
+  - Rewritten
+* - ```gas
+    N(%rX)
+    ```
+  - ```gas
+    %gs:N(%eX)
+    ```
+* - ```gas
+    N(%rX, %rY, S)
+    ```
+  - ```gas
+    %gs:N(%eX, %eY, S)
+    ```
+* - ```gas
+    N(, %rY, S)
+    ```
+  - ```gas
+    %gs:N(, %eY, S)
+    ```
+* - ```gas
+    N
+    ```
+  - ```gas
+    N(%r14)
+    ```
+* - ```gas
+    N({%rsp,%rip,%r14})
+    ```
+  - ```gas
+    N({%rsp,%rip,%r14})
+    ```
+* - ```gas
+    leaq N(...), %rX
+    ```
+  - ```gas
+    leaq N(...), %rX
+    ```
+:::
+
+A few instructions reach memory without an addressing mode that could be
+rewritten: the `moffs` form of `mov`, which encodes an absolute address in the
+instruction itself, `xlat`, which loads from `(%rbx,%al)`, and `maskmov`, which
+stores to `(%rdi)`. The rewriter reports an error for these. String
+instructions also address memory implicitly, but they can be rewritten and are
+covered below.
 
 #### String instructions
 
-**Note**: these rewrites have not been implemented.
+String instructions address memory through `%rdi` and `%rsi`, which cannot be
+replaced by an addressing mode, so the registers themselves are guarded before
+the access. The guard truncates the pointer to a sandbox offset and adds the
+sandbox base back with a `lea`, which does not disturb the flags.
+
+The guards and the access must be in the same bundle, so that control cannot
+enter between them.
+
+`%rdi` is a store pointer for `movs` and `stos`, and a load pointer for `cmps`
+and `scas`. `%rsi` is always a load pointer. A pointer is only guarded if
+sandboxing is enabled for the kind of access it performs, so in stores-only
+mode `rep movsb` guards `%rdi` but not `%rsi`.
+
+:::{list-table}
+:header-rows: 1
+
+* - Original
+  - Rewritten
+* - ```gas
+    rep? {stos,scas}
+    ```
+  - ```gas
+    .bundle_lock
+    movl %edi, %edi
+    leaq (%r14, %rdi), %rdi
+    rep? {stos,scas}
+    .bundle_unlock
+    ```
+* - ```gas
+    rep? lods
+    ```
+  - ```gas
+    .bundle_lock
+    movl %esi, %esi
+    leaq (%r14, %rsi), %rsi
+    rep? lods
+    .bundle_unlock
+    ```
+* - ```gas
+    rep? {movs,cmps}
+    ```
+  - ```gas
+    .bundle_lock
+    movl %edi, %edi
+    leaq (%r14, %rdi), %rdi
+    movl %esi, %esi
+    leaq (%r14, %rsi), %rsi
+    rep? {movs,cmps}
+    .bundle_unlock
+    ```
+:::
 
 #### Stack modification
 
-**Note**: these rewrites have not been implemented.
+The stack pointer must always hold an address inside the sandbox, so an
+instruction that writes it is demoted to its 32-bit form, which clears the top
+32 bits, and the sandbox base is then added back. As above, the `lea` form of
+the addition is used so that the flags are left alone. Both halves must be in
+the same bundle, so that control cannot enter with an unsandboxed `%rsp`.
+
+The rewrite recognizes `mov`, `lea`, `add`, `sub`, `and`, `or`, and `xor`, and
+reports an error for any other instruction that writes the stack pointer.
+`push` and `pop` move the stack pointer by a fixed amount, so they keep it
+inside the sandbox and are not rewritten.
+
+Two instructions need a different expansion. `popq %rsp` loads through the
+stack pointer that it overwrites, so it cannot be demoted directly; it pops
+into the scratch register instead. `leave` restores the stack pointer from the
+frame pointer, which is an ordinary register under LFI, so it is expanded into
+a stack pointer write followed by `popq %rbp`.
+
+:::{list-table}
+:header-rows: 1
+
+* - Original
+  - Rewritten
+* - ```gas
+    MOD ..., %rsp
+    ```
+  - ```gas
+    .bundle_lock
+    MOD ..., %esp
+    leaq (%rsp, %r14), %rsp
+    .bundle_unlock
+    ```
+* - ```gas
+    popq %rsp
+    ```
+  - ```gas
+    popq %r11
+    .bundle_lock
+    movl %r11d, %esp
+    leaq (%rsp, %r14), %rsp
+    .bundle_unlock
+    ```
+* - ```gas
+    leave
+    ```
+  - ```gas
+    .bundle_lock
+    movl %ebp, %esp
+    leaq (%rsp, %r14), %rsp
+    .bundle_unlock
+    popq %rbp
+    ```
+:::
+
+#### Instruction prefixes
+
+A prefix written on its own line is assembled as a separate instruction. Since
+a rewrite may insert instructions before the one the prefix applies to, such a
+prefix is held back and re-emitted immediately before that instruction. A
+prefix that is not followed by an instruction it can apply to is an error.
+
+:::{list-table}
+:header-rows: 1
+
+* - Original
+  - Rewritten
+* - ```gas
+    rep
+    movsb
+    ```
+  - ```gas
+    .bundle_lock
+    movl %edi, %edi
+    leaq (%r14, %rdi), %rdi
+    movl %esi, %esi
+    leaq (%r14, %rsi), %rsi
+    rep
+    movsb
+    .bundle_unlock
+    ```
+:::
 
 #### System instructions
 
@@ -753,8 +954,12 @@ block below).
 Thread pointer accesses via the `%fs` segment (used for TLS) are rewritten to
 use the virtual thread pointer from the context register (`r15`) at offset 16
 (see [Context Register](#context-register)). The rewrite handles any load or
-store instruction with an `%fs`-segment memory operand. `Op` represents any
-such instruction.
+store instruction with an `%fs`-segment memory operand.
+
+The thread pointer is an address inside the sandbox like any other, so the
+resulting access is sandboxed by the memory access rewrite above. A bare
+`%fs:0` is the exception: it becomes an access to the context register itself,
+which the runtime maintains outside the sandbox, and so is left unsandboxed.
 
 :::{list-table}
 :header-rows: 1
@@ -772,14 +977,14 @@ such instruction.
     ```
   - ```gas
     movq 16(%r15), %rD
-    Op (%rD, %rX), %rD
+    Op %gs:(%eD, %eX), %rD
     ```
 * - ```gas
     Op %rS, %fs:(%rX)
     ```
   - ```gas
     movq 16(%r15), %r11
-    Op %rS, (%r11, %rX)
+    Op %rS, %gs:(%r11d, %eX)
     ```
 * - ```gas
     Op %fs:N(%rX, %rY, S), %rD
@@ -787,7 +992,7 @@ such instruction.
   - ```gas
     movq 16(%r15), %r11
     leaq (%r11, %rX), %r11
-    Op N(%r11, %rY, S), %rD
+    Op %gs:N(%r11d, %eY, S), %rD
     ```
 * - ```gas
     Op %rS, %fs:N(%rX, %rY, S)
@@ -795,7 +1000,7 @@ such instruction.
   - ```gas
     movq 16(%r15), %r11
     leaq (%r11, %rX), %r11
-    Op %rS, N(%r11, %rY, S)
+    Op %rS, %gs:N(%r11d, %eY, S)
     ```
 :::
 

@@ -13,13 +13,14 @@
 #ifndef LLVM_LIB_TARGET_X86_MCTARGETDESC_X86MCLFIREWRITER_H
 #define LLVM_LIB_TARGET_X86_MCTARGETDESC_X86MCLFIREWRITER_H
 
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
 #include "llvm/MC/MCLFIRewriter.h"
 #include "llvm/MC/MCRegisterInfo.h"
 
 namespace llvm {
 class MCContext;
-class MCInst;
 class MCStreamer;
 class MCSubtargetInfo;
 
@@ -36,12 +37,32 @@ public:
   bool rewriteInst(const MCInst &Inst, MCStreamer &Out,
                    const MCSubtargetInfo &STI) override;
 
+  void onLabel(const MCSymbol *Symbol, MCStreamer &Out) override;
+  void finish(MCStreamer &Out) override;
+
 private:
   /// Recursion guard to prevent infinite loops when emitting instructions.
   bool Guard = false;
 
+  /// Prefixes written on their own line, held back so that they can be emitted
+  /// immediately before the instruction they apply to.
+  SmallVector<MCInst, 2> Prefixes;
+
   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
                      const MCSubtargetInfo &STI);
+
+  /// Emit the prefixes that were held back, followed by \p Inst.
+  void emitWithPrefixes(const MCInst &Inst, MCStreamer &Out,
+                        const MCSubtargetInfo &STI);
+
+  /// Report and drop the prefixes that were held back. Used when the
+  /// instruction they apply to is replaced by a rewrite, and when no
+  /// instruction follows them at all.
+  void discardPrefixes();
+
+  /// Return the 32-bit subregister of \p Reg, or \p Reg itself if it already
+  /// is a 32-bit register.
+  MCRegister getReg32(MCRegister Reg) const;
 
   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
                       const MCSubtargetInfo &STI);
@@ -61,6 +82,32 @@ private:
   bool isFSAccess(const MCInst &Inst);
   void rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
                        const MCSubtargetInfo &STI);
+
+  /// Return true if the memory access performed by \p Inst is exempt from
+  /// sandboxing under the current subtarget configuration.
+  bool skipMemSandbox(const MCInst &Inst, const MCSubtargetInfo &STI) const;
+
+  /// Rewrite the addressing mode of the memory operand at \p MemIdx so that
+  /// the access it performs stays inside the sandbox.
+  void sandboxMemOperand(MCInst &Inst, int MemIdx) const;
+
+  /// Apply sandboxMemOperand to the memory operand of \p Inst, if it has one
+  /// and actually accesses memory through it.
+  void sandboxMemAccess(MCInst &Inst, const MCSubtargetInfo &STI) const;
+
+  void rewriteMemAccess(const MCInst &Inst, MCStreamer &Out,
+                        const MCSubtargetInfo &STI);
+  void rewriteStringOperation(const MCInst &Inst, MCStreamer &Out,
+                              const MCSubtargetInfo &STI);
+
+  /// Return the stack pointer register that \p Inst writes as an explicit
+  /// operand, or NoRegister if it does not write one.
+  MCRegister getWrittenStackReg(const MCInst &Inst) const;
+
+  void rewriteStackModification(MCRegister StackReg, const MCInst &Inst,
+                                MCStreamer &Out, const MCSubtargetInfo &STI);
+  void rewriteLeave(const MCInst &Inst, MCStreamer &Out,
+                    const MCSubtargetInfo &STI);
 };
 
 } // namespace X86
