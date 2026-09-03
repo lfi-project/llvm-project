@@ -867,23 +867,6 @@ bool X86::X86MCLFIRewriter::emitSandboxMemOps(MCInst &Inst,
 // Opcode demotion (64-bit -> 32-bit)
 //===----------------------------------------------------------------------===//
 
-// The x87 arithmetic instructions come in two spellings that differ in which
-// stack slot is the destination. Map the "%st(i) is the destination" form onto
-// its counterpart so the rewriter has a single spelling to match against.
-// Returns the input unchanged if there is nothing to normalize.
-#define NORMALIZE_FP(NAME)                                                     \
-  case X86::NAME##_FrST0:                                                      \
-    return X86::NAME##_FST0r;
-
-static unsigned normalizeOpcode(unsigned Op) {
-  switch (Op) {
-    NORMALIZE_FP(ADD)
-    NORMALIZE_FP(DIV) NORMALIZE_FP(DIVR) NORMALIZE_FP(MUL) NORMALIZE_FP(SUB)
-        NORMALIZE_FP(SUBR) default : return Op;
-  }
-}
-
-#undef NORMALIZE_FP
 
 // Map a 64-bit opcode to the 32-bit opcode that performs the same operation on
 // the 32-bit subregisters. Returns the input unchanged if it has no 32-bit
@@ -1109,8 +1092,6 @@ void X86::X86MCLFIRewriter::rewriteLoadStore(const MCInst &Inst, MCStreamer &Out
   }
 
   MCInst SandboxedInst(Inst);
-
-  SandboxedInst.setOpcode(normalizeOpcode(Op));
 
   MCRegister ScratchReg = ElideScratchReg ? Inst.getOperand(0).getReg()
                                           : MCRegister(X86::R11D);
